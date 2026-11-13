@@ -68,9 +68,9 @@ healthy but idle system. `soil spore run` refuses a Spore that grants
 
 | module | contract | flag |
 | --- | --- | --- |
-| `records_host` | `soil:records` | always |
+| `records_host` | `soil:records` | always (likely fundamental) |
 | `http_host` | `soil:http` | always |
-| `vfs_host` | `soil:vfs`, `soil:vfs-mut`, `soil:index` | always |
+| `vfs_host` | `soil:vfs`, `soil:vfs-mut`, `soil:index` | always (fundamental) |
 | `wasi` | the guest profile + linker | always |
 | `mycelium` | `fungos:mycelium/fleet` | `mycelium` (default in `soil-shell`) |
 | `unibus` | `soil:unibus` | `unibus` (default in `soil-shell`) |
@@ -83,15 +83,27 @@ list, because an empty list is a fleet claim. A component that imports
 `fungos:mycelium/fleet` while the interface is unlinked fails at instantiation,
 naming the import.
 
+## Decided
+
+- **VFS is fundamental.** A Spore has a home directory; `fungos-vfs` and
+  `vfs_host` are always linked and never behind a flag. That is what a Spore
+  *is*, not something a product opts into. `model2vec` is not part of that:
+  semantic search over the VFS is an index backend a product may leave out.
+- **Records is likely the same, not decided.** Until it is, `records_host` stays
+  linked unconditionally rather than behind a flag that would probably be
+  removed. If records also becomes fundamental, the capability set settles at:
+  VFS, records and HTTP always; mycelium and unibus opt-in.
+
 ## Open
 
-- **VFS and records.** `soil:records` and `fungos-vfs` are linked unconditionally
-  today. They may be fundamental (a Spore is a thing with a home directory and a
-  store) or the same opt-in shape as the rest. The flag mechanism does not care;
-  the decision is about what a Spore *is*, so make it deliberately.
-- **The base `unibus` crate still arrives through `fungos-records`.** Gating the
+- **Records.** Fundamental like VFS, or the first contract a product can leave
+  out? Everything downstream assumes it is there today; the decision would
+  change how `soil:records` consumers are written, not just the graph.
+- **The base `unibus` crate arrives through `fungos-records`.** Gating the
   adapter removes the adapter and `unibus-sdk`, not the client crate the records
-  store links. That is the records question above, not a wiring gap.
+  store links. With VFS fundamental and records likely so, that is the expected
+  graph rather than a leak: a slim build still contains records, and records
+  speaks unibus.
 - **OS native (mic, audio, surface).** These belong to the slim build, so they
   are not deployment-specific capabilities: they are the base layer every
   profile keeps. `wasi-audio-wasmtime` exists and is linked by no profile yet;

@@ -4,11 +4,12 @@
 //! host operator supplies an endpoint explicitly; a Spore never chooses a
 //! model, endpoint, token, or network route.
 
-use std::sync::Mutex;
-
+#[cfg(any(feature = "model2vec", feature = "remote"))]
 use anyhow::Context;
 #[cfg(feature = "remote")]
 use anyhow::anyhow;
+#[cfg(feature = "model2vec")]
+use std::sync::Mutex;
 
 /// One embedding model behind a text-in/vector-out boundary.
 pub trait EmbeddingProvider: Send + Sync {

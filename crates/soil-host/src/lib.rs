@@ -11,8 +11,10 @@
 //! a duplicated error type and a binary per experiment — the leaf-crate shape
 //! this replaces.
 //!
-//! `mycelium` and `unibus` are behind features, on by default, because they
-//! front deployments a product may not ship. Everything else is always there.
+//! `mycelium` and `unibus` are behind features, on by default in the product,
+//! because they front deployments a product may not ship. `vfs_host` and
+//! `records_host` are fundamental: a Spore has a home directory and a store, so
+//! there is no product that ships without them.
 
 pub mod http_host;
 #[cfg(feature = "mycelium")]

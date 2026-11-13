@@ -14,13 +14,16 @@ clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-soil-host = { path = "../soil-host" }
+# Records and HTTP only: the bridge never indexes, so it does not turn on the
+# host's default feature set (the embedding model) for every product that links
+# it.
+soil-host = { path = "../soil-host", default-features = false }
 soil-spore = { path = "../soil-spore" }
 tungstenite = "0.30"
 
 [dev-dependencies]
 base64 = "0.22"
-soil-host = { path = "../soil-host" }
+soil-host = { path = "../soil-host", default-features = false }
 tempfile = "3"
 tungstenite = "0.30"
 

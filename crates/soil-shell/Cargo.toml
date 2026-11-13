@@ -11,7 +11,10 @@ name = "soil"
 path = "src/main.rs"
 
 [features]
-default = ["mycelium", "unibus"]
+default = ["model2vec", "mycelium", "unibus"]
+# The VFS is fundamental, so it is always in the graph; `model2vec` is its
+# optional semantic index backend, and a slim build leaves it out.
+model2vec = ["soil-host/model2vec"]
 mycelium = ["soil-host/mycelium"]
 # A slim `soil` links no bus and refuses a Spore that grants `soil:unibus`
 # instead of starting one that can never publish.
