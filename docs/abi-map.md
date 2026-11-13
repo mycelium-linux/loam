@@ -60,6 +60,7 @@ review map for what else exists and what is missing.
 | `soil:time@1` | host monotonic clock | `soil:time` | yes | Monotonic milliseconds and host ticks only. No wall clock, sleep, or timer thread. Canonical WIT: [`wit/soil-time.wit`](../wit/soil-time.wit). |
 | `soil:notify@1.1` | host notification broker / UI + ringer | `soil:notify` plus separate `history`, `cleanup`, `focus`, `ringer` grants | draft | Durable envelopes, per-device inbox state, host focus, opt-in history, scoped cleanup, and the one-device ringer answer claim. Canonical WIT: [`wit/soil-notify.wit`](../wit/soil-notify.wit); host: [`crates/soil-notify-host`](../crates/soil-notify-host). |
 | `fungos:actions@1` | host action bus + presentation catalog | exact action id/version grants | draft | Granted catalog, bounded invocation, approval and idempotency receipts. Canvas presentation uses `fungos:actions/catalog`; execution still goes through `fungos:actions/actions`. Canonical WIT: [`wit/fungos-actions.wit`](../wit/fungos-actions.wit). |
+| `fungos:mycelium@0.1` | Mycelium control plane (host-owned) | read-only `fleet` | draft | A live fleet read: peers plus four topology counts, never the topology document, the mycelium binary, a socket or a node key. The host bridges to the daemon's published CLI/JSON contract; a missing or slow daemon is `unavailable`, not an empty fleet. Host adapter: [`crates/soil-mycelium-host`](../crates/soil-mycelium-host), linked by `soil-wasi-host` behind its `mycelium` feature. Canonical WIT: [`wit/fungos-mycelium.wit`](../wit/fungos-mycelium.wit). |
 | `soil:display@1` | display enumeration/placement | — | no | Soil owns displays. Spore asks for a surface purpose, not a display id. |
 | `soil:net@1` | raw sockets/DNS | — | no | Use `soil:http`, `soil:api`, or `soil:stream`. No ambient sockets, DNS, redirects, or arbitrary hosts. |
 | `soil:process@1` | process spawn | — | no | A Spore is not a process manager. |
@@ -71,6 +72,10 @@ not a host capability. It should expose its API through `soil:api`, its media
 through `soil:stream`, and optionally use `soil:audio`/`soil:gpu`. Baking an
 application into the host ABI would break the capability model and make every
 other app depend on it.
+
+Capability adapters are opt-in per host profile: one crate per capability, one
+feature on the profile that links it, on by default and off for a slim build.
+See [`docs/capability-hosts.md`](capability-hosts.md).
 
 `soil:canvas` is the explicit exception: Canvas is the fleet's cross-platform
 shell, not a Spore. It ships with the host, owns the window/compositor/layout/

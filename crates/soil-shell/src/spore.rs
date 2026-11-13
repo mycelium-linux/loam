@@ -44,6 +44,10 @@ pub struct Run {
     pub bridge_wait: Duration,
     /// Origins this Spore may reach through `soil:http`.
     pub allow_origins: Vec<String>,
+    /// `mycelium` binary for the live `fungos:mycelium/fleet` adapter.
+    pub mycelium_bin: Option<PathBuf>,
+    /// How long one live fleet read is reused.
+    pub mycelium_refresh: Duration,
 }
 
 pub fn parse(args: &[String]) -> Result<(PathBuf, Run)> {
@@ -71,6 +75,10 @@ pub fn parse(args: &[String]) -> Result<(PathBuf, Run)> {
         bridge: None,
         bridge_wait: Duration::ZERO,
         allow_origins: Vec::new(),
+        mycelium_bin: Some(PathBuf::from(
+            std::env::var("MYCELIUM_BIN").unwrap_or_else(|_| "mycelium".to_owned()),
+        )),
+        mycelium_refresh: Duration::from_secs(15),
     };
     let mut index = 1;
     while index < args.len() {
@@ -140,6 +148,22 @@ pub fn parse(args: &[String]) -> Result<(PathBuf, Run)> {
             }
             "--allow-origin" => {
                 run.allow_origins.push(value(index + 1)?);
+                index += 2;
+            }
+            "--mycelium-bin" => {
+                run.mycelium_bin = Some(PathBuf::from(value(index + 1)?));
+                index += 2;
+            }
+            "--no-mycelium" => {
+                run.mycelium_bin = None;
+                index += 1;
+            }
+            "--mycelium-refresh-secs" => {
+                run.mycelium_refresh = Duration::from_secs(
+                    value(index + 1)?
+                        .parse()
+                        .context("--mycelium-refresh-secs is seconds")?,
+                );
                 index += 2;
             }
             other => bail!("unknown option `{other}`"),
@@ -266,6 +290,13 @@ async fn serve(spore: Spore, run: Run) -> Result<()> {
     }
     if let Some(bus) = bus(&spore.manifest, &run)? {
         builder = builder.bus(bus);
+    }
+
+    #[cfg(feature = "mycelium")]
+    if let Some(bin) = &run.mycelium_bin {
+        builder = builder.mycelium_fleet(
+            soil_wasi_host::MyceliumFleet::new(bin.clone()).with_refresh(run.mycelium_refresh),
+        );
     }
 
     // The browser, when one connects. The Spore still runs here; `soil:http`

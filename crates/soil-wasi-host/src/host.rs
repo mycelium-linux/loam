@@ -10,6 +10,8 @@ use anyhow::Result;
 use http_body_util::BodyExt;
 use soil_host::http_host::HttpTransport;
 use soil_host::records_host::{RecordsBookHost, records};
+#[cfg(feature = "mycelium")]
+use soil_mycelium_host::MyceliumFleet;
 use wasmtime::component::ResourceTable;
 use wasmtime_wasi::{FsPerms, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 use wasmtime_wasi_http::{
@@ -36,7 +38,10 @@ pub struct HttpCapability {
 }
 
 impl HttpCapability {
-    pub fn new(policy: soil_host::http_host::HttpPolicy, transport: Arc<dyn HttpTransport>) -> Self {
+    pub fn new(
+        policy: soil_host::http_host::HttpPolicy,
+        transport: Arc<dyn HttpTransport>,
+    ) -> Self {
         Self { policy, transport }
     }
 }
@@ -65,6 +70,9 @@ pub struct WasiHostBuilder {
     records: Option<Arc<Mutex<RecordsBookHost>>>,
     /// `soil:http` policy and route. Absent means the interface is not linked.
     http: Option<Arc<HttpCapability>>,
+    /// `fungos:mycelium/fleet`. Absent means the interface is not linked.
+    #[cfg(feature = "mycelium")]
+    mycelium: Option<MyceliumFleet>,
 }
 
 impl WasiHostBuilder {
@@ -162,6 +170,18 @@ impl WasiHostBuilder {
         self.http.is_some()
     }
 
+    /// Attach the live Mycelium fleet adapter exposed as `fungos:mycelium/fleet`.
+    #[cfg(feature = "mycelium")]
+    pub fn mycelium_fleet(mut self, fleet: MyceliumFleet) -> Self {
+        self.mycelium = Some(fleet);
+        self
+    }
+
+    #[cfg(feature = "mycelium")]
+    pub fn has_mycelium(&self) -> bool {
+        self.mycelium.is_some()
+    }
+
     /// Create fresh WASI state for one component invocation.
     pub fn build(&self) -> Result<WasiHost> {
         let mut wasi = WasiCtxBuilder::new();
@@ -191,6 +211,8 @@ impl WasiHostBuilder {
             bus: self.bus.clone(),
             records: self.records.clone(),
             soil_http: self.http.clone(),
+            #[cfg(feature = "mycelium")]
+            mycelium: self.mycelium.clone(),
         })
     }
 
@@ -211,6 +233,20 @@ pub struct WasiHost {
     bus: Option<Arc<dyn Bus>>,
     records: Option<Arc<Mutex<RecordsBookHost>>>,
     soil_http: Option<Arc<HttpCapability>>,
+    #[cfg(feature = "mycelium")]
+    mycelium: Option<MyceliumFleet>,
+}
+
+#[cfg(feature = "mycelium")]
+impl soil_mycelium_host::api::Host for WasiHost {
+    fn status(
+        &mut self,
+    ) -> Result<soil_mycelium_host::api::Snapshot, soil_mycelium_host::api::Error> {
+        self.mycelium
+            .as_mut()
+            .ok_or(soil_mycelium_host::api::Error::Unavailable)?
+            .status()
+    }
 }
 
 impl soil_host::http_host::api::Host for WasiHost {

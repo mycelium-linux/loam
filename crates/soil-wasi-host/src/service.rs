@@ -81,6 +81,10 @@ impl HttpService {
         if builder.has_records() {
             soil_host::records_host::add_to_linker(&mut linker).context("link soil:records")?;
         }
+        #[cfg(feature = "mycelium")]
+        if builder.has_mycelium() {
+            soil_mycelium_host::add_to_linker(&mut linker).context("link fungos:mycelium/fleet")?;
+        }
         if builder.has_http() {
             soil_host::http_host::api::add_to_linker::<
                 super::host::WasiHost,

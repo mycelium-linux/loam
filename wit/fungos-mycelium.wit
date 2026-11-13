@@ -58,3 +58,55 @@ interface pulse {
   /// Run history, newest first. `id` filters to one user pulse.
   runs: func(id: option<string>, limit: u32) -> result<list<run>, error>;
 }
+
+/// Live fleet state from the Mycelium control plane.
+///
+/// The host owns the daemon call and returns a bounded projection: peer facts
+/// and four topology counts, never the megabyte topology document. A Spore
+/// names this interface; it never sees the mycelium binary, a socket, a store
+/// path or a node key.
+interface fleet {
+  enum error {
+    denied,
+    invalid,
+    unavailable,
+    io,
+  }
+
+  record peer {
+    id: string,
+    hostname: option<string>,
+    site: option<string>,
+    platform: option<string>,
+    architecture: option<string>,
+    daemon-version: option<string>,
+    release-version: option<string>,
+    last-seen: option<u64>,
+    ssh-listening: option<bool>,
+    update-state: option<string>,
+  }
+
+  /// Four counts, not the topology document: what a wall can read and a Spore
+  /// has no business holding.
+  record topology {
+    nodes: u32,
+    segments: u32,
+    conflicts: u32,
+    leases: u32,
+  }
+
+  record snapshot {
+    /// Host clock at the read. The view never reads a clock of its own.
+    captured-ms: u64,
+    peers: list<peer>,
+    topology: option<topology>,
+  }
+
+  /// Read the current fleet. The host may serve a short-lived cache; the
+  /// contract is a live read, not a captured fixture.
+  status: func() -> result<snapshot, error>;
+}
+
+world fleet-host {
+  import fleet;
+}

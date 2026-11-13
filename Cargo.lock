@@ -7136,6 +7136,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "soil-mycelium-host"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "wasmtime",
+]
+
+[[package]]
 name = "soil-notify-host"
 version = "0.1.0"
 dependencies = [
@@ -7475,6 +7487,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "soil-host",
+ "soil-mycelium-host",
  "tempfile",
  "tokio",
  "tracing",

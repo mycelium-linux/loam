@@ -6,6 +6,12 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+[features]
+default = ["mycelium"]
+# The fungOS control-plane adapter: a live Mycelium fleet read. A slim host
+# builds with `--no-default-features` and links no Mycelium adapter at all.
+mycelium = ["dep:soil-mycelium-host"]
+
 [dependencies]
 anyhow = "1"
 base64 = "0.22"
@@ -23,6 +29,7 @@ hyper = { version = "1", default-features = false, features = ["http1", "server"
 ipnet = "2"
 sha2 = "0.10"
 soil-host = { path = "../soil-host" }
+soil-mycelium-host = { path = "../soil-mycelium-host", optional = true }
 tempfile = "3"
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 url = "2"
