@@ -1,7 +1,8 @@
 # `soil:unibus@0.1.0` — the Spore-facing bus edge
 
-Status: **wired, 2026-11-07.** `soil-wasi-host` implements `bus.publish` /
-`bus.poll` over `UnibusPublisher` and `UnibusBus`; `MemoryBus` backs tests.
+Status: **wired, 2026-11-07.** `soil-host`'s `unibus` module implements
+`bus.publish` / `bus.poll` over `UnibusPublisher` and `UnibusBus`; `MemoryBus`
+backs tests.
 
 ## What the contract is
 
@@ -109,5 +110,5 @@ means "retained head", not index 0.
 ## Run
 
 ```sh
-cargo test -p soil-wasi-host -p soil-confluence -p soil-abi
+cargo test -p soil-host --features unibus -p soil-confluence -p soil-abi
 ```

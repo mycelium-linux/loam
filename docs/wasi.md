@@ -4,7 +4,7 @@ Soil provides a reusable WASI p2 profile so Spores can use standard interfaces
 instead of a custom SDK for every host capability.
 
 ```text
-crates/soil-wasi-host
+crates/soil-host/src/wasi
 ```
 
 ## Interfaces
@@ -240,11 +240,11 @@ Useful flags:
 ## Fixture
 
 ```text
-crates/soil-wasi-host/fixtures/echo/
+crates/soil-host/fixtures/echo/
   wasip2 component exporting wasi:http/incoming-handler
-crates/soil-wasi-host/fixtures/context/
+crates/soil-host/fixtures/context/
   reads fungos:http-context over the same surface
-crates/soil-wasi-host/fixtures/confluence/
+crates/soil-host/fixtures/confluence/
   verifies soil:creds and publishes soil:unibus
 ```
 
@@ -262,7 +262,7 @@ time, and exactly one `confluence.webhook.received.v1` fact through
 cargo run -p soil-confluence -- spore \
   --listen 127.0.0.1:8787 \
   --unibus-config /tmp/confluence.json \
-  --spore crates/soil-wasi-host/fixtures/confluence.wasm \
+  --spore crates/soil-host/fixtures/confluence.wasm \
   --host confluence.soil \
   --tenant tenant-a
 ```

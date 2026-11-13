@@ -22,7 +22,7 @@ use std::{
 
 use serde::Deserialize;
 
-wasmtime::component::bindgen!({ path: "wit", world: "fleet-host" });
+wasmtime::component::bindgen!({ path: "../../wit/fungos-mycelium.wit", world: "fleet-host" });
 
 pub use fungos::mycelium::fleet as api;
 

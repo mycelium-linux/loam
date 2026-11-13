@@ -12,8 +12,8 @@ use std::{env, fs, path::PathBuf, process::ExitCode, sync::Arc};
 use anyhow::{Context, Result, bail};
 use soil_host::records_host::RecordsBookHost;
 #[cfg(feature = "unibus")]
-use soil_wasi_host::UnibusBus;
-use soil_wasi_host::{HttpPolicy, HttpService, NetworkPolicy, WasiHostBuilder, WasiHostPolicy};
+use soil_host::wasi::UnibusBus;
+use soil_host::wasi::{HttpPolicy, HttpService, NetworkPolicy, WasiHostBuilder, WasiHostPolicy};
 use tokio::net::TcpListener;
 use wasmtime_wasi::FsPerms;
 

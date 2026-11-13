@@ -10,7 +10,7 @@ use std::{
 
 use wasmtime::component::{HasSelf, Linker};
 
-use crate::host::WasiHost;
+use crate::wasi::host::WasiHost;
 
 wasmtime::component::bindgen!({
     path: "../../wit/fungos-http-context.wit",

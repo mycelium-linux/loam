@@ -50,7 +50,7 @@ use anyhow::Context as _;
 use wasmtime::component::{HasSelf, Linker};
 
 wasmtime::component::bindgen!({
-    path: "wit",
+    path: "../../wit/soil-unibus.wit",
     world: "unibus-host",
 });
 

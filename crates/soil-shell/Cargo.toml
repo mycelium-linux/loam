@@ -12,20 +12,22 @@ path = "src/main.rs"
 
 [features]
 default = ["mycelium", "unibus"]
-mycelium = ["soil-wasi-host/mycelium"]
-# Forwarded to the host profile: a slim `soil` links no bus and refuses a Spore
-# that grants `soil:unibus` instead of starting one that can never publish.
-unibus = ["soil-wasi-host/unibus", "dep:unibus"]
+mycelium = ["soil-host/mycelium"]
+# A slim `soil` links no bus and refuses a Spore that grants `soil:unibus`
+# instead of starting one that can never publish.
+unibus = ["soil-host/unibus", "dep:unibus"]
 
 [dependencies]
 anyhow = "1"
 fungos-vfs = { git = "https://github.com/fungOS-linux/fungos-vfs.git", rev = "8ad45a7fb1ce01fbbc6f764d10524baf5a24c0af" }
-soil-host = { path = "../soil-host" }
+# The host is one crate: records, http, the WASI profile and the capability
+# adapters. `default-features = false` keeps the library from choosing for the
+# product; the features above opt in.
+soil-host = { path = "../soil-host", default-features = false }
 # Hosting any `.spore`: the launcher is the generic one, so it links the host
 # instead of re-implementing it per product.
 soil-spore = { path = "../soil-spore" }
 soil-web-bridge = { path = "../soil-web-bridge" }
-soil-wasi-host = { path = "../soil-wasi-host", default-features = false }
 http = "1"
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time"] }

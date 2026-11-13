@@ -24,7 +24,7 @@ use wasmtime_wasi_http::{
     },
 };
 
-use crate::{
+use crate::wasi::{
     context::HttpContext,
     creds,
     host::{WasiHost, WasiHostBuilder},
@@ -74,19 +74,19 @@ impl HttpService {
         wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)
             .map_err(anyhow::Error::from)
             .context("link wasi:http")?;
-        crate::context::add_to_linker(&mut linker)?;
+        crate::wasi::context::add_to_linker(&mut linker)?;
         creds::add_to_linker(&mut linker)?;
         #[cfg(feature = "unibus")]
-        soil_unibus_host::add_to_linker(&mut linker)?;
+        crate::unibus::add_to_linker(&mut linker)?;
         if builder.has_records() {
-            soil_host::records_host::add_to_linker(&mut linker).context("link soil:records")?;
+            crate::records_host::add_to_linker(&mut linker).context("link soil:records")?;
         }
         #[cfg(feature = "mycelium")]
         if builder.has_mycelium() {
-            soil_mycelium_host::add_to_linker(&mut linker).context("link fungos:mycelium/fleet")?;
+            crate::mycelium::add_to_linker(&mut linker).context("link fungos:mycelium/fleet")?;
         }
         if builder.has_http() {
-            soil_host::http_host::api::add_to_linker::<
+            crate::http_host::api::add_to_linker::<
                 super::host::WasiHost,
                 HasSelf<super::host::WasiHost>,
             >(&mut linker, |state| state)?;

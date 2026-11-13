@@ -13,7 +13,7 @@ clap = { version = "4", features = ["derive", "env"] }
 http = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-soil-wasi-host = { path = "../soil-wasi-host" }
+soil-host = { path = "../soil-host", default-features = false, features = ["unibus"] }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

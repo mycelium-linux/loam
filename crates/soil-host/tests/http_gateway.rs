@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use http::Method;
-use soil_wasi_host::{
+use soil_host::wasi::{
     GatewayRoute, HttpGatewayBuilder, HttpService, OriginAuth, WasiHostBuilder, WasiHostPolicy,
 };
 use tokio::net::TcpListener;

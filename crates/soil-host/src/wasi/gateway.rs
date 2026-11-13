@@ -25,7 +25,7 @@ use hyper::{Request, Response, body::Incoming, server::conn::http1, service::ser
 use tokio::net::TcpListener;
 use wasmtime_wasi_http::{Error as WasiHttpError, io::TokioIo, p2::body::HyperOutgoingBody};
 
-use crate::{HttpContext, service::HttpService};
+use crate::wasi::{HttpContext, service::HttpService};
 
 /// A host grant for one path prefix on a vhost.
 #[derive(Clone, Debug)]

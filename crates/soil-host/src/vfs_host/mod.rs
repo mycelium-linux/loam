@@ -14,15 +14,15 @@ use wasmtime::component::{HasSelf, Linker};
 
 wasmtime::component::bindgen!({ path: "wit/vfs", world: "host" });
 
+pub use self::soil::index::index;
+pub use self::soil::vfs::vfs;
+pub use self::soil::vfs_mut::vfs_mut;
 pub use embeddings::EmbeddingProvider;
 #[cfg(feature = "model2vec")]
 pub use embeddings::Model2VecEmbedder;
 #[cfg(feature = "remote")]
 pub use embeddings::RemoteEmbeddingProvider;
 use indexer::{IndexBackend, Node, NodeKind, SqliteIndex};
-pub use self::soil::index::index;
-pub use self::soil::vfs::vfs;
-pub use self::soil::vfs_mut::vfs_mut;
 
 use self::soil::vfs_mut::vfs_mut as vfs_mut_api;
 
@@ -497,9 +497,7 @@ impl vfs_mut_api::Host for VfsHost {
         // ever expressed the first two.
         let entry = {
             let mut vfs = self.vfs.lock().expect("vfs poisoned");
-            let expect = expected_version
-                .map(Expect::Version)
-                .unwrap_or(Expect::Any);
+            let expect = expected_version.map(Expect::Version).unwrap_or(Expect::Any);
             match mode {
                 Some(mode) => vfs.put_with_mode(&path, &data, &media_type, mode, expect),
                 None => vfs.put(&path, &data, &media_type, expect),
@@ -595,9 +593,7 @@ fn mutation_error(error: VfsError) -> vfs_mut_api::Error {
         VfsError::InvalidPath(_) | VfsError::InvalidContentId(_) => vfs_mut_api::Error::Invalid,
         VfsError::ReadOnly | VfsError::RoleMismatch { .. } => vfs_mut_api::Error::Denied,
         VfsError::Leased { .. } => vfs_mut_api::Error::Conflict,
-        VfsError::Fenced { .. } | VfsError::SnapshotRefused { .. } => {
-            vfs_mut_api::Error::Conflict
-        }
+        VfsError::Fenced { .. } | VfsError::SnapshotRefused { .. } => vfs_mut_api::Error::Conflict,
         VfsError::NotHydrated(_)
         | VfsError::Transport(_)
         | VfsError::Io(_)
@@ -637,10 +633,20 @@ mod tests {
         let mut vfs = Vfs::open(root).unwrap();
         vfs.put("notes.txt", b"hello greece trip", "text/plain", Expect::Any)
             .unwrap();
-        vfs.put("photos/greece-01.jpg", b"jpeg-one", "image/jpeg", Expect::Any)
-            .unwrap();
-        vfs.put("photos/greece-02.jpg", b"jpeg-two", "image/jpeg", Expect::Any)
-            .unwrap();
+        vfs.put(
+            "photos/greece-01.jpg",
+            b"jpeg-one",
+            "image/jpeg",
+            Expect::Any,
+        )
+        .unwrap();
+        vfs.put(
+            "photos/greece-02.jpg",
+            b"jpeg-two",
+            "image/jpeg",
+            Expect::Any,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -816,8 +822,13 @@ mod tests {
         assert_eq!(reopened.entries, state.entries);
 
         let mut vfs = Vfs::open(dir.path()).unwrap();
-        vfs.put("notes/new.txt", b"a new semantic note", "text/plain", Expect::Any)
-            .unwrap();
+        vfs.put(
+            "notes/new.txt",
+            b"a new semantic note",
+            "text/plain",
+            Expect::Any,
+        )
+        .unwrap();
         let state = host.refresh_index().unwrap();
         assert_eq!(state.generation, 2);
         let page = host

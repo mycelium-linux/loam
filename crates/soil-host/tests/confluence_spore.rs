@@ -4,7 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use base64::Engine as _;
 use http::Method;
 use serde_json::Value;
-use soil_wasi_host::{
+use soil_host::wasi::{
     Algorithm, CredentialProvider, GatewayRoute, GeodeCredentials, HttpGatewayBuilder, HttpService,
     MemoryBus, StaticCredentials, WasiHostBuilder, WasiHostPolicy,
 };

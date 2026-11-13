@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use soil_wasi_host::{HttpService, WasiHostBuilder, WasiHostPolicy};
+use soil_host::wasi::{HttpService, WasiHostBuilder, WasiHostPolicy};
 use tokio::{
     io::{AsyncReadExt as _, AsyncWriteExt as _},
     net::{TcpListener, TcpStream},

@@ -1,76 +1,79 @@
 # Capability hosts
 
-A fungOS capability reaches a Spore in two halves that ship separately:
+A capability reaches a Spore in two halves that ship separately:
 
 - the **contract**, `wit/<package>.wit` — what a Spore imports;
-- the **host adapter**, `crates/<package>-host` — what a host links.
+- the **host**, a module in `crates/soil-host/src/` — what a host links.
 
-The contract is a `.wit` file and nothing else. The adapter owns the wire to a
-real deployment (a CLI, a socket, a store) and never appears in the contract's
-dependency graph. A host that links the adapter does not link Mycelium, Unibus or
-whatever it fronts; a Spore that imports the interface does not link Soil.
+The contract is a `.wit` file and nothing else. The host implementation owns the
+wire to a real deployment (a CLI, a socket, a store) and never appears in the
+contract's dependency graph. A host that links the adapter does not link
+Mycelium, Unibus or whatever it fronts; a Spore that imports the interface does
+not link Soil.
 
-`fungos:mycelium/fleet` is the first one: `wit/fungos-mycelium.wit` plus
-`crates/soil-mycelium-host`, which calls `mycelium fleet status --json` and
-`mycelium topology --json` and returns a bounded projection — peers and four
-topology counts, never the topology document.
+## One host
 
-## Why not a path dependency on the service
+`soil-host` is the host. One module per contract: `records_host` serves
+`soil:records`, `http_host` serves `soil:http`, `vfs_host` serves `soil:vfs`,
+`unibus` serves `soil:unibus`, `mycelium` serves `fungos:mycelium/fleet`. The
+`wasi` module is the guest profile that links them into one `WasiHost`.
 
-Because a product that ships without the service must still build. A slim app is
-the nice canvas, a Spore, and the OS pieces it needs (mic, audio, surface);
-linking `mycelium`, `unibus` and a mesh runtime into it to keep one optional
-panel working is the sprawl this pattern exists to avoid. The adapter is the
-join point: one crate per capability, opt-in per host.
+They live in one crate because they are one host. A crate per capability only
+bought a `Cargo.toml`, a duplicated error type and a binary per experiment — and
+the capability it hosted still could not be reused without dragging its own
+build graph along.
 
-## The shape
+## Adding a capability
 
 1. Append the interface to `wit/<package>.wit`. It takes the shape of the stable
    CLI/JSON contract the service already publishes; it does not mirror internal
    types.
-2. Add `crates/<package>-host` with `Cargo.toml`, `src/lib.rs` (bindgen, the
-   adapter type, `add_to_linker`) and `wit/` symlinked to the repository `wit/`,
-   so the crate and the contract cannot drift.
-3. Add a feature to every host profile that may link it:
+2. Add `crates/soil-host/src/<name>.rs` with the bindgen (`path: "../../wit/…"`),
+   the adapter type and `add_to_linker`.
+3. Add a feature to `crates/soil-host/Cargo.toml` for anything that fronts an
+   external deployment, and gate the module:
 
    ```toml
-   [features]
-   default = ["mycelium"]
-   mycelium = ["dep:soil-mycelium-host"]
+   mycelium = []
+   unibus = ["dep:unibus", "dep:unibus-sdk"]
    ```
 
-   and gate the `add_to_linker` call and the store field behind it.
-4. A Spore declares what it needs in its manifest (`abi = { mycelium = "0.1.0" }`)
-   and asks for the grant in `[grants]`. Spores vendor the `.wit`; they never
-   link the adapter.
+4. Wire it into the profile: `wasi/mod.rs` re-exports it, `wasi/service.rs` links
+   it behind the flag, and `wasi/host.rs` implements the generated `Host` trait
+   by handing the adapter the store state it needs.
+5. A product opts in with its own default features (`soil-shell` does), so the
+   library never chooses a deployment on its behalf.
+
+A Spore declares what it needs in its manifest (`abi = { mycelium = "0.1.0" }`)
+and asks for the grant in `[grants]`. Spores vendor the `.wit`; they never link
+the host.
 
 ## The flag policy
 
-Capabilities are **on by default** and off with `--no-default-features`. The
-flag lives on the host profile (`soil-wasi-host`, `soil-canvas-host`, …) and is
-forwarded by the product crate that embeds it, so a slim build is one choice at
-the top, not a matrix at the bottom:
+`soil-host`'s defaults are `model2vec` only. The capabilities that reach an
+external deployment — `mycelium`, `unibus` — are features, on by default in the
+product that ships them (`soil-shell`), off in a slim build:
 
 ```sh
-cargo check -p soil-shell --no-default-features
+cargo build -p soil-shell --no-default-features
 ```
 
 A product that turns a capability off must not silently lose the feature it
 backs: the host answers `unavailable` (or refuses the import at instantiation),
 and the Spore shows that, rather than drawing an empty state that looks like a
-healthy but idle system.
+healthy but idle system. `soil spore run` refuses a Spore that grants
+`soil:unibus` when the build has no bus.
 
 ## Today
 
-| host profile | crate | capabilities |
+| module | contract | flag |
 | --- | --- | --- |
-| WASI HTTP (`soil spore run`) | `soil-wasi-host` | `mycelium`, `unibus` (both default on) |
-| Canvas modules | `soil-canvas-host` | none yet |
-| Shell | `soil-shell` | forwards `mycelium` to `soil-wasi-host` |
-
-The Canvas profile is where a slim app would read a fleet — its modules can
-present scenes but cannot yet import `fungos:mycelium`. Doing that is the same
-four steps on `soil-canvas-host`; it waits for a Spore that needs it.
+| `records_host` | `soil:records` | always |
+| `http_host` | `soil:http` | always |
+| `vfs_host` | `soil:vfs`, `soil:vfs-mut`, `soil:index` | always |
+| `wasi` | the guest profile + linker | always |
+| `mycelium` | `fungos:mycelium/fleet` | `mycelium` (default in `soil-shell`) |
+| `unibus` | `soil:unibus` | `unibus` (default in `soil-shell`) |
 
 ## Missing adapters
 
@@ -86,12 +89,10 @@ naming the import.
   today. They may be fundamental (a Spore is a thing with a home directory and a
   store) or the same opt-in shape as the rest. The flag mechanism does not care;
   the decision is about what a Spore *is*, so make it deliberately.
+- **The base `unibus` crate still arrives through `fungos-records`.** Gating the
+  adapter removes the adapter and `unibus-sdk`, not the client crate the records
+  store links. That is the records question above, not a wiring gap.
 - **OS native (mic, audio, surface).** These belong to the slim build, so they
-  are not fungOS capabilities in the same sense: they are the base layer every
-  profile keeps. If an OS backend is optional per platform, it still wants the
-  same feature-per-crate shape, just always-on for the shipped sizes.
-- **Unibus is a crate now.** `soil:unibus` ships as
-  [`crates/soil-unibus-host`](../crates/soil-unibus-host): the contract, the `Bus`
-  trait, both backends and the linker, with the profile supplying only the store
-  wiring. The base `unibus` crate still arrives through `fungos-records`, which is
-  the records question below, not a wiring gap.
+  are not deployment-specific capabilities: they are the base layer every
+  profile keeps. `wasi-audio-wasmtime` exists and is linked by no profile yet;
+  `soil:mic` is a row in the ABI map with no `.wit` file.

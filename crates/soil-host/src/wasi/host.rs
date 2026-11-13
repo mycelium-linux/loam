@@ -6,12 +6,12 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use crate::http_host::HttpTransport;
+#[cfg(feature = "mycelium")]
+use crate::mycelium::MyceliumFleet;
+use crate::records_host::{RecordsBookHost, records};
 use anyhow::Result;
 use http_body_util::BodyExt;
-use soil_host::http_host::HttpTransport;
-use soil_host::records_host::{RecordsBookHost, records};
-#[cfg(feature = "mycelium")]
-use soil_mycelium_host::MyceliumFleet;
 use wasmtime::component::ResourceTable;
 use wasmtime_wasi::{FsPerms, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 use wasmtime_wasi_http::{
@@ -19,13 +19,13 @@ use wasmtime_wasi_http::{
     WasiHttpCtxView, WasiHttpHooks, WasiHttpView,
 };
 
-use crate::{
+use super::{
     context::HttpContext,
     creds::CredentialProvider,
     policy::{HttpPolicy, WasiHostPolicy},
 };
 #[cfg(feature = "unibus")]
-use soil_unibus_host::{Bus, api as unibus_api, map_error};
+use crate::unibus::{Bus, api as unibus_api, map_error};
 
 /// A `soil:http` installation for a Spore that serves `wasi:http`.
 ///
@@ -34,15 +34,12 @@ use soil_unibus_host::{Bus, api as unibus_api, map_error};
 /// differs. That is what lets a Spore reach the network through a browser
 /// instead of this process's socket.
 pub struct HttpCapability {
-    pub(crate) policy: soil_host::http_host::HttpPolicy,
+    pub(crate) policy: crate::http_host::HttpPolicy,
     pub(crate) transport: Arc<dyn HttpTransport>,
 }
 
 impl HttpCapability {
-    pub fn new(
-        policy: soil_host::http_host::HttpPolicy,
-        transport: Arc<dyn HttpTransport>,
-    ) -> Self {
+    pub fn new(policy: crate::http_host::HttpPolicy, transport: Arc<dyn HttpTransport>) -> Self {
         Self { policy, transport }
     }
 }
@@ -287,28 +284,26 @@ impl unibus_api::Host for WasiHost {
 }
 
 #[cfg(feature = "mycelium")]
-impl soil_mycelium_host::api::Host for WasiHost {
-    fn status(
-        &mut self,
-    ) -> Result<soil_mycelium_host::api::Snapshot, soil_mycelium_host::api::Error> {
+impl crate::mycelium::api::Host for WasiHost {
+    fn status(&mut self) -> Result<crate::mycelium::api::Snapshot, crate::mycelium::api::Error> {
         self.mycelium
             .as_mut()
-            .ok_or(soil_mycelium_host::api::Error::Unavailable)?
+            .ok_or(crate::mycelium::api::Error::Unavailable)?
             .status()
     }
 }
 
-impl soil_host::http_host::api::Host for WasiHost {
+impl crate::http_host::api::Host for WasiHost {
     fn fetch(
         &mut self,
-        request: soil_host::http_host::api::Request,
-    ) -> Result<soil_host::http_host::api::Response, soil_host::http_host::api::Error> {
+        request: crate::http_host::api::Request,
+    ) -> Result<crate::http_host::api::Response, crate::http_host::api::Error> {
         let Some(capability) = self.soil_http.as_ref() else {
-            return Err(soil_host::http_host::api::Error::Unsupported);
+            return Err(crate::http_host::api::Error::Unsupported);
         };
-        soil_host::http_host::fetch(
+        crate::http_host::fetch(
             &capability.policy,
-            &soil_host::http_host::NoCredentials,
+            &crate::http_host::NoCredentials,
             capability.transport.as_ref(),
             request,
         )

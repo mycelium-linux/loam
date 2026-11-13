@@ -18,7 +18,7 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use wasmtime::component::{HasSelf, Linker};
 
-use crate::{context::now_ms, host::WasiHost};
+use crate::wasi::{context::now_ms, host::WasiHost};
 
 wasmtime::component::bindgen!({
     path: "../../wit/soil-creds.wit",
@@ -640,7 +640,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::{WasiHostBuilder, WasiHostPolicy};
+    use crate::wasi::{WasiHostBuilder, WasiHostPolicy};
 
     fn hmac() -> StaticCredentials {
         let mut credentials = StaticCredentials::new();
@@ -740,7 +740,7 @@ mod tests {
             CredentialError::Denied
         );
         credentials
-            .set_expiry("webhook", crate::context::now_ms().saturating_sub(1))
+            .set_expiry("webhook", crate::wasi::context::now_ms().saturating_sub(1))
             .unwrap();
         assert_eq!(
             credentials.resolve("webhook").unwrap_err(),

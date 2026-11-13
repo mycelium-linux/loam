@@ -22,6 +22,12 @@ mod host;
 mod policy;
 mod service;
 
+#[cfg(feature = "mycelium")]
+pub use crate::mycelium::{MyceliumFleet, api as mycelium_fleet};
+#[cfg(feature = "unibus")]
+pub use crate::unibus::{
+    Bus, BusError, BusReceipt, Frame, MAX_BUS_BODY, MAX_POLL_LIMIT, MemoryBus, Page, UnibusBus,
+};
 pub use context::HttpContext;
 pub use creds::{
     Algorithm, CredentialError, CredentialProvider, GeodeCredentials, GeodePgpCredentials,
@@ -33,12 +39,6 @@ pub use gateway::{
 pub use host::{HttpCapability, Preopen, WasiHost, WasiHostBuilder};
 pub use policy::{HttpPolicy, NetworkPolicy, WasiHostPolicy};
 pub use service::HttpService;
-#[cfg(feature = "mycelium")]
-pub use soil_mycelium_host::{MyceliumFleet, api as mycelium_fleet};
-#[cfg(feature = "unibus")]
-pub use soil_unibus_host::{
-    Bus, BusError, BusReceipt, Frame, MAX_BUS_BODY, MAX_POLL_LIMIT, MemoryBus, Page, UnibusBus,
-};
 
 /// The set of host facilities currently provided by this profile.
 pub const WASI_PROFILE: &[&str] = &[
