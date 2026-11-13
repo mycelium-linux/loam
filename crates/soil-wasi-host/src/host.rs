@@ -19,11 +19,12 @@ use wasmtime_wasi_http::{
     WasiHttpCtxView, WasiHttpHooks, WasiHttpView,
 };
 
+#[cfg(feature = "unibus")]
+use crate::unibus::Bus;
 use crate::{
     context::HttpContext,
     creds::CredentialProvider,
     policy::{HttpPolicy, WasiHostPolicy},
-    unibus::Bus,
 };
 
 /// A `soil:http` installation for a Spore that serves `wasi:http`.
@@ -64,6 +65,7 @@ pub struct WasiHostBuilder {
     inherit_stdio: bool,
     preopens: Vec<Preopen>,
     credentials: Option<Arc<dyn CredentialProvider>>,
+    #[cfg(feature = "unibus")]
     bus: Option<Arc<dyn Bus>>,
     /// Shared across requests on purpose: one SQLite store per process, not one
     /// per invocation.
@@ -139,6 +141,7 @@ impl WasiHostBuilder {
     ///
     /// Without a bus, `publish` and `poll` fail with `unavailable`; a Spore
     /// cannot fall back to opening its own connection.
+    #[cfg(feature = "unibus")]
     pub fn bus(mut self, bus: Arc<dyn Bus>) -> Self {
         self.bus = Some(bus);
         self
@@ -208,6 +211,7 @@ impl WasiHostBuilder {
             },
             context: None,
             credentials: self.credentials.clone(),
+            #[cfg(feature = "unibus")]
             bus: self.bus.clone(),
             records: self.records.clone(),
             soil_http: self.http.clone(),
@@ -230,6 +234,7 @@ pub struct WasiHost {
     hooks: HttpHooks,
     context: Option<HttpContext>,
     credentials: Option<Arc<dyn CredentialProvider>>,
+    #[cfg(feature = "unibus")]
     bus: Option<Arc<dyn Bus>>,
     records: Option<Arc<Mutex<RecordsBookHost>>>,
     soil_http: Option<Arc<HttpCapability>>,
@@ -285,6 +290,7 @@ impl WasiHost {
         self.credentials.clone()
     }
 
+    #[cfg(feature = "unibus")]
     pub(crate) fn bus(&self) -> Option<Arc<dyn Bus>> {
         self.bus.clone()
     }

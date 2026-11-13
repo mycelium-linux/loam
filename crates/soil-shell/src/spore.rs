@@ -16,9 +16,11 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use soil_spore::{Manifest, OriginAuth as ClaimedAuth};
+#[cfg(feature = "unibus")]
+use soil_wasi_host::UnibusBus;
 use soil_wasi_host::{
-    GatewayRoute, GeodeCredentials, HttpGatewayBuilder, HttpService, OriginAuth, UnibusBus,
-    WasiHostBuilder, WasiHostPolicy,
+    GatewayRoute, GeodeCredentials, HttpGatewayBuilder, HttpService, OriginAuth, WasiHostBuilder,
+    WasiHostPolicy,
 };
 use tokio::net::TcpListener;
 
@@ -288,8 +290,23 @@ async fn serve(spore: Spore, run: Run) -> Result<()> {
             Duration::from_secs(run.geode_ttl_secs),
         )));
     }
+    #[cfg(feature = "unibus")]
     if let Some(bus) = bus(&spore.manifest, &run)? {
         builder = builder.bus(bus);
+    }
+    // A slim build links no bus. A Spore that asks for one gets a named refusal
+    // at launch rather than a component that starts and can never publish.
+    #[cfg(not(feature = "unibus"))]
+    if spore
+        .manifest
+        .grants
+        .keys()
+        .any(|grant| grant.starts_with("soil:unibus"))
+    {
+        bail!(
+            "{} is granted soil:unibus, but this soil was built without the `unibus` capability",
+            spore.manifest.spore.id
+        );
     }
 
     #[cfg(feature = "mycelium")]
@@ -407,6 +424,7 @@ async fn serve(spore: Spore, run: Run) -> Result<()> {
 ///
 /// A Spore that observes or publishes needs a hub; one that does not must not
 /// be handed a connection it never asked for.
+#[cfg(feature = "unibus")]
 fn bus(manifest: &Manifest, run: &Run) -> Result<Option<Arc<dyn soil_wasi_host::Bus>>> {
     let wants = manifest
         .grants

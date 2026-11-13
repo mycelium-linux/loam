@@ -64,7 +64,7 @@ healthy but idle system.
 
 | host profile | crate | capabilities |
 | --- | --- | --- |
-| WASI HTTP (`soil spore run`) | `soil-wasi-host` | `mycelium` (default on) |
+| WASI HTTP (`soil spore run`) | `soil-wasi-host` | `mycelium`, `unibus` (both default on) |
 | Canvas modules | `soil-canvas-host` | none yet |
 | Shell | `soil-shell` | forwards `mycelium` to `soil-wasi-host` |
 
@@ -90,7 +90,11 @@ naming the import.
   are not fungOS capabilities in the same sense: they are the base layer every
   profile keeps. If an OS backend is optional per platform, it still wants the
   same feature-per-crate shape, just always-on for the shipped sizes.
-- **Unibus.** `soil:unibus` is already in `soil-wasi-host` without a flag; the
-  adapter lives in-tree (`crates/soil-wasi-host/src/unibus.rs`) rather than as a
-  `soil-unibus-host` crate. Moving it is the next instance of this pattern, and
-  it should happen when something needs a build without the bus.
+- **Unibus lives in-tree.** `soil:unibus` is behind the `unibus` flag (on by
+  default): the adapter and `unibus-sdk` drop out of a slim build. The base
+  `unibus` crate still arrives through `fungos-records`, which is the records
+  question below, not a wiring gap. The adapter is still
+  [`crates/soil-wasi-host/src/unibus.rs`](../crates/soil-wasi-host/src/unibus.rs)
+  rather than a `soil-unibus-host` crate, because it binds `soil:unibus` against
+  `WasiHost` directly. Extracting it is the next full instance of this shape, and
+  it waits for a second host profile that needs the bus.

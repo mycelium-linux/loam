@@ -21,6 +21,7 @@ mod gateway;
 mod host;
 mod policy;
 mod service;
+#[cfg(feature = "unibus")]
 pub mod unibus;
 
 pub use context::HttpContext;
@@ -36,6 +37,7 @@ pub use policy::{HttpPolicy, NetworkPolicy, WasiHostPolicy};
 pub use service::HttpService;
 #[cfg(feature = "mycelium")]
 pub use soil_mycelium_host::{MyceliumFleet, api as mycelium_fleet};
+#[cfg(feature = "unibus")]
 pub use unibus::{
     Bus, BusError, BusReceipt, Frame, MAX_BUS_BODY, MAX_POLL_LIMIT, MemoryBus, Page, UnibusBus,
 };
@@ -53,6 +55,7 @@ pub const WASI_PROFILE: &[&str] = &[
     "wasi:sockets",
     "fungos:http-context",
     "soil:creds",
+    #[cfg(feature = "unibus")]
     "soil:unibus",
     #[cfg(feature = "mycelium")]
     "fungos:mycelium/fleet",

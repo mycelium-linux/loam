@@ -11,8 +11,11 @@ name = "soil"
 path = "src/main.rs"
 
 [features]
-default = ["mycelium"]
+default = ["mycelium", "unibus"]
 mycelium = ["soil-wasi-host/mycelium"]
+# Forwarded to the host profile: a slim `soil` links no bus and refuses a Spore
+# that grants `soil:unibus` instead of starting one that can never publish.
+unibus = ["soil-wasi-host/unibus", "dep:unibus"]
 
 [dependencies]
 anyhow = "1"
@@ -29,7 +32,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "time"] }
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-unibus = { git = "https://github.com/fungOS-linux/unibus.git", rev = "8bf8f79" }
+unibus = { git = "https://github.com/fungOS-linux/unibus.git", rev = "8bf8f79", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

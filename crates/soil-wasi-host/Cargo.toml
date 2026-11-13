@@ -7,10 +7,14 @@ repository.workspace = true
 publish = false
 
 [features]
-default = ["mycelium"]
+default = ["mycelium", "unibus"]
 # The fungOS control-plane adapter: a live Mycelium fleet read. A slim host
 # builds with `--no-default-features` and links no Mycelium adapter at all.
 mycelium = ["dep:soil-mycelium-host"]
+# The Unibus bus and its two client crates. Off means neither is in the build;
+# a Spore granted `soil:unibus` is then refused at launch instead of running
+# with a bus that answers `unavailable` forever.
+unibus = ["dep:unibus", "dep:unibus-sdk"]
 
 [dependencies]
 anyhow = "1"
@@ -18,8 +22,8 @@ base64 = "0.22"
 bytes = "1"
 serde_json = "1"
 tracing = "0.1"
-unibus = { git = "https://github.com/fungOS-linux/unibus.git", rev = "8bf8f79" }
-unibus-sdk = { git = "https://github.com/fungOS-linux/unibus.git", rev = "8bf8f79" }
+unibus = { git = "https://github.com/fungOS-linux/unibus.git", rev = "8bf8f79", optional = true }
+unibus-sdk = { git = "https://github.com/fungOS-linux/unibus.git", rev = "8bf8f79", optional = true }
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 hmac = "0.12"
 http = "1"
@@ -54,3 +58,9 @@ tempfile = "3"
 [[bin]]
 name = "soil-wasi-http"
 path = "src/bin/soil-wasi-http.rs"
+
+[[test]]
+name = "confluence_spore"
+# One Spore that observes and publishes bus frames: the test needs the adapter
+# the slim profile leaves out.
+required-features = ["unibus"]

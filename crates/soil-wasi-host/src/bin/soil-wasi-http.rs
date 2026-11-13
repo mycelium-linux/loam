@@ -11,9 +11,9 @@ use std::{env, fs, path::PathBuf, process::ExitCode, sync::Arc};
 
 use anyhow::{Context, Result, bail};
 use soil_host::records_host::RecordsBookHost;
-use soil_wasi_host::{
-    HttpPolicy, HttpService, NetworkPolicy, UnibusBus, WasiHostBuilder, WasiHostPolicy,
-};
+#[cfg(feature = "unibus")]
+use soil_wasi_host::UnibusBus;
+use soil_wasi_host::{HttpPolicy, HttpService, NetworkPolicy, WasiHostBuilder, WasiHostPolicy};
 use tokio::net::TcpListener;
 use wasmtime_wasi::FsPerms;
 
@@ -51,6 +51,7 @@ async fn run() -> Result<()> {
             .with_context(|| format!("open records book in {}", root.display()))?;
         builder = builder.records_book(records);
     }
+    #[cfg(feature = "unibus")]
     if let Some(path) = &options.unibus {
         let bus = UnibusBus::from_config_file(path)
             .with_context(|| format!("connect the Unibus hub for {}", path.display()))?;
@@ -77,6 +78,7 @@ struct Options {
     inherit_stdio: bool,
     preopens: Vec<(PathBuf, String, FsPerms)>,
     records: Option<(PathBuf, String, String)>,
+    #[cfg(feature = "unibus")]
     unibus: Option<PathBuf>,
 }
 
@@ -155,8 +157,16 @@ impl Options {
                     options.records = Some(parse_records(&value)?);
                 }
                 "--unibus" => {
-                    let value = next(&mut args, "--unibus")?;
-                    options.unibus = Some(PathBuf::from(value));
+                    #[cfg(not(feature = "unibus"))]
+                    bail!(
+                        "{USAGE}\n\nthis build has no `unibus` capability; rebuild with \
+                         --features unibus"
+                    );
+                    #[cfg(feature = "unibus")]
+                    {
+                        let value = next(&mut args, "--unibus")?;
+                        options.unibus = Some(PathBuf::from(value));
+                    }
                 }
                 "--help" | "-h" => {
                     println!("{USAGE}");
