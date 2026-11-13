@@ -16,8 +16,6 @@ use std::{
 use anyhow::{Context, Result, bail};
 use fungos_vfs::Vfs;
 
-mod spore;
-
 fn main() {
     if let Err(error) = run() {
         eprintln!("soil: {error:#}");
@@ -28,8 +26,6 @@ fn main() {
 fn usage() -> &'static str {
     "usage: soil --root ROOT <command>\n\
      commands:\n\
-       spore run <dir|package.spore> [--listen ADDR] [--hub ADDR]... [--unibus-config FILE]\n\
-                                    [--bridge ADDR] [--bridge-wait SECS] [--allow-origin URL]...\n\
        shell [--mount DIR] [--fuse-binary PATH] [--shell PATH] [--no-mount] [-- command...]\n\
        ls [PREFIX]\n\
        stat PATH\n\
@@ -49,9 +45,6 @@ fn run() -> Result<()> {
     };
     args.remove(0);
     match command.as_str() {
-        // Any `.spore` on the names it claims: the same launcher for every
-        // Spore, so a product never ships its own host again.
-        "spore" => spore::run(&args),
         "shell" => shell(&root, args),
         "rm" => remove(&root, args),
         "ls" => list(&root, args),

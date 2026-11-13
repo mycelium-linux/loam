@@ -23,6 +23,7 @@ mod project;
 mod projects;
 mod service;
 mod shell;
+mod spore;
 mod worktree;
 
 use std::{
@@ -670,6 +671,12 @@ fn run() -> Result<()> {
     if login_invocation() || args.iter().any(|arg| is_login_flag(arg)) {
         apply_login_env();
     }
+    // `mush spore run` owns the process: the launcher parses its own arguments,
+    // and its `--root` means the Spore's directory, not the VFS root.
+    if args.first().map(String::as_str) == Some("spore") {
+        args.remove(0);
+        return spore::run(&args);
+    }
     let doctor = args.first().map(String::as_str) == Some("doctor");
     if doctor {
         args.remove(0);
@@ -1176,6 +1183,7 @@ fn usage() -> String {
          Usage:\n\
          \x20 mush [OPTIONS]\n\
          \x20 mush doctor [OPTIONS]\n\
+         \x20 mush spore run <spore-dir|package.spore> [OPTIONS]\n\
          \x20 mush run op [OPTIONS]\n\
          \x20 mush --serve --socket PATH --root DIR [--foreground] [OPTIONS]\n\
          \x20 mush mcp [--listen ADDR] [--foreground] [OPTIONS]\n\
