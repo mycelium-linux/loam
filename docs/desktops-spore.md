@@ -14,8 +14,14 @@ dev.fungos.desktops
   module.wasm          logic: read, validate, write one manifest at a time
   ui/desktops.lua      Canvas view over a snapshot
   spore.toml           grants: soil:records, soil:principal
-  wit/world.wit        run(args) or snapshot() + action exports
+  wit/world.wit        import soil:records, soil:principal; export run(args)
 ```
+
+The module exports `run(args: list<string>)`, the command surface `crm` and
+`contacts` already use: the action name followed by one JSON payload. Mush and
+the Canvas UI are both clients of that surface; neither gets a second
+implementation. The module depends on `soil-desktop` (a git pin to this
+repository) so the schema ids and validation are not copied.
 
 ## What it is for
 
