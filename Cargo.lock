@@ -4153,7 +4153,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "fungos-vfs",
- "http",
  "ignore",
  "libc",
  "rand 0.9.5",
@@ -4165,14 +4164,8 @@ dependencies = [
  "soil-inference",
  "soil-scrub",
  "soil-spore",
- "soil-web-bridge",
  "tempfile",
  "tiny_http",
- "tokio",
- "toml 0.8.23",
- "tracing",
- "tracing-subscriber",
- "unibus",
  "ureq 2.12.1",
  "wasmtime",
  "wasmtime-wasi",
@@ -7360,9 +7353,17 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "fungos-vfs",
+ "http",
  "serde_json",
  "soil-host",
+ "soil-spore",
+ "soil-web-bridge",
  "tempfile",
+ "tokio",
+ "toml 0.8.23",
+ "tracing",
+ "tracing-subscriber",
+ "unibus",
 ]
 
 [[package]]

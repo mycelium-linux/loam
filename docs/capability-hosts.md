@@ -41,8 +41,8 @@ build graph along.
 4. Wire it into the profile: `wasi/mod.rs` re-exports it, `wasi/service.rs` links
    it behind the flag, and `wasi/host.rs` implements the generated `Host` trait
    by handing the adapter the store state it needs.
-5. A product opts in with its own features (`mush` links both adapters), so the
-   library never chooses a deployment for it.
+5. A product opts in with its own default features (`soil-shell` does), so the
+   library never chooses a deployment on its behalf.
 
 A Spore declares what it needs in its manifest (`abi = { mycelium = "0.1.0" }`)
 and asks for the grant in `[grants]`. Spores vendor the `.wit`; they never link
@@ -51,15 +51,18 @@ the host.
 ## The flag policy
 
 `soil-host`'s defaults are `model2vec` only. The capabilities that reach an
-external deployment — `mycelium`, `unibus` — are features a product opts into:
-`mush` links both, and a slim product embeds `soil-host` with
-`default-features = false` and links only what it serves.
+external deployment — `mycelium`, `unibus` — are features, on by default in the
+product that ships them (`soil-shell`), off in a slim build:
+
+```sh
+cargo build -p soil-shell --no-default-features
+```
 
 A product that turns a capability off must not silently lose the feature it
-backs: the interface is not linked, so a component that imports it fails at
-instantiation, and a read with no daemon answers `unavailable`. The Spore shows
-that, rather than drawing an empty state that looks like a healthy but idle
-system.
+backs: the host answers `unavailable` (or refuses the import at instantiation),
+and the Spore shows that, rather than drawing an empty state that looks like a
+healthy but idle system. `soil spore run` refuses a Spore that grants
+`soil:unibus` when the build has no bus.
 
 ## Today
 
@@ -69,8 +72,8 @@ system.
 | `http_host` | `soil:http` | always |
 | `vfs_host` | `soil:vfs`, `soil:vfs-mut`, `soil:index` | always (fundamental) |
 | `wasi` | the guest profile + linker | always |
-| `mycelium` | `fungos:mycelium/fleet` | `mycelium` (mush links it; opt-in elsewhere) |
-| `unibus` | `soil:unibus` | `unibus` (mush links it; opt-in elsewhere) |
+| `mycelium` | `fungos:mycelium/fleet` | `mycelium` (default in `soil-shell`) |
+| `unibus` | `soil:unibus` | `unibus` (default in `soil-shell`) |
 
 ## Missing adapters
 

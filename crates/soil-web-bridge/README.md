@@ -188,10 +188,10 @@ origin allowlist, its CORS — without the node opening a socket.
 
 ### Wiring it into a host
 
-The launcher is `mush spore run`; a browser is an option on it:
+The launcher is `soil spore run`; a browser is an option on it:
 
 ```sh
-mush spore run spores/worklog --bridge 127.0.0.1:8795 --bridge-wait 30 \
+soil spore run spores/worklog --bridge 127.0.0.1:8795 --bridge-wait 30 \
   --allow-origin https://example.com
 ```
 

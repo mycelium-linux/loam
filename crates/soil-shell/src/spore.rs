@@ -1,4 +1,4 @@
-//! `mush spore run`: host any `.spore` on the names it claims.
+//! `soil spore run`: host any `.spore` on the names it claims.
 //!
 //! One launcher, no product code. The Spore decides where it answers (its
 //! `[http]` table) and what it may do (`[grants]`); this process decides nothing
@@ -15,6 +15,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+#[cfg(feature = "unibus")]
 use soil_host::wasi::UnibusBus;
 use soil_host::wasi::{
     GatewayRoute, GeodeCredentials, HttpGatewayBuilder, HttpService, OriginAuth, WasiHostBuilder,
@@ -52,13 +53,13 @@ pub struct Run {
 }
 
 pub fn parse(args: &[String]) -> Result<(PathBuf, Run)> {
-    // `mush spore run <path>`: the verb is `run`, and the path follows it.
+    // `soil spore run <path>`: the verb is `run`, and the path follows it.
     let args = match args.first().map(String::as_str) {
         Some("run") => &args[1..],
         _ => args,
     };
     let Some(spore) = args.first().map(PathBuf::from) else {
-        bail!("usage: mush spore run <spore-dir|package.spore> [options]");
+        bail!("usage: soil spore run <spore-dir|package.spore> [options]");
     };
     let mut run = Run {
         listen: None,
@@ -290,10 +291,26 @@ async fn serve(spore: Spore, run: Run) -> Result<()> {
             Duration::from_secs(run.geode_ttl_secs),
         )));
     }
+    #[cfg(feature = "unibus")]
     if let Some(bus) = bus(&spore.manifest, &run)? {
         builder = builder.bus(bus);
     }
+    // A slim build links no bus. A Spore that asks for one gets a named refusal
+    // at launch rather than a component that starts and can never publish.
+    #[cfg(not(feature = "unibus"))]
+    if spore
+        .manifest
+        .grants
+        .keys()
+        .any(|grant| grant.starts_with("soil:unibus"))
+    {
+        bail!(
+            "{} is granted soil:unibus, but this soil was built without the `unibus` capability",
+            spore.manifest.spore.id
+        );
+    }
 
+    #[cfg(feature = "mycelium")]
     if let Some(bin) = &run.mycelium_bin {
         builder = builder.mycelium_fleet(
             soil_host::wasi::MyceliumFleet::new(bin.clone()).with_refresh(run.mycelium_refresh),
@@ -408,6 +425,7 @@ async fn serve(spore: Spore, run: Run) -> Result<()> {
 ///
 /// A Spore that observes or publishes needs a hub; one that does not must not
 /// be handed a connection it never asked for.
+#[cfg(feature = "unibus")]
 fn bus(manifest: &Manifest, run: &Run) -> Result<Option<Arc<dyn soil_host::wasi::Bus>>> {
     let wants = manifest
         .grants
