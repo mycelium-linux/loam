@@ -1,22 +1,28 @@
-//! Desktops: the unit of work, sharing and installation.
+//! Desktops and Teams: the unit of work, sharing and installation.
 //!
-//! Three nouns and one rule. **Principal** is who — and it is deliberately just
+//! Four nouns and one rule. **Principal** is who — and it is deliberately just
 //! the `actor` string `soil:principal` already resolves, so nothing here
 //! decides identity. **Device** is a machine, owned by one principal and
-//! possibly assigned to another. **Desktop** is the unit of work and sharing: a
-//! VFS export, a set of members, a set of installs, and the capabilities the
-//! people in it may reach.
+//! possibly assigned to another. **Team** is a named membership set that can
+//! own a Desktop, so a Desktop does not have to be re-shared with every person
+//! who joins or leaves. **Desktop** is the unit of work and sharing: a VFS
+//! export, a set of members, a set of installs, the services it wants placed,
+//! and the capabilities the people in it may reach.
 //!
 //! The rule is that a *relation to a desktop* is not the same as *access to an
 //! object inside it*. Sharing one document with a guest must not quietly make
 //! them a member, and membership must not be the only way to receive a file.
-//! Keeping those two mechanisms apart is what lets both exist.
+//! Keeping those two mechanisms apart is what lets both exist. A [`Ticket`] is
+//! the second mechanism in its most disposable form: one item, one named
+//! principal, a use budget, and an expiry. Redeeming it does not add anybody to
+//! a Team or a Desktop.
 //!
 //! This crate is the model and nothing else: no I/O, no mounts, no network. It
 //! exists so the rules can be argued with in tests before anything is built on
-//! them.
+//! them. Persistence is [`schema`]: one record body per noun, with the schema id
+//! naming the contract. The records-backed store lives in `soil-desktop-store`.
 //!
-//! Two deliberate absences, both worth knowing before extending it:
+//! Three deliberate absences, all worth knowing before extending it:
 //!
 //! - **No fleet noun.** A fleet is the set of devices that can reach a desktop,
 //!   derived from relations, never stored. A stored one would be a second
@@ -25,11 +31,31 @@
 //!   materialised by a device. A device-level install every desktop can see
 //!   would be an invisible superset, and a shared desktop at someone's employer
 //!   would see what they installed at home.
+//! - **No stored book paths.** A Desktop names a records binding; the book and
+//!   its Geode address are derived from the Desktop id by [`DesktopKey`]. One
+//!   fact, one place.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
+
+use serde::{Deserialize, Serialize};
+
+mod capability;
+mod desktop;
+mod key;
+pub mod schema;
+mod team;
+
+pub use capability::{Capability, Device, Provider, Resolution, resolve_capability};
+pub use desktop::{
+    Access, Desktop, Install, Item, RecordsBinding, Redemption, Service, Share, Ticket,
+    TicketRequest,
+};
+pub use key::DesktopKey;
+pub use team::{Team, TeamId};
 
 /// Who. Never more than the identity `soil:principal` resolved.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct PrincipalId(String);
 
 impl PrincipalId {
@@ -50,554 +76,292 @@ impl From<&str> for PrincipalId {
     }
 }
 
-/// A capability a device can provide or a Spore can ask for, e.g. `soil:audio`.
-///
-/// A newtype rather than an enum so a new capability is a new string, not a
-/// breaking change to every match in the tree.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Capability(String);
-
-impl Capability {
-    #[must_use]
-    pub fn new(name: impl Into<String>) -> Self {
-        Self(name.into())
-    }
-
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
+impl From<String> for PrincipalId {
+    fn from(id: String) -> Self {
+        Self(id)
     }
 }
 
-impl From<&str> for Capability {
-    fn from(name: &str) -> Self {
-        Self(name.to_owned())
+impl fmt::Display for PrincipalId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
     }
 }
 
-/// What a relation permits inside a desktop.
+/// What a relation permits inside a team or desktop.
 ///
 /// Ordered so a stronger role satisfies a weaker requirement without a match
 /// table: `Writer >= Reader`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Role {
     Reader,
     Writer,
     Owner,
 }
 
+impl Role {
+    /// Whether this role satisfies a requirement of `required`.
+    #[must_use]
+    pub fn covers(self, required: Self) -> bool {
+        self >= required
+    }
+}
+
 /// Why something was refused.
 ///
-/// One enum for relations, shares and capabilities because a caller needs to
-/// tell "you are not allowed" from "nobody offers this" — and because a refusal
-/// with a reason is what a Spore can show a human.
+/// One enum for relations, shares, tickets and capabilities because a caller
+/// needs to tell "you are not allowed" from "nobody offers this" — and because a
+/// refusal with a reason is what a Spore can show a human.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Refusal {
-    /// No live relation to this desktop.
+    /// No live relation to this desktop or team.
     NotAMember,
     /// The relation or grant does not cover this.
     NotGranted,
     /// Nobody in this desktop offers the capability.
     NoProvider,
-    /// A relation existed and has run out.
+    /// A relation or grant existed and has run out.
     Expired,
+    /// A ticket's use budget is spent.
+    Exhausted,
     /// This desktop refuses this Spore outright.
     Denied,
 }
 
-/// A machine.
-///
-/// Owned by one principal, possibly assigned to another: an employer's laptop
-/// is *owned* by the employer and *used* by a person, and both statements have
-/// to be able to be true at once.
-#[derive(Clone, Debug)]
-pub struct Device {
-    pub id: String,
-    pub owner: PrincipalId,
-    pub assigned_to: Option<PrincipalId>,
-    /// What this machine can provide itself.
-    pub capabilities: BTreeSet<Capability>,
+impl fmt::Display for Refusal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::NotAMember => "not a member",
+            Self::NotGranted => "not granted",
+            Self::NoProvider => "no provider",
+            Self::Expired => "expired",
+            Self::Exhausted => "exhausted",
+            Self::Denied => "denied",
+        })
+    }
 }
 
 /// A principal and what they may do, until when.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Membership {
     pub principal: PrincipalId,
     pub role: Role,
     pub expires_at_ms: Option<i64>,
 }
 
-/// One object shared with someone who is not a member.
+impl Membership {
+    #[must_use]
+    pub fn new(principal: PrincipalId, role: Role) -> Self {
+        Self {
+            principal,
+            role,
+            expires_at_ms: None,
+        }
+    }
+
+    #[must_use]
+    pub fn until(self, expires_at_ms: i64) -> Self {
+        Self {
+            expires_at_ms: Some(expires_at_ms),
+            ..self
+        }
+    }
+
+    #[must_use]
+    pub fn live(&self, now_ms: i64) -> bool {
+        self.expires_at_ms.is_none_or(|at| at > now_ms)
+    }
+}
+
+/// Who owns a Team or Desktop: one principal, or one team.
 ///
-/// `path` is inside the desktop's export. A share is read-only by design for
-/// now: writing through one needs *path-scoped* sync, which does not exist yet,
-/// and pretending otherwise would be a promise the protocol cannot keep.
-#[derive(Clone, Debug)]
-pub struct Share {
-    pub path: String,
-    pub grantee: PrincipalId,
-    pub role: Role,
-    pub expires_at_ms: Option<i64>,
+/// A team owner is not an alias for its members: when the team changes, the
+/// desktop's membership changes with it, and a principal who leaves the team
+/// loses the desktop without anybody editing the desktop.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Owner {
+    Principal { principal: PrincipalId },
+    Team { team: TeamId },
 }
 
-/// What a desktop wants installed, and whether it insists.
+impl Owner {
+    #[must_use]
+    pub fn principal(principal: impl Into<PrincipalId>) -> Self {
+        Self::Principal {
+            principal: principal.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn team(team: impl Into<TeamId>) -> Self {
+        Self::Team { team: team.into() }
+    }
+
+    #[must_use]
+    pub fn as_principal(&self) -> Option<&PrincipalId> {
+        match self {
+            Self::Principal { principal } => Some(principal),
+            Self::Team { .. } => None,
+        }
+    }
+
+    #[must_use]
+    pub fn as_team(&self) -> Option<&TeamId> {
+        match self {
+            Self::Principal { .. } => None,
+            Self::Team { team } => Some(team),
+        }
+    }
+}
+
+/// How far a Desktop reaches.
 ///
-/// `required` is the whole point of a desktop having an install list: a shared
-/// desktop can pin a Spore and its grants, and a member that cannot satisfy the
-/// pin is visibly non-compliant rather than quietly different.
-#[derive(Clone, Debug)]
-pub struct Install {
-    pub spore: String,
-    /// The version or digest the desktop will accept, when it pins one.
-    pub version: Option<String>,
-    pub grants: BTreeMap<String, String>,
-    pub required: bool,
+/// Scope is a bound, not a second owner. `Personal` is a desktop with one
+/// member; `Team` is a desktop whose owner is a team; `Org` is a desktop owned
+/// by a principal or a team but placed at the organisation level. The owner is
+/// still the authority; this field tells a host which placement and sharing
+/// rules to apply.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Scope {
+    Personal,
+    Team,
+    Org,
 }
 
-/// The unit of work and sharing.
-#[derive(Clone, Debug)]
-pub struct Desktop {
-    pub id: String,
-    pub owner: PrincipalId,
-    pub members: Vec<Membership>,
-    pub shares: Vec<Share>,
-    pub installs: Vec<Install>,
-    /// Spores this desktop refuses, whatever a device has installed.
-    ///
-    /// The mirror of `required`: a desktop that can insist on one Spore should
-    /// be able to refuse another, or "shared desktop" means only "shared
-    /// installs". `spore.toml` already carries a `denied` map for capabilities;
-    /// this is the same intent one level up.
-    pub denied: BTreeSet<String>,
-}
-
-/// A capability offered by a machine, for a desktop that admitted it.
-#[derive(Clone, Debug)]
-pub struct Provider {
-    pub device: String,
-    pub capability: Capability,
-}
-
-/// Where a capability came from, or why it did not.
+/// A malformed value, named by the field that failed and why.
+///
+/// A refusal is an authorization answer; this is a configuration or input
+/// error. Keeping them apart stops a typo from being reported as `denied`.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Resolution {
-    /// The host implements the interface itself: a function call, no boundary.
-    InProcess,
-    /// Another process on this machine owns the resource.
-    Local {
-        device: String,
-    },
-    /// A machine elsewhere in the desktop owns the resource.
-    Peer {
-        device: String,
-    },
+pub struct Invalid {
+    field: &'static str,
+    reason: &'static str,
+}
+
+impl Invalid {
+    #[must_use]
+    pub fn new(field: &'static str, reason: &'static str) -> Self {
+        Self { field, reason }
+    }
+
+    #[must_use]
+    pub fn field(&self) -> &'static str {
+        self.field
+    }
+
+    #[must_use]
+    pub fn reason(&self) -> &'static str {
+        self.reason
+    }
+}
+
+impl fmt::Display for Invalid {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "invalid {}: {}", self.field, self.reason)
+    }
+}
+
+impl std::error::Error for Invalid {}
+
+/// A model operation that either refused or rejected its input.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Error {
     Refused(Refusal),
+    Invalid(Invalid),
 }
 
-impl Desktop {
-    /// The relation this principal has to the desktop, if any.
-    ///
-    /// A share deliberately does not appear here: receiving a document is not
-    /// membership, and a guest must not be able to read the rest of the tree by
-    /// virtue of having been sent one file.
-    pub fn relation(&self, principal: &PrincipalId, now_ms: i64) -> Result<Role, Refusal> {
-        if &self.owner == principal {
-            return Ok(Role::Owner);
-        }
-        let mut expired = false;
-        let mut best: Option<Role> = None;
-        for member in &self.members {
-            if &member.principal != principal {
-                continue;
-            }
-            match member.expires_at_ms {
-                Some(at) if at <= now_ms => expired = true,
-                _ => best = Some(best.map_or(member.role, |role| role.max(member.role))),
-            }
-        }
-        best.ok_or(if expired {
-            Refusal::Expired
-        } else {
-            Refusal::NotAMember
-        })
-    }
-
-    /// Required installs this device does not have.
-    #[must_use]
-    pub fn unsatisfied(&self, installed: &BTreeSet<String>) -> Vec<&Install> {
-        self.installs
-            .iter()
-            .filter(|install| install.required && !installed.contains(&install.spore))
-            .collect()
-    }
-
-    /// Whether this desktop lets the Spore run at all.
-    ///
-    /// Denial is checked before any install state, so installing a refused
-    /// Spore is not a way to run it. This is the one rule that has to hold
-    /// against a device that has been tampered with, and it is why the answer
-    /// is a refusal rather than a boolean the caller can forget to check.
-    pub fn permits(&self, spore: &str) -> Result<(), Refusal> {
-        if self.denied.contains(spore) {
-            return Err(Refusal::Denied);
-        }
-        Ok(())
-    }
-
-    /// Spores this desktop both requires and refuses.
-    ///
-    /// Not an error the model can throw on its own — a desktop is configured by
-    /// people — but a contradiction it can *name*, so a host can refuse to load
-    /// it instead of silently letting denial win and leaving a required install
-    /// permanently unsatisfiable.
-    #[must_use]
-    pub fn contradictions(&self) -> Vec<&str> {
-        self.installs
-            .iter()
-            .filter(|install| install.required && self.denied.contains(&install.spore))
-            .map(|install| install.spore.as_str())
-            .collect()
-    }
-}
-
-impl Share {
-    /// Whether this share grants the principal anything, right now.
-    pub fn authorize(&self, principal: &PrincipalId, now_ms: i64) -> Result<Role, Refusal> {
-        if &self.grantee != principal {
-            return Err(Refusal::NotGranted);
-        }
-        match self.expires_at_ms {
-            Some(at) if at <= now_ms => Err(Refusal::Expired),
-            _ => Ok(self.role),
+impl fmt::Display for Error {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Refused(refusal) => refusal.fmt(formatter),
+            Self::Invalid(invalid) => invalid.fmt(formatter),
         }
     }
 }
 
-/// Resolve a capability request, first match wins.
+impl std::error::Error for Error {}
+
+impl From<Refusal> for Error {
+    fn from(refusal: Refusal) -> Self {
+        Self::Refused(refusal)
+    }
+}
+
+impl From<Invalid> for Error {
+    fn from(invalid: Invalid) -> Self {
+        Self::Invalid(invalid)
+    }
+}
+
+/// One lowercase component: letters, digits and `-`, starting alphanumeric.
 ///
-/// The order is cheapest-and-narrowest first: the host's own implementation,
-/// then a provider on this machine, then one elsewhere in the desktop.
+/// Used for desktop, team and service ids because they end up in a records book
+/// path and a Geode reference, where a slash or a dot would change the address.
+pub(crate) fn valid_id(value: &str) -> bool {
+    let mut characters = value.chars();
+    let Some(first) = characters.next() else {
+        return false;
+    };
+    if value.len() > 64 || !first.is_ascii_lowercase() && !first.is_ascii_digit() {
+        return false;
+    }
+    characters.all(|character| {
+        character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+    })
+}
+
+/// One path-safe name inside a desktop: letters, digits, `-`, `_` and `.`.
 ///
-/// The important property is that **this machine is not a shortcut**. A local
-/// provider is a remote that happens to be nearby: it is reached over a
-/// provider protocol by a different process, so it passes the same relation
-/// check as a peer would. If locality short-circuited authorization, moving a
-/// provider onto this box would silently escalate it.
-#[must_use]
-pub fn resolve_capability(
-    desktop: &Desktop,
-    principal: &PrincipalId,
-    device: &Device,
-    capability: &Capability,
-    providers: &[Provider],
-    host: &BTreeSet<Capability>,
-    now_ms: i64,
-) -> Resolution {
-    if let Err(refusal) = desktop.relation(principal, now_ms) {
-        return Resolution::Refused(refusal);
+/// Records collections and Geode slots use this shape. A slash is never allowed
+/// because both addresses use it as the separator.
+pub(crate) fn valid_name(value: &str) -> bool {
+    if value.is_empty() || value.len() > 64 || value.starts_with('.') {
+        return false;
     }
-    if host.contains(capability) {
-        return Resolution::InProcess;
-    }
-    if device.capabilities.contains(capability) {
-        return Resolution::Local {
-            device: device.id.clone(),
-        };
-    }
-    match providers
-        .iter()
-        .find(|provider| &provider.capability == capability)
-    {
-        Some(provider) => Resolution::Peer {
-            device: provider.device.clone(),
-        },
-        None => Resolution::Refused(Refusal::NoProvider),
-    }
+    value.chars().all(|character| {
+        character.is_ascii_alphanumeric()
+            || character == '-'
+            || character == '_'
+            || character == '.'
+    })
+}
+
+pub(crate) fn valid_principal(value: &str) -> bool {
+    !value.is_empty() && value.len() <= 512 && !value.chars().any(char::is_control)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const NOW: i64 = 1_000_000;
-
-    fn principal(id: &str) -> PrincipalId {
-        PrincipalId::from(id)
-    }
-
-    fn device(id: &str, owner: &str, assigned: Option<&str>, caps: &[&str]) -> Device {
-        Device {
-            id: id.to_owned(),
-            owner: principal(owner),
-            assigned_to: assigned.map(principal),
-            capabilities: caps.iter().map(|cap| Capability::from(*cap)).collect(),
-        }
-    }
-
-    fn desktop(owner: &str, members: &[(&str, Role)]) -> Desktop {
-        Desktop {
-            id: "fpl".to_owned(),
-            owner: principal(owner),
-            members: members
-                .iter()
-                .map(|(who, role)| Membership {
-                    principal: principal(who),
-                    role: *role,
-                    expires_at_ms: None,
-                })
-                .collect(),
-            shares: Vec::new(),
-            installs: Vec::new(),
-            denied: BTreeSet::new(),
-        }
+    #[test]
+    fn a_writer_satisfies_a_reader_requirement() {
+        assert!(Role::Writer.covers(Role::Reader));
+        assert!(!Role::Reader.covers(Role::Writer));
+        assert!(Role::Owner.covers(Role::Owner));
     }
 
     #[test]
-    fn a_laptop_can_be_owned_by_one_principal_and_used_by_another() {
-        let laptop = device("laptop", "employer", Some("avery"), &[]);
-        assert_eq!(laptop.owner, principal("employer"));
-        assert_eq!(laptop.assigned_to, Some(principal("avery")));
-    }
-
-    #[test]
-    fn receiving_a_shared_file_does_not_make_you_a_member() {
-        let mut fpl = desktop("avery", &[("avery", Role::Owner)]);
-        fpl.shares.push(Share {
-            path: "docs/q3.md".to_owned(),
-            grantee: principal("dana"),
-            role: Role::Reader,
-            expires_at_ms: None,
-        });
-
-        // The object is readable...
-        assert_eq!(
-            fpl.shares[0].authorize(&principal("dana"), NOW),
-            Ok(Role::Reader)
-        );
-        // ...and the desktop is still not hers, so the rest of the tree is not
-        // reachable by having been sent one file.
-        assert_eq!(
-            fpl.relation(&principal("dana"), NOW),
-            Err(Refusal::NotAMember)
-        );
-    }
-
-    #[test]
-    fn an_expired_share_is_refused_and_says_which_kind_of_no() {
-        let share = Share {
-            path: "docs/q3.md".to_owned(),
-            grantee: principal("dana"),
-            role: Role::Reader,
-            expires_at_ms: Some(NOW - 1),
-        };
-        assert_eq!(
-            share.authorize(&principal("dana"), NOW),
-            Err(Refusal::Expired)
-        );
-        assert_eq!(
-            share.authorize(&principal("someone-else"), NOW),
-            Err(Refusal::NotGranted)
-        );
+    fn ids_that_would_change_an_address_are_refused() {
+        assert!(valid_id("fpl"));
+        assert!(valid_id("agent-1"));
+        assert!(!valid_id("../fpl"));
+        assert!(!valid_id("FPL"));
+        assert!(!valid_id("a/b"));
+        assert!(!valid_id(""));
+        assert!(valid_name("crm"));
+        assert!(valid_name("account.v2"));
+        assert!(!valid_name(".hidden"));
+        assert!(!valid_name("a/b"));
     }
 
     #[test]
     fn a_lapsed_membership_reads_as_expired_not_absent() {
-        let mut fpl = desktop("avery", &[]);
-        fpl.members.push(Membership {
-            principal: principal("kwame"),
-            role: Role::Writer,
-            expires_at_ms: Some(NOW - 1),
-        });
-        assert_eq!(
-            fpl.relation(&principal("kwame"), NOW),
-            Err(Refusal::Expired)
-        );
-        assert_eq!(
-            fpl.relation(&principal("nobody"), NOW),
-            Err(Refusal::NotAMember),
-            "never admitted is a different answer from admitted and lapsed"
-        );
-    }
-
-    #[test]
-    fn the_strongest_live_membership_wins() {
-        let mut fpl = desktop("avery", &[("kwame", Role::Reader), ("kwame", Role::Writer)]);
-        // Same principal, two memberships: one lapsed reader, one live writer.
-        fpl.members[0].expires_at_ms = Some(NOW - 1);
-        assert_eq!(fpl.relation(&principal("kwame"), NOW), Ok(Role::Writer));
-        assert!(fpl.relation(&principal("kwame"), NOW).unwrap() >= Role::Reader);
-    }
-
-    #[test]
-    fn a_local_provider_is_not_a_shortcut_for_a_non_member() {
-        let fpl = desktop("avery", &[("avery", Role::Owner)]);
-        let studio = device("studio", "avery", None, &["soil:audio"]);
-        let audio = Capability::from("soil:audio");
-        let remote = Provider {
-            device: "agora-one".to_owned(),
-            capability: Capability::from("soil:audio"),
-        };
-        let host = BTreeSet::new();
-
-        // A stranger gets the same answer whether the provider is under their
-        // chair or across the tailnet, which is the whole property.
-        assert_eq!(
-            resolve_capability(
-                &fpl,
-                &principal("dana"),
-                &studio,
-                &audio,
-                std::slice::from_ref(&remote),
-                &host,
-                NOW
-            ),
-            Resolution::Refused(Refusal::NotAMember)
-        );
-        let without_local = device("studio", "avery", None, &[]);
-        assert_eq!(
-            resolve_capability(
-                &fpl,
-                &principal("dana"),
-                &without_local,
-                &audio,
-                &[remote],
-                &host,
-                NOW
-            ),
-            Resolution::Refused(Refusal::NotAMember)
-        );
-    }
-
-    #[test]
-    fn capabilities_resolve_narrowest_first() {
-        let fpl = desktop("avery", &[("avery", Role::Owner)]);
-        let audio = Capability::from("soil:audio");
-        let studio = device("studio", "avery", None, &["soil:audio"]);
-        let remote = Provider {
-            device: "agora-one".to_owned(),
-            capability: Capability::from("soil:audio"),
-        };
-
-        // The host implementing it beats everything, including a local provider.
-        let host: BTreeSet<Capability> = [audio.clone()].into_iter().collect();
-        assert_eq!(
-            resolve_capability(
-                &fpl,
-                &principal("avery"),
-                &studio,
-                &audio,
-                std::slice::from_ref(&remote),
-                &host,
-                NOW
-            ),
-            Resolution::InProcess
-        );
-
-        // A local provider beats a peer.
-        let empty = BTreeSet::new();
-        assert_eq!(
-            resolve_capability(
-                &fpl,
-                &principal("avery"),
-                &studio,
-                &audio,
-                std::slice::from_ref(&remote),
-                &empty,
-                NOW
-            ),
-            Resolution::Local {
-                device: "studio".to_owned()
-            }
-        );
-
-        // A peer is used when nobody here has it.
-        let thin = device("phone", "avery", None, &[]);
-        assert_eq!(
-            resolve_capability(
-                &fpl,
-                &principal("avery"),
-                &thin,
-                &audio,
-                &[remote],
-                &empty,
-                NOW
-            ),
-            Resolution::Peer {
-                device: "agora-one".to_owned()
-            }
-        );
-
-        // And nobody having it is a refusal with a reason, not a None.
-        assert_eq!(
-            resolve_capability(&fpl, &principal("avery"), &thin, &audio, &[], &empty, NOW),
-            Resolution::Refused(Refusal::NoProvider)
-        );
-    }
-
-    #[test]
-    fn a_shared_desktop_can_require_a_spore() {
-        let mut fpl = desktop("avery", &[("kwame", Role::Writer)]);
-        fpl.installs.push(Install {
-            spore: "dev.fungos.mail".to_owned(),
-            version: Some("1.4".to_owned()),
-            grants: BTreeMap::from([("soil:http".to_owned(), "mail.example".to_owned())]),
-            required: true,
-        });
-        fpl.installs.push(Install {
-            spore: "dev.fungos.sheets".to_owned(),
-            version: None,
-            grants: BTreeMap::new(),
-            required: false,
-        });
-
-        let nothing: BTreeSet<String> = BTreeSet::new();
-        let missing = fpl.unsatisfied(&nothing);
-        assert_eq!(missing.len(), 1, "only the required one is compliance");
-        assert_eq!(missing[0].spore, "dev.fungos.mail");
-
-        // Optional installs are a preference, so a device without them is not
-        // non-compliant.
-        let mail_only: BTreeSet<String> = ["dev.fungos.mail".to_owned()].into_iter().collect();
-        assert!(fpl.unsatisfied(&mail_only).is_empty());
-    }
-
-    #[test]
-    fn the_owner_is_a_member_without_being_listed() {
-        let fpl = desktop("avery", &[]);
-        assert_eq!(fpl.relation(&principal("avery"), NOW), Ok(Role::Owner));
-    }
-
-    #[test]
-    fn a_desktop_refuses_a_spore_even_where_it_is_installed() {
-        let mut fpl = desktop("avery", &[("kwame", Role::Writer)]);
-        fpl.denied.insert("dev.fungos.chatmail".to_owned());
-
-        // Having it installed is not a way to run it.
-        assert_eq!(fpl.permits("dev.fungos.chatmail"), Err(Refusal::Denied));
-        // Everything not named is permitted: denying is a list, not a gate.
-        assert_eq!(fpl.permits("dev.fungos.sheets"), Ok(()));
-    }
-
-    #[test]
-    fn a_desktop_that_both_requires_and_refuses_a_spore_can_say_so() {
-        let mut fpl = desktop("avery", &[("kwame", Role::Writer)]);
-        fpl.denied.insert("dev.fungos.chatmail".to_owned());
-        fpl.installs.push(Install {
-            spore: "dev.fungos.chatmail".to_owned(),
-            version: None,
-            grants: BTreeMap::new(),
-            required: true,
-        });
-        fpl.installs.push(Install {
-            spore: "dev.fungos.sheets".to_owned(),
-            version: None,
-            grants: BTreeMap::new(),
-            required: true,
-        });
-
-        // A configuration nobody could satisfy is named rather than left to
-        // manifest as an install that never completes.
-        assert_eq!(fpl.contradictions(), vec!["dev.fungos.chatmail"]);
-        assert_eq!(fpl.permits("dev.fungos.chatmail"), Err(Refusal::Denied));
+        let membership = Membership::new(PrincipalId::from("kwame"), Role::Writer).until(999);
+        assert!(membership.live(998));
+        assert!(!membership.live(999));
     }
 }

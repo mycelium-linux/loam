@@ -2397,26 +2397,6 @@ dependencies = [
 [[package]]
 name = "fungos-records"
 version = "0.1.0"
-source = "git+https://github.com/fungOS-linux/records.git?rev=adc88b242957e5ee9b82d7e98f36d92a051635db#adc88b242957e5ee9b82d7e98f36d92a051635db"
-dependencies = [
- "anyhow",
- "blake3",
- "chrono",
- "clap",
- "feed-rs",
- "ical_vcard",
- "rusqlite",
- "serde",
- "serde_json",
- "toml 0.8.23",
- "unibus",
- "ureq 2.12.1",
- "uuid",
-]
-
-[[package]]
-name = "fungos-records"
-version = "0.1.0"
 source = "git+https://github.com/fungOS-linux/records.git?rev=eb25c69f906eee645b5507f09017a776b1f39377#eb25c69f906eee645b5507f09017a776b1f39377"
 dependencies = [
  "anyhow",
@@ -6802,7 +6782,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "fungos-records 0.1.0 (git+https://github.com/fungOS-linux/records.git?rev=eb25c69f906eee645b5507f09017a776b1f39377)",
+ "fungos-records",
  "serde_json",
  "tempfile",
  "wasmtime",
@@ -6911,7 +6891,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "fungos-content",
- "fungos-records 0.1.0 (git+https://github.com/fungOS-linux/records.git?rev=adc88b242957e5ee9b82d7e98f36d92a051635db)",
+ "fungos-records",
  "serde",
  "serde_json",
  "tempfile",
@@ -6924,7 +6904,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "clap",
- "fungos-records 0.1.0 (git+https://github.com/fungOS-linux/records.git?rev=adc88b242957e5ee9b82d7e98f36d92a051635db)",
+ "fungos-records",
  "serde",
  "serde_json",
  "tempfile",
@@ -6938,7 +6918,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "fungos-records 0.1.0 (git+https://github.com/fungOS-linux/records.git?rev=adc88b242957e5ee9b82d7e98f36d92a051635db)",
+ "fungos-records",
  "serde_json",
  "tempfile",
  "tiny_http",
@@ -6947,6 +6927,24 @@ dependencies = [
 [[package]]
 name = "soil-desktop"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "soil-desktop-store"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "fungos-records",
+ "serde",
+ "serde_json",
+ "soil-desktop",
+ "tempfile",
+ "uuid",
+]
 
 [[package]]
 name = "soil-dfm-viz"
@@ -6989,7 +6987,7 @@ dependencies = [
  "anyhow",
  "blake3",
  "clap",
- "fungos-records 0.1.0 (git+https://github.com/fungOS-linux/records.git?rev=adc88b242957e5ee9b82d7e98f36d92a051635db)",
+ "fungos-records",
  "fungos-vfs",
  "model2vec-rs",
  "regex",
@@ -7102,7 +7100,7 @@ name = "soil-marbles-import"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "fungos-records 0.1.0 (git+https://github.com/fungOS-linux/records.git?rev=adc88b242957e5ee9b82d7e98f36d92a051635db)",
+ "fungos-records",
  "rusqlite",
  "serde_json",
 ]
@@ -7123,7 +7121,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "blake3",
- "fungos-records 0.1.0 (git+https://github.com/fungOS-linux/records.git?rev=adc88b242957e5ee9b82d7e98f36d92a051635db)",
+ "fungos-records",
  "serde_json",
  "tempfile",
 ]
@@ -7312,7 +7310,7 @@ name = "soil-search-host"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "fungos-records 0.1.0 (git+https://github.com/fungOS-linux/records.git?rev=adc88b242957e5ee9b82d7e98f36d92a051635db)",
+ "fungos-records",
  "fungos-vfs",
  "plist",
  "serde",
@@ -7386,7 +7384,7 @@ dependencies = [
  "anyhow",
  "clap",
  "ed25519-dalek 2.2.0",
- "fungos-records 0.1.0 (git+https://github.com/fungOS-linux/records.git?rev=adc88b242957e5ee9b82d7e98f36d92a051635db)",
+ "fungos-records",
  "iroh",
  "mycelium-peer-protocol",
  "serde",
