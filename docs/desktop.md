@@ -567,3 +567,6 @@ archive
    `desktop/<id>/redemptions` book? Recommendation: per-Desktop, because a
    guest may need write access to record a use without write access to the
    manifest that grants it.
+7. Can a Team own a Team (an `org` as a team-of-teams)? Not yet: `Team.owner`
+   is one principal, and `org` is a Desktop scope, not a nesting rule. Decide
+   before an org needs more than one administrator who is not a person.
