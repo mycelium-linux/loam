@@ -1,10 +1,17 @@
 # Desktops Spore
 
-Status: **contract, host side implemented.** `soil-desktop` holds the model,
+Status: **landed, v0 is a view.** The package is
+[`spores/desktops`](https://github.com/fungOS-linux/spores/tree/main/spores/desktops):
+a Teams and Desktops management surface. `soil-desktop` holds the model,
+`desktops-spore` turns a snapshot and an intent into one manifest write,
 `soil-desktop-store` persists it over `soil:records`, and `soil-desktops` is the
-operable host surface. The Spore package itself belongs in
-[`fungOS-linux/spores`](https://github.com/fungOS-linux/spores) alongside
-`crm`, `contacts` and `launcher`; it is not in this repository.
+operable host surface.
+
+v0 has **no module**. It renders the snapshot and emits intents; the host owns
+the actor, the namespace write grant and the compare-and-swap. That is the same
+split as the `git` Spore: a view that could widen its own grant would be a
+second authority. A write-through module is a separate decision, and the narrow
+`soil:desktops` capability below is the shape it should use.
 
 This note fixes what the package is, what it may do, and what it must never
 decide, so the UI can be written without inventing a second authority.
