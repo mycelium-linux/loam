@@ -1659,6 +1659,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "desktops-spore"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "soil-desktop",
+]
+
+[[package]]
 name = "diatomic-waker"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -20,8 +20,8 @@ dev.fungos.desktops
 The module exports `run(args: list<string>)`, the command surface `crm` and
 `contacts` already use: the action name followed by one JSON payload. Mush and
 the Canvas UI are both clients of that surface; neither gets a second
-implementation. The module depends on `soil-desktop` (a git pin to this
-repository) so the schema ids and validation are not copied.
+implementation. The module depends on `desktops-spore` and `soil-desktop` (git
+pins to this repository) so the schema ids and validation are not copied.
 
 ## What it is for
 
@@ -125,13 +125,19 @@ Actions are intents. The host validates, writes and returns the new manifest;
 the Spore never writes a local copy and pretends it succeeded.
 
 ```text
-team.create           { id, name }
-team.member.set       { team, principal, role?, remove? }
-desktop.create        { id, name, scope, team? }
-desktop.member.set    { desktop, principal, role?, remove? }
-ticket.issue          { desktop, item, principal, role, ttl_secs?, uses? }
-ticket.revoke         { desktop, ticket }
+team_create           { id, name }
+team_member_set       { team, principal, role?, remove? }
+desktop_create        { id, name, scope, team? }
+desktop_member_set    { desktop, principal, role?, remove? }
+ticket_issue          { desktop, item, principal, role, ttl_secs?, uses? }
+ticket_revoke         { desktop, ticket }
 ```
+
+The action names are the `snake_case` serde tags of `desktops_spore::Intent`;
+the payload is one JSON object. The core state machine lives in
+[`crates/desktops-spore`](../crates/desktops-spore), like `viewer-spore`: it
+turns a snapshot and one intent into one manifest write, with no records handle.
+The package only reads, mints a ticket id, calls `apply`, and compares-and-swaps.
 
 Rules the UI must show honestly:
 
