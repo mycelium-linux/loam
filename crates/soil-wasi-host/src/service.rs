@@ -24,8 +24,6 @@ use wasmtime_wasi_http::{
     },
 };
 
-#[cfg(feature = "unibus")]
-use crate::unibus;
 use crate::{
     context::HttpContext,
     creds,
@@ -79,7 +77,7 @@ impl HttpService {
         crate::context::add_to_linker(&mut linker)?;
         creds::add_to_linker(&mut linker)?;
         #[cfg(feature = "unibus")]
-        unibus::add_to_linker(&mut linker)?;
+        soil_unibus_host::add_to_linker(&mut linker)?;
         if builder.has_records() {
             soil_host::records_host::add_to_linker(&mut linker).context("link soil:records")?;
         }

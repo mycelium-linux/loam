@@ -21,8 +21,6 @@ mod gateway;
 mod host;
 mod policy;
 mod service;
-#[cfg(feature = "unibus")]
-pub mod unibus;
 
 pub use context::HttpContext;
 pub use creds::{
@@ -38,7 +36,7 @@ pub use service::HttpService;
 #[cfg(feature = "mycelium")]
 pub use soil_mycelium_host::{MyceliumFleet, api as mycelium_fleet};
 #[cfg(feature = "unibus")]
-pub use unibus::{
+pub use soil_unibus_host::{
     Bus, BusError, BusReceipt, Frame, MAX_BUS_BODY, MAX_POLL_LIMIT, MemoryBus, Page, UnibusBus,
 };
 

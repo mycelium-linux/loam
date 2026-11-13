@@ -7463,6 +7463,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "soil-unibus-host"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "tracing",
+ "unibus",
+ "unibus-sdk",
+ "wasmtime",
+]
+
+[[package]]
 name = "soil-vt"
 version = "0.1.0"
 dependencies = [
@@ -7488,11 +7500,10 @@ dependencies = [
  "sha2 0.10.9",
  "soil-host",
  "soil-mycelium-host",
+ "soil-unibus-host",
  "tempfile",
  "tokio",
  "tracing",
- "unibus",
- "unibus-sdk",
  "url",
  "wasmtime",
  "wasmtime-wasi",

@@ -1,5 +1,11 @@
 //! `soil:unibus`: bounded poll and publish over the Unibus.
 //!
+//! This crate is the host half of the contract and nothing more: it owns the
+//! Unibus session, the credential, hub selection and the retention window, and
+//! returns the bounded [`Page`] and [`BusReceipt`] a Spore may hold. A host
+//! profile links it with [`add_to_linker`] and implements
+//! [`api::Host`] by handing back a [`Bus`].
+//!
 //! The WIT contract is opaque bytes in, opaque bytes out. A Spore names a
 //! kind and supplies or expects a JSON-object body; the host owns the Unibus
 //! session, the credential, hub selection, and the retention window. There is
@@ -43,14 +49,12 @@ use std::time::{Duration, Instant};
 use anyhow::Context as _;
 use wasmtime::component::{HasSelf, Linker};
 
-use crate::host::WasiHost;
-
 wasmtime::component::bindgen!({
-    path: "../../wit/soil-unibus.wit",
+    path: "wit",
     world: "unibus-host",
 });
 
-use soil::unibus::bus as api;
+pub use soil::unibus::bus as api;
 
 /// Largest body a Spore may publish or observe through this profile.
 ///
@@ -263,7 +267,7 @@ impl Bus for MemoryBus {
         let frame = Frame {
             kind: kind.to_string(),
             producer: "local".to_string(),
-            issued_at_ms: crate::context::now_ms(),
+            issued_at_ms: now_ms(),
             body: body.to_vec(),
         };
         state.frames.push(frame);
@@ -721,49 +725,6 @@ impl Bus for UnibusBus {
     }
 }
 
-impl api::Host for WasiHost {
-    fn publish(
-        &mut self,
-        kind: String,
-        body: Vec<u8>,
-        destination: Option<String>,
-        ttl_ms: u64,
-    ) -> std::result::Result<api::Receipt, api::Error> {
-        let bus = self.bus().ok_or(api::Error::Unavailable)?;
-        let receipt = bus
-            .publish(&kind, &body, destination.as_deref(), ttl_ms)
-            .map_err(map_error)?;
-        Ok(api::Receipt {
-            request_id: receipt.request_id,
-        })
-    }
-
-    fn poll(
-        &mut self,
-        kinds: Vec<String>,
-        cursor: Option<String>,
-        limit: u32,
-    ) -> std::result::Result<api::Page, api::Error> {
-        let bus = self.bus().ok_or(api::Error::Unavailable)?;
-        let page = bus
-            .poll(&kinds, cursor.as_deref(), limit)
-            .map_err(map_error)?;
-        Ok(api::Page {
-            frames: page
-                .frames
-                .into_iter()
-                .map(|frame| api::Frame {
-                    kind: frame.kind,
-                    producer: frame.producer,
-                    issued_at_ms: frame.issued_at_ms,
-                    body: frame.body,
-                })
-                .collect(),
-            next: page.next,
-        })
-    }
-}
-
 pub fn add_to_linker<T>(linker: &mut Linker<T>) -> anyhow::Result<()>
 where
     T: api::Host + 'static,
@@ -772,7 +733,11 @@ where
     Ok(())
 }
 
-fn map_error(error: BusError) -> api::Error {
+/// Turn a transport failure into the contract's typed error.
+///
+/// A host profile implements [`api::Host`] on its store state and maps through
+/// this, so every profile reports the same five failures for the same reasons.
+pub fn map_error(error: BusError) -> api::Error {
     match error {
         BusError::Denied => api::Error::Denied,
         BusError::Invalid => api::Error::Invalid,
@@ -780,6 +745,20 @@ fn map_error(error: BusError) -> api::Error {
         BusError::Stale => api::Error::Stale,
         BusError::Unavailable => api::Error::Unavailable,
     }
+}
+
+/// The clock a retained frame is stamped with.
+///
+/// Local to the adapter on purpose: the profile crate that links this one
+/// already supplies `soil:time`, and a host profile without a clock still owes
+/// a deterministic stamp for [`MemoryBus`].
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]

@@ -90,11 +90,8 @@ naming the import.
   are not fungOS capabilities in the same sense: they are the base layer every
   profile keeps. If an OS backend is optional per platform, it still wants the
   same feature-per-crate shape, just always-on for the shipped sizes.
-- **Unibus lives in-tree.** `soil:unibus` is behind the `unibus` flag (on by
-  default): the adapter and `unibus-sdk` drop out of a slim build. The base
-  `unibus` crate still arrives through `fungos-records`, which is the records
-  question below, not a wiring gap. The adapter is still
-  [`crates/soil-wasi-host/src/unibus.rs`](../crates/soil-wasi-host/src/unibus.rs)
-  rather than a `soil-unibus-host` crate, because it binds `soil:unibus` against
-  `WasiHost` directly. Extracting it is the next full instance of this shape, and
-  it waits for a second host profile that needs the bus.
+- **Unibus is a crate now.** `soil:unibus` ships as
+  [`crates/soil-unibus-host`](../crates/soil-unibus-host): the contract, the `Bus`
+  trait, both backends and the linker, with the profile supplying only the store
+  wiring. The base `unibus` crate still arrives through `fungos-records`, which is
+  the records question below, not a wiring gap.

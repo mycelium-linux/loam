@@ -19,13 +19,13 @@ use wasmtime_wasi_http::{
     WasiHttpCtxView, WasiHttpHooks, WasiHttpView,
 };
 
-#[cfg(feature = "unibus")]
-use crate::unibus::Bus;
 use crate::{
     context::HttpContext,
     creds::CredentialProvider,
     policy::{HttpPolicy, WasiHostPolicy},
 };
+#[cfg(feature = "unibus")]
+use soil_unibus_host::{Bus, api as unibus_api, map_error};
 
 /// A `soil:http` installation for a Spore that serves `wasi:http`.
 ///
@@ -240,6 +240,50 @@ pub struct WasiHost {
     soil_http: Option<Arc<HttpCapability>>,
     #[cfg(feature = "mycelium")]
     mycelium: Option<MyceliumFleet>,
+}
+
+#[cfg(feature = "unibus")]
+impl unibus_api::Host for WasiHost {
+    fn publish(
+        &mut self,
+        kind: String,
+        body: Vec<u8>,
+        destination: Option<String>,
+        ttl_ms: u64,
+    ) -> Result<unibus_api::Receipt, unibus_api::Error> {
+        let bus = self.bus().ok_or(unibus_api::Error::Unavailable)?;
+        let receipt = bus
+            .publish(&kind, &body, destination.as_deref(), ttl_ms)
+            .map_err(map_error)?;
+        Ok(unibus_api::Receipt {
+            request_id: receipt.request_id,
+        })
+    }
+
+    fn poll(
+        &mut self,
+        kinds: Vec<String>,
+        cursor: Option<String>,
+        limit: u32,
+    ) -> Result<unibus_api::Page, unibus_api::Error> {
+        let bus = self.bus().ok_or(unibus_api::Error::Unavailable)?;
+        let page = bus
+            .poll(&kinds, cursor.as_deref(), limit)
+            .map_err(map_error)?;
+        Ok(unibus_api::Page {
+            frames: page
+                .frames
+                .into_iter()
+                .map(|frame| unibus_api::Frame {
+                    kind: frame.kind,
+                    producer: frame.producer,
+                    issued_at_ms: frame.issued_at_ms,
+                    body: frame.body,
+                })
+                .collect(),
+            next: page.next,
+        })
+    }
 }
 
 #[cfg(feature = "mycelium")]
