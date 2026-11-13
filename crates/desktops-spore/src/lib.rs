@@ -81,7 +81,7 @@ impl Snapshot {
 
 /// One management intent, as the module receives it.
 ///
-/// The wire form is `run(["team.create", "{\"id\":\"fpl\",\"name\":\"FPL\"}"])`;
+/// The wire form is `run(["team_create", "{\"id\":\"fpl\",\"name\":\"FPL\"}"])`;
 /// [`Intent::parse`] turns that into this. Names are display fields; ids are
 /// validated by the model, not by the UI.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
