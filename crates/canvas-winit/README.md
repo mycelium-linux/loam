@@ -8,9 +8,15 @@ the future web bridge implement.
 canvas-winit <module.wasm>
 canvas-winit <module.wasm> --capture frame.rgba --frames 2 --key a --size 480x800
 canvas-winit <module.wasm> --surface 420x300:view=popup
-canvas-winit <module.wasm> --hue-bridge http://192.168.10.15 \
+canvas-winit <module.wasm> --agents acp --acp-cmd delta-acp
+canvas-winit <module.wasm> --agents all --acp-cmd ~/.local/bin/operator-acp \
+  --hue-bridge http://192.168.10.15 \
   --geode-socket ~/.geode/geode.sock --geode-purpose hue.control
 ```
+
+`--agents demo|acp|all` attaches the fixture cast, an ACP agent, or both behind
+`CompositeAgents`; `--acp-cmd` names the agent process (default `delta-acp`).
+Without `--agents` the window passes `NoAgents` and draws the empty state.
 
 `--capture` writes each `soil:present` frame as tightly packed RGBA; with
 `--frames N` the files are numbered (`frame.0000.rgba`, `frame.0001.rgba`), so a
@@ -26,6 +32,8 @@ quietly opens on the grid.
 
 - Runs the component in a `wasmtime` store through `soil::webgpu`, so the Spore
   sees only `wasi:webgpu` and `soil:present`.
+- Attaches agents through `soil::acp` + `CompositeAgents` when asked, so the
+  wall shows a real harness rather than only the fixture.
 - Receives each frame through the `CanvasGpuPresenter` seam and blits it into a
   `softbuffer` window.
 - Normalizes winit keyboard events into the `soil:present/input` queue the

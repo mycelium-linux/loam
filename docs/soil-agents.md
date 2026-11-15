@@ -1,9 +1,9 @@
 # Agents
 
-Status: contract. `wit/soil-agents.wit` is reviewed; the first host is the
-fixture backend in `crates/soil` (`webgpu` feature), which proves the guest ABI
-against a scripted cast and talks to no real harness. The Operator and Pi
-adapters are the next slice (see "Adapters" below).
+Status: contract. `wit/soil-agents.wit` is reviewed; the runner attaches the
+fixture cast and any ACP agent (`--agents demo|acp|all`), which covers Operator
+and `delta-acp` today. The dispatcher (bus -> edgerunner session) is the next
+slice (see "Adapters" below).
 
 ## The one concept
 
@@ -77,14 +77,18 @@ An adapter is a host concern, for three reasons:
    frames move; the WIT does not.
 
 `crates/soil-agent-host` holds the seam: a plain `Agent` record, an
-`AgentBackend` trait, and backends. `crates/soil/src/webgpu` maps those records to
-the generated WIT types, because hosts do not depend on generated types
-(`CatalogHost` and `TerminalHost` follow the same rule).
+`AgentBackend` trait, the fixture cast, and `CompositeAgents`, which merges
+several adapters behind one roster (stable ids, needs-you first, control routed
+to the owning adapter). `crates/soil/src/acp.rs` is the ACP client, and
+`crates/soil/src/webgpu` maps these records to the generated WIT types because
+hosts do not depend on generated types (`CatalogHost` and `TerminalHost` follow
+the same rule).
 
 | Backend | Speaks | State it needs |
 |---|---|---|
 | `FixtureAgents` | a scripted cast | none; answers advance the script |
-| Operator | ACP JSON-RPC (`session/status`, `session/history`) plus the SSE stream | the server origin and a session id |
+| `AcpBackend` | ACP JSON-RPC (stdio today) | a command, or an edgerunner `service_url` later |
+| `delta-acp` | ACP agent over the Delta CLI | the `delta-acp` binary |
 | Pi | its JSON/RPC mode | the process or endpoint, and a session id |
 
 Operator's `session/status` already carries the facts this contract wants:

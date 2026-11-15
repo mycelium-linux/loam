@@ -297,30 +297,24 @@ One contract, several adapters, composed once in the host:
 | Adapter | Speaks | State | Direction |
 |---|---|---|---|
 | `FixtureAgents` | scripted cast | none | prove the ABI |
-| `DeltaAgents` (`delta-acp`) | Delta CLI JSONL | thread id | observe + interrupt; **no prompts** |
-| `AcpAgents` | ACP over HTTP or stdio | session id + service URL | observe + control; Operator first, Pi second |
+| `AcpAgents` (`soil::acp`) | ACP over stdio | session id / command | observe + control; Operator first, Pi second |
+| `DeltaAgents` | Delta CLI through `delta-acp` | thread id | the ACP adapter with `--acp-cmd delta-acp`; observe + interrupt, **no prompts** |
 | `SessionAgents` | edgerunner `/v1/sessions` | org labels | roster and lifecycle facts |
 | `PmAgents` | agentsmith org records | project subtree | desired state, read-only |
 | `BuildActivity` | bob events | changeset | not an agent: decorates its owner's activity |
 
 What is missing in code:
 
-- **`CompositeAgents`** — the host holds one `Box<dyn AgentBackend>`; one
-  roster needs a merge of adapters with stable ids and a single ordering
-  (needs-you, failed, working, thinking, quiet). This is the smallest change
-  that makes colony show the real fleet.
-- **`AcpAgents`** — the client is in place as `soil::acp` (behind the `acp`
-  feature). What is missing is the adapter that builds it from a local command
-  or an edgerunner `service_url`, and a `CompositeAgents` to merge it with the
-  fixture (and later Delta).
 - **The dispatcher** — a host process that reads `agent.task.v1` and calls
   edgerunner's `POST /v1/sessions`. One lifecycle authority, not two.
 - **`SessionAgents`** — edgerunner already carries the facts (session id, status,
   run, service URL, labels); the adapter maps labels to `Agent.id` so identity
   survives restarts.
+- **`PmAgents`** — the Agentsmith org chart is still design; it reads desired
+  state, never session internals.
 
-Order: `CompositeAgents` + `SessionAgents` (visible fleet) -> `AcpAgents`
-(prompts) -> boat backend (remote) -> Pi adapter.
+Order: dispatcher + `SessionAgents` (start and adopt sessions) -> `PmAgents`
+(org chart) -> boat backend (remote) -> Pi adapter.
 
 Mush and bob are **not agents** and must not appear as rows. A build or a shell
 command is an activity line on the agent that asked for it; the roster stays a
@@ -403,7 +397,7 @@ not connected to the runner), **design** (no code path yet).
 | colony -> host: records (threads) | **design** | colony imports only present/agents/unibus; no thread schema |
 | colony -> host: search | **linked, not imported** | the runner links `soil:search` + `mentions` and grants them with `--search`; colony does not import them yet |
 | colony -> host: notify / command | **optional / built, not linked** | the popup covers in-process notices, so `soil:notify` is not on the critical path; `soil-command` is still unlinked |
-| host -> agents: ACP / edgerunner / Delta adapters | **client moved, adapters missing** | `soil::acp` provides the ACP client (`acp` feature); no `AcpAgents`, `CompositeAgents` or `DeltaAgents` wiring |
+| host -> agents: ACP / Delta | **wired** | `--agents acp|all`; `CompositeAgents` merges the sources; 37 real Delta threads render through `delta-acp` |
 | host -> dispatcher -> edgerunner | **missing in soil; ready in edgerunner** | `POST /v1/sessions` and `/v1/sessions/{id}/acp` exist; no client in soil |
 | edgerunner -> operator / pi | **wired** | `LocalBackend` argv, `CreateAgentSessionRequest{agent, runner, operator, labels}`, ACP proxy with prompt/permission/update |
 | agentsmith -> edgerunner | **design** | org chart and reconciler not built |
@@ -418,18 +412,18 @@ not connected to the runner), **design** (no code path yet).
 
 The agent half is one adapter, one composite, one dispatcher, and two flags:
 
-1. **`AcpAgents`** — `soil::acp` is the client; wrap it as an `AgentBackend`
-   selected by `--agents acp`, pointed at edgerunner's
-   `/v1/sessions/{id}/acp` (or a local stdio process).
-2. **`CompositeAgents`** — merge fixture + ACP (+ Delta) with stable ids and the
-   one ordering.
-3. **`--agents acp|all`** in both the window and the capture command.
-4. **Dispatcher** — read `agent.task.v1`, `POST /v1/sessions` with the org
+The agent half now attaches a real harness: `--agents acp --acp-cmd delta-acp`
+renders 37 Delta threads through `soil::acp` and `CompositeAgents`. What is left
+for it:
+
+1. **Dispatcher** — read `agent.task.v1`, `POST /v1/sessions` with the org
    labels, and let the session appear through the ACP adapter.
-5. **Seed config** — the operator session gets the mush MCP endpoint and a VFS
+2. **`SessionAgents`** — map edgerunner's session labels to `Agent.id`, so a
+   restart keeps the same row.
+3. **Seed config** — the operator session gets the mush MCP endpoint and a VFS
    root, so its tools run on the substrate instead of the host's bash.
 
-With 1-4, colony shows a real Operator session, prompts it, answers a
+With 1-2, colony shows a real Operator session, prompts it, answers a
 permission request, and interrupts it. That is the agent half of S1. The thread
 half (records schema + rail/transcript/composer) is what turns the wall into a
 Delta replacement rather than a nicer dashboard, and it is the larger piece.
@@ -449,8 +443,8 @@ Each slice is end-to-end and leaves the tree usable.
   the UI.
 - Colony: rail (projects -> threads) + transcript pane + composer; phone layout
   collapses to rail-only, >= ~620 px is side-by-side.
-- `AcpAgents` + `CompositeAgents`: send/answer/interrupt a real Operator
-  session; prompts raise the popup.
+- ACP and the composite roster are wired (`--agents acp|all`): send, answer and
+  interrupt a real session; prompts raise the popup.
 - Dispatcher: `agent.task.v1` -> edgerunner `POST /v1/sessions`.
 
 **Acceptance:** open a thread, send a prompt, see streaming transcript, answer a
