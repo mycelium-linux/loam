@@ -17,11 +17,12 @@ use wasi_webgpu_wasmtime::{WasiWebGpuCtx, WasiWebGpuCtxView, WasiWebGpuOptions};
 use wasmtime::component::ResourceTable;
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
-use soil_agent_host::{AgentBackend, Answer, Binding, Page};
+use soil_agent_host::{AgentBackend, Answer, Binding, NoSessions, Page, Sessions};
 
 use super::AgentSubscription;
 use super::present::{ClipboardHost, CursorHost, CursorStyle, InputEvent, PointerButton};
 use super::soil as wit;
+use crate::dispatch::Dispatch;
 use crate::http_host::api as http_api;
 use crate::http_host::{
     self, CredentialProvider, DirectTransport, HttpPolicy, HttpTransport, NoCredentials,
@@ -349,6 +350,10 @@ pub struct WebGpuHost {
     /// Host-composed search over the granted sources. `None` denies
     /// `soil:search` and `soil:search/mentions` alike.
     search: Option<SearchService>,
+    /// Where this host is in the session-notice stream, and what it does when
+    /// one arrives. A notice makes an adapter re-list once instead of polling
+    /// the harness on every tick; a task notice becomes a session.
+    dispatch: Dispatch,
 }
 
 /// Where a local `soil-store serve` listens. A desktop shell that runs the
@@ -499,6 +504,9 @@ pub struct HostSetup {
     /// attest who is acting must not let a guest guess.
     pub principal: Option<PrincipalHost>,
     pub agents: Box<dyn AgentBackend>,
+    /// Who turns a task notice into a session. `NoSessions` refuses, so a host
+    /// that cannot dispatch says so on the bus instead of dropping the task.
+    pub sessions: Box<dyn Sessions>,
     /// Shorthand for a read-only `soil:http` grant for one origin, folded into
     /// `http` when that is unset. The storefront browser names its own origin
     /// this way.
@@ -541,6 +549,7 @@ impl HostSetup {
             vfs: None,
             principal: None,
             agents: Box::new(soil_agent_host::NoAgents),
+            sessions: Box::new(NoSessions),
             store_origin: None,
             terminal: Box::new(NoTerminal),
             cursor: None,
@@ -591,6 +600,7 @@ impl WebGpuHost {
                 .transpose()?,
             principal: setup.principal,
             agents: setup.agents,
+            dispatch: Dispatch::new(setup.bus.clone(), setup.sessions),
             terminal: setup.terminal,
             cursor: setup.cursor,
             clipboard: setup.clipboard,
@@ -1194,6 +1204,7 @@ impl wit::agents::observe::Host for WebGpuHost {
     fn agents(
         &mut self,
     ) -> std::result::Result<Vec<wit::agents::types::Agent>, wit::agents::types::Error> {
+        self.dispatch.pump(&mut *self.agents);
         Ok(self.agents.list().into_iter().map(agent_record).collect())
     }
 
@@ -1201,6 +1212,7 @@ impl wit::agents::observe::Host for WebGpuHost {
         &mut self,
         id: String,
     ) -> std::result::Result<wit::agents::types::Agent, wit::agents::types::Error> {
+        self.dispatch.pump(&mut *self.agents);
         self.agents
             .get(&id)
             .map(agent_record)
@@ -1221,6 +1233,7 @@ impl wit::agents::observe::Host for WebGpuHost {
         before: Option<u64>,
         limit: u32,
     ) -> std::result::Result<wit::agents::observe::Page, wit::agents::types::Error> {
+        self.dispatch.pump(&mut *self.agents);
         self.agents
             .transcript(&id, before, limit)
             .map(agent_page)
@@ -1245,6 +1258,7 @@ impl wit::agents::observe::HostSubscription for WebGpuHost {
         subscription: wasmtime::component::Resource<AgentSubscription>,
         timeout_ms: u32,
     ) -> std::result::Result<Option<wit::agents::observe::Change>, wit::agents::types::Error> {
+        self.dispatch.pump(&mut *self.agents);
         // A handle the guest already dropped is `stale`, not an empty poll.
         self.table
             .get(&subscription)

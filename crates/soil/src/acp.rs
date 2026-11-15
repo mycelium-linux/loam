@@ -268,7 +268,7 @@ impl AcpBackend {
 
     /// Read the roster once. `session/list` is the ACP extension `operator` and
     /// `delta-acp` both answer; an agent without it shows only what streams.
-    fn refresh(&mut self) {
+    fn relist(&mut self) {
         let Ok(listed) = self.acp.request("session/list", json!({}), REQUEST_TIMEOUT) else {
             return;
         };
@@ -277,14 +277,12 @@ impl AcpBackend {
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        let mut agents: Vec<Agent> = sessions
-            .iter()
-            .filter_map(|session| agent_from_session(session, self.started_at_ms, &self.harness))
-            .collect();
-        agents.sort_by_key(|agent| std::cmp::Reverse(agent.updated_at_ms));
-        if !agents.is_empty() {
-            self.agents = agents;
-        }
+        merge_listed(
+            &mut self.agents,
+            &sessions,
+            self.started_at_ms,
+            &self.harness,
+        );
     }
 
     fn agent(&mut self, id: &str) -> &mut Agent {
@@ -325,7 +323,7 @@ impl AcpBackend {
 impl AgentBackend for AcpBackend {
     fn list(&mut self) -> Vec<Agent> {
         if self.agents.is_empty() {
-            self.refresh();
+            self.relist();
         }
         // A surface that was opened for one agent wants its stream, not the
         // whole roster's: attaching is one process per conversation.
@@ -345,7 +343,7 @@ impl AgentBackend for AcpBackend {
 
     fn get(&mut self, id: &str) -> Option<Agent> {
         if self.agents.is_empty() {
-            self.refresh();
+            self.relist();
         }
         if !self.attached.contains(id) {
             self.attach(id);
@@ -419,6 +417,10 @@ impl AgentBackend for AcpBackend {
         self.acp
             .notify("session/cancel", json!({"sessionId": id}))
             .map_err(|_| Error::Io)
+    }
+
+    fn refresh(&mut self) {
+        self.relist();
     }
 
     fn next(&mut self, timeout_ms: u32) -> Option<Change> {
@@ -532,6 +534,40 @@ fn agent_stub(id: &str, started_at_ms: u64, harness: &str) -> Agent {
         revision: 0,
         started_at_ms,
         updated_at_ms: started_at_ms,
+    }
+}
+
+/// Fold a `session/list` answer into the roster.
+///
+/// A relist merges rather than replaces: the list owns title, workspace, model
+/// and existence, while the stream owns activity, prompts, usage and the
+/// transcript. A session created through `session/new` can stream before it is
+/// listable, so a missing row is not a removal.
+fn merge_listed(agents: &mut Vec<Agent>, sessions: &[Value], started_at_ms: u64, harness: &str) {
+    for session in sessions {
+        let Some(listed) = agent_from_session(session, started_at_ms, harness) else {
+            continue;
+        };
+        if let Some(existing) = agents.iter_mut().find(|agent| agent.id == listed.id) {
+            let changed = existing.title != listed.title
+                || existing.workspace != listed.workspace
+                || existing.model != listed.model;
+            existing.title = listed.title;
+            existing.workspace = listed.workspace;
+            existing.model = listed.model;
+            if existing.prompts.is_empty() {
+                existing.phase = listed.phase;
+            }
+            if existing.goal.is_none() {
+                existing.goal = listed.goal;
+            }
+            existing.updated_at_ms = existing.updated_at_ms.max(listed.updated_at_ms);
+            if changed {
+                existing.revision += 1;
+            }
+        } else {
+            agents.push(listed);
+        }
     }
 }
 
@@ -708,6 +744,75 @@ fn prompt_from_permission(request: u64, params: &Value) -> Option<Prompt> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A session as `session/list` reports it.
+    fn listed(id: &str, title: &str) -> Value {
+        json!({"sessionId": id, "title": title, "workspace": "/w"})
+    }
+
+    #[test]
+    fn a_relist_adds_a_session_created_elsewhere() {
+        let mut agents = Vec::new();
+        merge_listed(
+            &mut agents,
+            &[listed("s1", "first"), listed("s2", "new lane")],
+            7,
+            "acp",
+        );
+
+        let ids: Vec<&str> = agents.iter().map(|agent| agent.id.as_str()).collect();
+        assert_eq!(ids, ["s1", "s2"]);
+        assert_eq!(agents[1].title, "new lane");
+    }
+
+    #[test]
+    fn a_relist_keeps_what_the_stream_owns() {
+        let mut agents = Vec::new();
+        merge_listed(&mut agents, &[listed("s1", "first")], 7, "acp");
+        // The stream has since reported a turn in flight and a question.
+        agents[0].phase = Phase::NeedsYou;
+        agents[0].revision = 4;
+        agents[0].prompts.push(Prompt {
+            id: "p1".to_string(),
+            kind: PromptKind::Approval,
+            title: "run it?".to_string(),
+            body: None,
+            details: None,
+            origin: None,
+            choices: Vec::new(),
+            allows_text: false,
+            asked_at_ms: 9,
+            deadline_at_ms: None,
+        });
+
+        // The harness renamed the session; the prompt is still the person's.
+        merge_listed(&mut agents, &[listed("s1", "renamed")], 7, "acp");
+
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].title, "renamed");
+        assert_eq!(agents[0].phase, Phase::NeedsYou);
+        assert_eq!(agents[0].prompts.len(), 1);
+        // A rename is a change a surface must draw.
+        assert_eq!(agents[0].revision, 5);
+    }
+
+    #[test]
+    fn a_relist_does_not_remove_what_it_stopped_listing() {
+        let mut agents = Vec::new();
+        merge_listed(
+            &mut agents,
+            &[listed("s1", "first"), listed("s2", "second")],
+            7,
+            "acp",
+        );
+
+        // A session created through `session/new` can stream before it is
+        // listable, so an absent row is not a removal.
+        merge_listed(&mut agents, &[listed("s1", "first")], 7, "acp");
+
+        let ids: Vec<&str> = agents.iter().map(|agent| agent.id.as_str()).collect();
+        assert_eq!(ids, ["s1", "s2"]);
+    }
 
     #[test]
     fn a_session_becomes_an_agent_with_its_goal() {

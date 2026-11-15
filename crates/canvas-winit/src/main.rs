@@ -556,6 +556,9 @@ struct App {
     agents: Option<String>,
     /// The ACP command, when the source is `acp` or `all`.
     acp_cmd: Option<String>,
+    /// The edgerunner service a task notice dispatches to. `None` refuses every
+    /// task and announces the refusal on the bus.
+    edgerunner: Option<String>,
     /// The launch intent, from the first `--surface`.
     agent: Option<String>,
     view: Option<String>,
@@ -689,6 +692,7 @@ impl App {
         let module = self.module.clone();
         let agents_choice = self.agents.clone();
         let acp_cmd = self.acp_cmd.clone();
+        let edgerunner = self.edgerunner.clone();
         let bound_agent = self.agent.clone();
         let bound_view = self.view.clone();
         let command = self.command.clone();
@@ -740,6 +744,10 @@ impl App {
                         // `build_http` constructs; this presenter has no agent
                         // cast of its own and needs no single-origin shorthand.
                         agents,
+                        // One dispatcher per window process. Without an
+                        // edgerunner endpoint a task notice still fails loudly
+                        // on the bus instead of being dropped.
+                        sessions: soil::webgpu::session_creator(edgerunner.as_deref()),
                         store_origin: None,
                         terminal: Box::new(Terminals::new(80, 24, command)),
                         cursor: Some(Box::new(WindowCursor(window))),
@@ -1640,6 +1648,7 @@ fn main() -> Result<()> {
     let mut surfaces: Vec<SurfaceSpec> = Vec::new();
     let mut agents = None;
     let mut acp_cmd = None;
+    let mut edgerunner = None;
     let mut command = None;
     let mut pointer = None;
     let mut click = None;
@@ -1687,6 +1696,9 @@ fn main() -> Result<()> {
                 agents = Some(value);
             }
             "--acp-cmd" => acp_cmd = Some(args.next().context("--acp-cmd needs a command")?),
+            "--edgerunner" => {
+                edgerunner = Some(args.next().context("--edgerunner needs a URL")?)
+            }
             "--key" => key = Some(args.next().context("--key needs a key name")?),
             "--keys" => keys = Some(args.next().context("--keys needs text")?),
             "--command" => command = Some(args.next().context("--command needs a command line")?),
@@ -1773,7 +1785,7 @@ fn main() -> Result<()> {
             }
             value if module.is_none() => module = Some(PathBuf::from(value)),
             _ => anyhow::bail!(
-                "usage: canvas-winit <module.wasm> [--capture FILE.rgba] [--frames N] [--surface WxH:view=NAME] [--agents demo|acp|all] [--acp-cmd CMD] [--key KEY] [--keys TEXT] [--command LINE] [--pointer X,Y] [--click X,Y] [--drag X1,Y1,X2,Y2] [--after MS] [--spores DIR] [--size WxH] [--allow-origin URL]... [--geode-socket PATH --geode-purpose PURPOSE] [--hue-bridge URL] [--records-root DIR]"
+                "usage: canvas-winit <module.wasm> [--capture FILE.rgba] [--frames N] [--surface WxH:view=NAME] [--agents demo|acp|all] [--acp-cmd CMD] [--edgerunner URL] [--key KEY] [--keys TEXT] [--command LINE] [--pointer X,Y] [--click X,Y] [--drag X1,Y1,X2,Y2] [--after MS] [--spores DIR] [--size WxH] [--allow-origin URL]... [--geode-socket PATH --geode-purpose PURPOSE] [--hue-bridge URL] [--records-root DIR]"
             ),
         }
     }
@@ -1800,7 +1812,7 @@ fn main() -> Result<()> {
             };
             if !candidate.is_file() {
                 anyhow::bail!(
-                    "usage: canvas-winit <module.wasm> [--capture FILE.rgba] [--frames N] [--surface WxH:view=NAME] [--agents demo|acp|all] [--acp-cmd CMD] [--key KEY] [--keys TEXT] [--command LINE] [--pointer X,Y] [--click X,Y] [--drag X1,Y1,X2,Y2] [--after MS] [--spores DIR] [--size WxH] [--allow-origin URL]... [--geode-socket PATH --geode-purpose PURPOSE] [--hue-bridge URL] [--vfs-root DIR] [--records-root DIR] [--records-book NAME --records-collection NAME] [--actor WHO]"
+                    "usage: canvas-winit <module.wasm> [--capture FILE.rgba] [--frames N] [--surface WxH:view=NAME] [--agents demo|acp|all] [--acp-cmd CMD] [--edgerunner URL] [--key KEY] [--keys TEXT] [--command LINE] [--pointer X,Y] [--click X,Y] [--drag X1,Y1,X2,Y2] [--after MS] [--spores DIR] [--size WxH] [--allow-origin URL]... [--geode-socket PATH --geode-purpose PURPOSE] [--hue-bridge URL] [--vfs-root DIR] [--records-root DIR] [--records-book NAME --records-collection NAME] [--actor WHO]"
                 );
             }
             candidate
@@ -1949,6 +1961,7 @@ fn main() -> Result<()> {
         module,
         agents,
         acp_cmd,
+        edgerunner,
         agent: bound_agent,
         view: bound_view,
         tx,

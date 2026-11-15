@@ -14,6 +14,64 @@ pub mod fixture;
 pub use composite::CompositeAgents;
 pub use fixture::FixtureAgents;
 
+/// Bus kind: a person asked for new work. Body is flat JSON with `text`,
+/// `harness` and `environment`; the dispatcher owns the mapping to a session.
+pub const TASK_NOTICE: &str = "agent.task.v1";
+
+/// Bus kind: a session was created or attached. Adapters that enumerate
+/// sessions re-list on this notice instead of polling on every tick.
+pub const SESSION_NOTICE: &str = "agent.session.v1";
+
+/// Bus kind: a task could not be dispatched. Body names the task and the cause;
+/// a failed dispatch is a fact, never a silent drop.
+pub const TASK_FAILED_NOTICE: &str = "agent.task.failed.v1";
+
+/// One request for new work, as [`TASK_NOTICE`] carries it.
+///
+/// The body is flat JSON. `harness` names the adapter ("operator", "pi");
+/// `environment` names where the work should run ("local", "boat",
+/// "agora-one"). A person asked; nobody has decided which session that becomes
+/// until a dispatcher maps the two.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Task {
+    pub text: String,
+    pub harness: String,
+    pub environment: String,
+    pub title: Option<String>,
+}
+
+/// A session that now exists, as [`SESSION_NOTICE`] reports it.
+///
+/// Only what a surface needs to find the row: the adapter that enumerates
+/// sessions owns the rest of the record, and re-listing is how it fills it in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Created {
+    pub id: String,
+    pub harness: String,
+    pub title: String,
+    pub workspace: Option<String>,
+    pub model: Option<String>,
+}
+
+/// Where new work becomes a session.
+///
+/// The harness owns session incarnation, so the host asks a dispatcher rather
+/// than starting anything itself. The dispatcher is the only caller: a surface
+/// observes and answers, and starting sessions is a separate authority.
+pub trait Sessions: Send {
+    fn create(&mut self, task: &Task) -> Result<Created, Error>;
+}
+
+/// A host with no dispatcher. Refusing is the honest answer: the host turns it
+/// into [`TASK_FAILED_NOTICE`], so a person learns the task went nowhere.
+pub struct NoSessions;
+
+impl Sessions for NoSessions {
+    fn create(&mut self, _task: &Task) -> Result<Created, Error> {
+        Err(Error::Unsupported)
+    }
+}
+
 /// Why an observation or an answer was refused. Mirrors `soil:agents/types.error`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
@@ -259,6 +317,10 @@ pub trait AgentBackend: Send {
         let _ = timeout_ms;
         None
     }
+
+    /// Re-read the roster after a session notice. The default is a no-op: an
+    /// adapter whose list is its own state has nothing to re-read.
+    fn refresh(&mut self) {}
 }
 
 /// A host with no adapter attached. Every read fails loudly rather than

@@ -45,6 +45,7 @@ fn main() -> ExitCode {
     let mut geode_purpose = None;
     let mut agents = None;
     let mut acp_cmd = None;
+    let mut edgerunner = None;
     let mut view = None;
     let mut agent = None;
     let mut search = false;
@@ -168,6 +169,13 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 };
                 acp_cmd = Some(value);
+            }
+            "--edgerunner" => {
+                let Some(value) = args.next() else {
+                    eprintln!("--edgerunner requires a URL");
+                    return ExitCode::FAILURE;
+                };
+                edgerunner = Some(value);
             }
             "--bus-seed" => {
                 let Some(path) = args.next() else {
@@ -328,6 +336,7 @@ fn main() -> ExitCode {
             catalog,
             http,
             agents: cast,
+            edgerunner,
             records_dir,
             grants,
             search,
@@ -351,7 +360,7 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "usage: soil-webgpu [--frame FILE.bgr] [--fb DEVICE] [--size WxH] [--records-dir DIR] [--spores-root DIR]... [--allow-origin URL]... [--store-origin URL] [--agents demo|acp|all] [--acp-cmd CMD] [--view NAME] [--agent ID] [--search] [--bus-seed FILE] [--geode-socket PATH --geode-purpose PURPOSE] <component.wasm>";
+const USAGE: &str = "usage: soil-webgpu [--frame FILE.bgr] [--fb DEVICE] [--size WxH] [--records-dir DIR] [--spores-root DIR]... [--allow-origin URL]... [--store-origin URL] [--agents demo|acp|all] [--acp-cmd CMD] [--edgerunner URL] [--view NAME] [--agent ID] [--search] [--bus-seed FILE] [--geode-socket PATH --geode-purpose PURPOSE] <component.wasm>";
 
 /// Everything one capture run was asked for.
 struct Capture<'a> {
@@ -362,6 +371,8 @@ struct Capture<'a> {
     catalog: Option<Box<dyn CatalogHost>>,
     http: Option<HttpAccess>,
     agents: Option<Box<dyn AgentBackend>>,
+    /// The edgerunner service a task notice dispatches to.
+    edgerunner: Option<String>,
     records_dir: Option<PathBuf>,
     grants: Option<Grants>,
     search: Option<SearchAccess>,
@@ -382,6 +393,7 @@ fn run_capture(capture: Capture<'_>) -> anyhow::Result<()> {
         catalog,
         http,
         agents,
+        edgerunner,
         records_dir,
         grants,
         search,
@@ -412,6 +424,9 @@ fn run_capture(capture: Capture<'_>) -> anyhow::Result<()> {
     if let Some(agents) = agents {
         setup.agents = agents;
     }
+    // A capture that was given an endpoint can dispatch; one that was not
+    // announces the refusal, which is what a seeded task should show.
+    setup.sessions = soil::webgpu::session_creator(edgerunner.as_deref());
     if let Some(root) = records_dir {
         setup.records = Some(RecordsAccess::vitals(root));
     }

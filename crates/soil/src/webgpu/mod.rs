@@ -54,7 +54,7 @@ mod host;
 mod present;
 mod runtime;
 
-pub use agents::agent_backend;
+pub use agents::{agent_backend, session_creator};
 pub use fb::FramebufferPresenter;
 pub use host::{
     CatalogEntry, CatalogError, CatalogHost, CatalogLaunched, CatalogSurface, CatalogSurfaceKind,

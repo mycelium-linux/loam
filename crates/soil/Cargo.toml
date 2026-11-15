@@ -44,6 +44,10 @@ unibus = ["dep:unibus", "dep:unibus-sdk"]
 # protocol (Operator first, Pi and delta-acp behind it). No GPU and no WASI
 # profile: a presenter that wants agents but no window can still link it.
 acp = ["dep:soil-agent-host"]
+# The dispatch seam: a task notice becomes a session, and a created session is
+# announced so every adapter re-lists. It needs the agent record and the bus,
+# which is why it is one feature rather than a flag on either.
+dispatch = ["unibus", "acp"]
 creds = ["dep:base64", "dep:ed25519-dalek", "dep:hmac", "dep:sha2", "dep:tempfile"]
 # The WASI p2 profile around the capabilities: `wasi:http` in and out,
 # clocks, filesystem, sockets, the credential and bus sessions, and the policy
@@ -78,6 +82,7 @@ webgpu = [
     "unibus",
     "search",
     "acp",
+    "dispatch",
     "dep:pollster",
     "dep:sha2",
     "dep:soil-agent-host",

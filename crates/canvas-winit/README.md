@@ -18,6 +18,12 @@ canvas-winit <module.wasm> --agents all --acp-cmd ~/.local/bin/operator-acp \
 `CompositeAgents`; `--acp-cmd` names the agent process (default `delta-acp`).
 Without `--agents` the window passes `NoAgents` and draws the empty state.
 
+`--edgerunner URL` attaches the dispatcher: an `agent.task.v1` notice becomes
+`POST /v1/sessions` and the created session is announced as `agent.session.v1`,
+which makes every adapter that enumerates sessions re-list once. Without it the
+window still watches the bus and answers `agent.task.failed.v1`, so a task that
+went nowhere says so.
+
 `--capture` writes each `soil:present` frame as tightly packed RGBA; with
 `--frames N` the files are numbered (`frame.0000.rgba`, `frame.0001.rgba`), so a
 sequence can be assembled from what was actually drawn. `--key`, `--pointer`,

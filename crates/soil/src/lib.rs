@@ -50,6 +50,14 @@ mod clock;
 pub mod context;
 #[cfg(feature = "wasi")]
 pub mod creds;
+// The dispatch seam: `agent.task.v1` becomes a session and the new session is
+// announced on the bus. Host-side only — a Spore never starts a process.
+#[cfg(feature = "dispatch")]
+pub mod dispatch;
+// The dispatcher's sink: edgerunner owns session incarnation, so the host asks
+// it over the same transport every other capability uses.
+#[cfg(all(feature = "dispatch", feature = "http"))]
+pub mod edgerunner;
 #[cfg(feature = "wasi")]
 mod gateway;
 #[cfg(feature = "wasi")]
@@ -88,6 +96,8 @@ pub use creds::{
     Algorithm, CredentialError, CredentialProvider, GeodeCredentials, GeodePgpCredentials,
     ResolvedHandle, StaticCredentials,
 };
+#[cfg(feature = "dispatch")]
+pub use dispatch::Dispatch;
 #[cfg(feature = "wasi")]
 pub use gateway::{
     GatewayRoute, GatewayVhost, HttpGateway, HttpGatewayBuilder, IngressError, OriginAuth,

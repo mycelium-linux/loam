@@ -114,6 +114,12 @@ impl AgentBackend for CompositeAgents {
             std::thread::sleep(Duration::from_millis(2));
         }
     }
+
+    fn refresh(&mut self) {
+        for backend in &mut self.backends {
+            backend.refresh();
+        }
+    }
 }
 
 #[cfg(test)]
