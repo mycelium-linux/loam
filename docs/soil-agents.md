@@ -1,9 +1,9 @@
 # Agents
 
 Status: contract. `wit/soil-agents.wit` is reviewed; the first host is the
-`soil-webgpu` fixture backend, which proves the guest ABI against a scripted
-cast and talks to no real harness. The Operator and Pi adapters are the next
-slice (see "Adapters" below).
+fixture backend in `crates/soil` (`webgpu` feature), which proves the guest ABI
+against a scripted cast and talks to no real harness. The Operator and Pi
+adapters are the next slice (see "Adapters" below).
 
 ## The one concept
 
@@ -123,6 +123,10 @@ have them:
 is the proving Spore: one window per agent, a board of every agent, and a focus
 view with the transcript and a composer. It imports `observe` and `control` and
 knows nothing about Operator or Pi beyond the `harness` string it prints.
+
+Where colony sits in the wider operator stack — the thread store it still needs,
+the composer, mush, the VFS and the build plane — is
+[the operator-UI map](operator-ui.md).
 
 ## Open questions
 
