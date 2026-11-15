@@ -38,6 +38,7 @@ model2vec-rs = { version = "0.4", default-features = false, features = ["fancy-r
 regex = "1"
 rusqlite = { version = "0.41", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
+soil-spore = { path = "../soil-spore" }
 serde_json = "1"
 sha2 = "0.10"
 tempfile = "3"

@@ -72,7 +72,7 @@ pub fn tools(manifest: &Manifest) -> Result<Vec<Tool>> {
         .collect())
 }
 
-fn schema(manifest: &Manifest, command: &crate::Subcommand) -> Value {
+pub fn schema(manifest: &Manifest, command: &crate::Subcommand) -> Value {
     let mut properties = serde_json::Map::new();
     let mut required = Vec::new();
     for arg in &command.args {
