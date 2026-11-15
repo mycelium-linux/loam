@@ -22,6 +22,7 @@ use wasmtime_wasi::{
     },
 };
 
+use soil_host::http_host::{DirectTransport, HttpPolicy, NoCredentials};
 use soil_host::records_host::RecordsBookHost;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -222,6 +223,17 @@ pub struct RecordsBinding {
     pub collection: String,
 }
 
+/// `soil:http` for a headless command: an origin allowlist, and which of those
+/// origins get this node's mesh identity.
+///
+/// There is no credential provider here on purpose. A CLI command has no Geode
+/// handle and no user to ask, and an identity it did not name is the only kind
+/// it can be given safely.
+#[derive(Debug, Clone)]
+pub struct HttpBinding {
+    pub policy: HttpPolicy,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct RunRequest {
     pub args: Vec<String>,
@@ -240,11 +252,15 @@ pub struct RunOutput {
 pub struct CommandRunner {
     engine: Engine,
     records: Option<RecordsBinding>,
+    /// `soil:http`, with the policy the caller wrote down. Absent means the
+    /// interface is not linked at all, so a command that imports it fails to
+    /// instantiate rather than discovering at runtime that nobody is listening.
+    http: Option<HttpBinding>,
     components: Mutex<BTreeMap<PathBuf, Arc<wasmtime::component::Component>>>,
 }
 
 impl CommandRunner {
-    pub fn new(records: Option<RecordsBinding>) -> Result<Self> {
+    pub fn new(records: Option<RecordsBinding>, http: Option<HttpBinding>) -> Result<Self> {
         let mut config = Config::new();
         config.wasm_component_model(true);
         config.epoch_interruption(true);
@@ -252,6 +268,7 @@ impl CommandRunner {
         Ok(Self {
             engine,
             records,
+            http,
             components: Mutex::new(BTreeMap::new()),
         })
     }
@@ -291,6 +308,9 @@ impl CommandRunner {
         if records.is_some() {
             soil_host::records_host::add_to_linker::<Host>(&mut linker)?;
         }
+        if self.http.is_some() {
+            soil_host::http_host::add_to_linker::<Host>(&mut linker)?;
+        }
 
         let stdout = MemoryOutputPipe::new(entry.max_stdout_bytes);
         let stderr = MemoryOutputPipe::new(entry.max_stderr_bytes);
@@ -316,6 +336,7 @@ impl CommandRunner {
                 table: wasmtime::component::ResourceTable::new(),
                 limits,
                 records,
+                http: self.http.clone(),
             },
         );
         store.limiter(|host| &mut host.limits);
@@ -342,6 +363,22 @@ struct Host {
     table: wasmtime::component::ResourceTable,
     limits: StoreLimits,
     records: Option<RecordsBookHost>,
+    http: Option<HttpBinding>,
+}
+
+impl soil_host::http_host::api::Host for Host {
+    fn fetch(
+        &mut self,
+        request: soil_host::http_host::api::Request,
+    ) -> Result<soil_host::http_host::api::Response, soil_host::http_host::api::Error> {
+        let Some(binding) = &self.http else {
+            return Err(soil_host::http_host::api::Error::Denied);
+        };
+        // The command gets the policy's answer, not the host's reachability:
+        // an origin nobody allowed is `Denied` even on a machine that could
+        // reach it, and the identity is chosen here rather than by the guest.
+        soil_host::http_host::fetch(&binding.policy, &NoCredentials, &DirectTransport, request)
+    }
 }
 
 impl WasiView for Host {
@@ -357,7 +394,8 @@ impl soil_host::records_host::records::Host for Host {
     fn get(
         &mut self,
         key: soil_host::records_host::records::Key,
-    ) -> Result<soil_host::records_host::records::Entry, soil_host::records_host::records::Error> {
+    ) -> Result<soil_host::records_host::records::Entry, soil_host::records_host::records::Error>
+    {
         self.records
             .as_mut()
             .ok_or(soil_host::records_host::records::Error::Denied)?
@@ -369,7 +407,8 @@ impl soil_host::records_host::records::Host for Host {
         collection: String,
         cursor: Option<String>,
         limit: u32,
-    ) -> Result<soil_host::records_host::records::Page, soil_host::records_host::records::Error> {
+    ) -> Result<soil_host::records_host::records::Page, soil_host::records_host::records::Error>
+    {
         self.records
             .as_mut()
             .ok_or(soil_host::records_host::records::Error::Denied)?
@@ -379,7 +418,8 @@ impl soil_host::records_host::records::Host for Host {
     fn upsert(
         &mut self,
         entry: soil_host::records_host::records::Entry,
-    ) -> Result<soil_host::records_host::records::Entry, soil_host::records_host::records::Error> {
+    ) -> Result<soil_host::records_host::records::Entry, soil_host::records_host::records::Error>
+    {
         self.records
             .as_mut()
             .ok_or(soil_host::records_host::records::Error::Denied)?
@@ -391,7 +431,8 @@ impl soil_host::records_host::records::Host for Host {
         key: soil_host::records_host::records::Key,
         expected: Option<soil_host::records_host::records::Version>,
         entry: soil_host::records_host::records::Entry,
-    ) -> Result<soil_host::records_host::records::CasResult, soil_host::records_host::records::Error> {
+    ) -> Result<soil_host::records_host::records::CasResult, soil_host::records_host::records::Error>
+    {
         self.records
             .as_mut()
             .ok_or(soil_host::records_host::records::Error::Denied)?
@@ -412,7 +453,8 @@ impl soil_host::records_host::records::Host for Host {
         &mut self,
         since: Option<String>,
         limit: u32,
-    ) -> Result<soil_host::records_host::records::Page, soil_host::records_host::records::Error> {
+    ) -> Result<soil_host::records_host::records::Page, soil_host::records_host::records::Error>
+    {
         self.records
             .as_mut()
             .ok_or(soil_host::records_host::records::Error::Denied)?
@@ -422,7 +464,10 @@ impl soil_host::records_host::records::Host for Host {
     fn apply(
         &mut self,
         entries: Vec<soil_host::records_host::records::Entry>,
-    ) -> Result<soil_host::records_host::records::ApplyResult, soil_host::records_host::records::Error> {
+    ) -> Result<
+        soil_host::records_host::records::ApplyResult,
+        soil_host::records_host::records::Error,
+    > {
         self.records
             .as_mut()
             .ok_or(soil_host::records_host::records::Error::Denied)?

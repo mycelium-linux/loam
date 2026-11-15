@@ -330,6 +330,19 @@ impl HttpTransport for PreferProvider {
     }
 }
 
+/// Bind `soil:http` for a host that owns its own policy.
+///
+/// The runner world and the command registry both link the interface this way,
+/// so "is this request allowed" has one implementation rather than one per
+/// host that happens to run a Spore.
+pub fn add_to_linker<T>(linker: &mut wasmtime::component::Linker<T>) -> anyhow::Result<()>
+where
+    T: http::Host + 'static,
+{
+    http::add_to_linker::<T, wasmtime::component::HasSelf<T>>(linker, |state| state)?;
+    Ok(())
+}
+
 #[derive(Default)]
 pub struct DirectTransport;
 
