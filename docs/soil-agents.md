@@ -109,13 +109,61 @@ Nothing here is an unbounded pipe:
 - `label` is a name, never content: two path segments, a host, a tool name.
 - `workspace` may be redacted by host policy.
 
+## Noticing a new session
+
+An adapter that enumerates sessions (`AcpBackend` lists through `session/list`)
+should not poll its harness on every tick. A session that appears somewhere else
+reaches it as a bus notice instead. Three kinds carry the loop:
+
+| Kind | Published by | Body |
+|---|---|---|
+| `agent.task.v1` | whoever asks for work (a surface, a person) | `{text, harness, environment, title?}` |
+| `agent.session.v1` | the dispatcher, once a session exists | `{id, harness, title, workspace?, model?}` |
+| `agent.task.failed.v1` | the dispatcher, when creation fails | `{cause, harness?, title?}` |
+
+`text` is required; `harness` defaults to `operator` and `environment` to
+`local`. The failure `cause` is the `soil:agents/types.error` name
+(`unsupported` for a host with no dispatcher, `io` for a fleet that refused),
+so a reader needs no second vocabulary.
+
+The host owns the loop, because it owns the bus and the transport. Each tick
+that a guest already makes — `agents`, `get`, `transcript`, `subscribe` — reads
+the two notice kinds before answering. A task notice becomes a session through
+the dispatcher, the created session is announced, and the adapter re-lists once.
+A notice is acted on **once**, identified by `(kind, producer, issued-at, body)`:
+an in-process bus replays its retained window on every read, and a replayed task
+must not become a second session.
+
+A re-list **merges**, it does not replace. The list owns `title`, `workspace`,
+`model` and existence; the stream owns activity, prompts, usage and the
+transcript. So a session created through `session/new` that streams before it is
+listable is not mistaken for a removal, and a rename does not wipe a question
+that is still waiting for a person.
+
+### Runbook
+
+```sh
+# A task becomes a session, and the session is announced.
+printf 'agent.task.v1\t{"text":"fix the flaky test","harness":"operator","environment":"local"}\n' > task.txt
+soil-webgpu --frame out.bgr --edgerunner http://127.0.0.1:7777 --bus-seed task.txt colony.wasm
+```
+
+The request is `POST /v1/sessions` with `{prompt, agent, runner, auto_start}`:
+the task's `harness` is edgerunner's `agent`, its `environment` is the `runner`,
+and edgerunner decides whether that is a runner it has. Without `--edgerunner`
+the host still watches the bus and answers `agent.task.failed.v1` with
+`cause: unsupported`, which is a fact a person can act on instead of an empty
+wall.
+
 ## Not in this contract
 
 These are separate authorities, and a surface that answers questions should not
 have them:
 
 - **Spawn.** Starting a session is a process, and process authority is not a UI
-  grant. It arrives as `soil:agent.spawn` if a host wants to offer it.
+  grant. The host dispatches instead: a Spore publishes `agent.task.v1` and the
+  host's dispatcher asks edgerunner for the session (see
+  [Noticing a new session](#noticing-a-new-session)).
 - **Configure.** Choosing a model, editing policies, or trusting a workspace is
   a different decision with a different lifetime.
 - **Mutate history.** The transcript is an observation. Fork, rewind, and edits

@@ -305,8 +305,12 @@ One contract, several adapters, composed once in the host:
 
 What is missing in code:
 
-- **The dispatcher** — a host process that reads `agent.task.v1` and calls
-  edgerunner's `POST /v1/sessions`. One lifecycle authority, not two.
+- ~~**The dispatcher**~~ — landed as `soil::dispatch` (the loop) plus
+  `soil::edgerunner` (the client): `agent.task.v1` becomes `POST /v1/sessions`,
+  and the created session is announced as `agent.session.v1` so every adapter
+  re-lists. A host without `--edgerunner` answers `agent.task.failed.v1` instead
+  of dropping the task. What is still missing is org labels on the create and
+  the `SessionAgents` roster below.
 - **`SessionAgents`** — edgerunner already carries the facts (session id, status,
   run, service URL, labels); the adapter maps labels to `Agent.id` so identity
   survives restarts.
@@ -398,7 +402,7 @@ not connected to the runner), **design** (no code path yet).
 | colony -> host: search | **linked, not imported** | the runner links `soil:search` + `mentions` and grants them with `--search`; colony does not import them yet |
 | colony -> host: notify / command | **optional / built, not linked** | the popup covers in-process notices, so `soil:notify` is not on the critical path; `soil-command` is still unlinked |
 | host -> agents: ACP / Delta | **wired** | `--agents acp|all`; `CompositeAgents` merges the sources; 37 real Delta threads render through `delta-acp` |
-| host -> dispatcher -> edgerunner | **missing in soil; ready in edgerunner** | `POST /v1/sessions` and `/v1/sessions/{id}/acp` exist; no client in soil |
+| host -> dispatcher -> edgerunner | **wired (first cut)** | `soil::dispatch` + `soil::edgerunner` (`--edgerunner URL`) post `CreateAgentSessionRequest`; a seeded `agent.task.v1` reached a stub service, and the refusal path publishes `agent.task.failed.v1` |
 | edgerunner -> operator / pi | **wired** | `LocalBackend` argv, `CreateAgentSessionRequest{agent, runner, operator, labels}`, ACP proxy with prompt/permission/update |
 | agentsmith -> edgerunner | **design** | org chart and reconciler not built |
 | operator -> mush | **config** | Operator supports HTTP MCP (`docs/mush-operator.md`); not in a seed config |
@@ -416,8 +420,10 @@ The agent half now attaches a real harness: `--agents acp --acp-cmd delta-acp`
 renders 37 Delta threads through `soil::acp` and `CompositeAgents`. What is left
 for it:
 
-1. **Dispatcher** — read `agent.task.v1`, `POST /v1/sessions` with the org
-   labels, and let the session appear through the ACP adapter.
+1. ~~**Dispatcher**~~ — reads `agent.task.v1` and posts to `/v1/sessions`
+   (`soil::dispatch`, `soil::edgerunner`, `--edgerunner URL`); the session is
+   announced on the bus and the adapter re-lists. Org labels on the create are
+   still to come.
 2. **`SessionAgents`** — map edgerunner's session labels to `Agent.id`, so a
    restart keeps the same row.
 3. **Seed config** — the operator session gets the mush MCP endpoint and a VFS
@@ -445,7 +451,8 @@ Each slice is end-to-end and leaves the tree usable.
   collapses to rail-only, >= ~620 px is side-by-side.
 - ACP and the composite roster are wired (`--agents acp|all`): send, answer and
   interrupt a real session; prompts raise the popup.
-- Dispatcher: `agent.task.v1` -> edgerunner `POST /v1/sessions`.
+- Dispatcher: `agent.task.v1` -> edgerunner `POST /v1/sessions` (landed, first
+  cut: `soil::dispatch`, `soil::edgerunner`).
 
 **Acceptance:** open a thread, send a prompt, see streaming transcript, answer a
 permission request from the popup, interrupt the turn. No Delta in the loop for
