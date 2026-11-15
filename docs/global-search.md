@@ -209,6 +209,25 @@ substring, fuzzy and regex scan every indexed node; semantic is brute-force
 cosine over every vector for the model. `Page.generation` names the index that
 produced the page.
 
+## Tools, not generation
+
+The consumer this is built for is a tool loop, not a completion inside search:
+search returns locators, fetch returns bytes, and the agent decides what to read
+next. That is why `soil:search` has no generation step and why a hit is a path
+plus a snippet rather than a document.
+
+`soil:vfs/read` is the fetch. A hit does not carry a chunk id or a byte range
+today, so a tool that wants "the matched chunk" either reads the whole file or
+guesses a range from the snippet. If agent search should be chunk-accurate, the
+next ABI change is a chunk locator on the hit; the index already stores chunk ids
+(`content_id:ordinal`) and ordinals, so the data is there.
+
+The agent shell does not see this surface yet: Mush links `soil:index` and
+implements `index::Host` over its own VFS host, while the global `soil:search`
+is currently granted only to Spores in the WebGPU runner. Giving agents the
+global search is one import and one host impl in Mush (plus a `search` builtin),
+not a second search engine.
+
 ## Host behavior
 
 `crates/soil/src/search_host` currently composes:
