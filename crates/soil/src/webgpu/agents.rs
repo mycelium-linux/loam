@@ -5,9 +5,10 @@
 //! construction here means a new source is one match arm, not a second CLI
 //! dialect.
 
-use soil_agent_host::{AgentBackend, CompositeAgents, FixtureAgents, NoSessions, Sessions};
+use soil_agent_host::{AgentBackend, CompositeAgents, FixtureAgents, NoSessions};
 
 use crate::acp::AcpBackend;
+use crate::dispatch::DispatchRole;
 use crate::edgerunner::EdgerunnerSessions;
 
 /// Build the backend a presenter asked for.
@@ -43,12 +44,18 @@ pub fn agent_backend(
 /// Who creates a session when a task notice arrives.
 ///
 /// `endpoint` is an edgerunner service (`http://127.0.0.1:7777`). Without one
-/// the host still watches the bus but refuses every task, and the refusal is
-/// published as `agent.task.failed.v1` — a person learns the task went nowhere
-/// instead of watching an empty wall.
-pub fn session_creator(endpoint: Option<&str>) -> Box<dyn Sessions> {
+/// this surface still owns dispatch and refuses every task, publishing
+/// `agent.task.failed.v1` — a person learns the task went nowhere instead of
+/// watching an empty wall.
+pub fn session_role(endpoint: Option<&str>) -> DispatchRole {
     match endpoint {
-        Some(endpoint) => Box::new(EdgerunnerSessions::new(endpoint)),
-        None => Box::new(NoSessions),
+        Some(endpoint) => DispatchRole::Own(Box::new(EdgerunnerSessions::new(endpoint))),
+        None => DispatchRole::Own(Box::new(NoSessions)),
     }
+}
+
+/// The same, for a second surface in a process that already has a dispatcher:
+/// it watches for announcements and leaves the task queue alone.
+pub fn watch_only() -> DispatchRole {
+    DispatchRole::Watch
 }

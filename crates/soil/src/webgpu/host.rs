@@ -17,12 +17,12 @@ use wasi_webgpu_wasmtime::{WasiWebGpuCtx, WasiWebGpuCtxView, WasiWebGpuOptions};
 use wasmtime::component::ResourceTable;
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
-use soil_agent_host::{AgentBackend, Answer, Binding, NoSessions, Page, Sessions};
+use soil_agent_host::{AgentBackend, Answer, Binding, NoSessions, Page};
 
 use super::AgentSubscription;
 use super::present::{ClipboardHost, CursorHost, CursorStyle, InputEvent, PointerButton};
 use super::soil as wit;
-use crate::dispatch::Dispatch;
+use crate::dispatch::{Dispatch, DispatchRole};
 use crate::http_host::api as http_api;
 use crate::http_host::{
     self, CredentialProvider, DirectTransport, HttpPolicy, HttpTransport, NoCredentials,
@@ -350,6 +350,9 @@ pub struct WebGpuHost {
     /// Host-composed search over the granted sources. `None` denies
     /// `soil:search` and `soil:search/mentions` alike.
     search: Option<SearchService>,
+    /// What this surface was opened for, when the presenter named it. The
+    /// roster's own binding is the fallback.
+    binding: Option<Binding>,
     /// Where this host is in the session-notice stream, and what it does when
     /// one arrives. A notice makes an adapter re-list once instead of polling
     /// the harness on every tick; a task notice becomes a session.
@@ -504,9 +507,15 @@ pub struct HostSetup {
     /// attest who is acting must not let a guest guess.
     pub principal: Option<PrincipalHost>,
     pub agents: Box<dyn AgentBackend>,
-    /// Who turns a task notice into a session. `NoSessions` refuses, so a host
-    /// that cannot dispatch says so on the bus instead of dropping the task.
-    pub sessions: Box<dyn Sessions>,
+    /// What this surface was opened for. The intent belongs to the window, not
+    /// to the roster: two windows over one adapter open on different views, and
+    /// a popup on one agent while the wall shows the set.
+    pub binding: Option<Binding>,
+    /// What this host does with the bus. One surface in a process owns
+    /// dispatch; the others watch, so a task read twice does not become two
+    /// sessions. The default owns dispatch with no creator, so a host that
+    /// cannot start sessions says so on the bus instead of dropping the task.
+    pub dispatch: DispatchRole,
     /// Shorthand for a read-only `soil:http` grant for one origin, folded into
     /// `http` when that is unset. The storefront browser names its own origin
     /// this way.
@@ -549,7 +558,8 @@ impl HostSetup {
             vfs: None,
             principal: None,
             agents: Box::new(soil_agent_host::NoAgents),
-            sessions: Box::new(NoSessions),
+            binding: None,
+            dispatch: DispatchRole::Own(Box::new(NoSessions)),
             store_origin: None,
             terminal: Box::new(NoTerminal),
             cursor: None,
@@ -600,7 +610,11 @@ impl WebGpuHost {
                 .transpose()?,
             principal: setup.principal,
             agents: setup.agents,
-            dispatch: Dispatch::new(setup.bus.clone(), setup.sessions),
+            binding: setup.binding,
+            dispatch: match setup.dispatch {
+                DispatchRole::Own(sessions) => Dispatch::new(setup.bus.clone(), sessions),
+                DispatchRole::Watch => Dispatch::watcher(setup.bus.clone()),
+            },
             terminal: setup.terminal,
             cursor: setup.cursor,
             clipboard: setup.clipboard,
@@ -1220,7 +1234,12 @@ impl wit::agents::observe::Host for WebGpuHost {
     }
 
     fn intent(&mut self) -> wit::agents::types::Binding {
-        agent_binding(self.agents.binding())
+        // The surface's own intent wins: a shared roster cannot know which
+        // window is asking, and a popup opened on one agent must say so.
+        match &self.binding {
+            Some(binding) => agent_binding(binding.clone()),
+            None => agent_binding(self.agents.binding()),
+        }
     }
 
     fn current_scope(&mut self) -> wit::agents::types::Scope {

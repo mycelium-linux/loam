@@ -54,7 +54,8 @@ mod host;
 mod present;
 mod runtime;
 
-pub use agents::{agent_backend, session_creator};
+pub use agents::{agent_backend, session_role, watch_only};
+pub use crate::dispatch::DispatchRole;
 pub use fb::FramebufferPresenter;
 pub use host::{
     CatalogEntry, CatalogError, CatalogHost, CatalogLaunched, CatalogSurface, CatalogSurfaceKind,
@@ -73,7 +74,7 @@ pub use runtime::{
 };
 
 /// The denying agent backend, for presenters that own no agent session.
-pub use soil_agent_host::NoAgents;
+pub use soil_agent_host::{Binding, NoAgents, SharedAgents};
 
 /// One per `observe.subscribe`.
 ///

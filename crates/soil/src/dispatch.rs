@@ -49,10 +49,28 @@ enum Slot {
     Notices,
 }
 
+/// What a host does with the bus.
+///
+/// One process has one dispatcher. Every other surface watches the notices it
+/// publishes — a task read twice would become two sessions, and a refusal
+/// announced twice would read as two failed dispatches.
+pub enum DispatchRole {
+    /// This surface owns dispatch: it turns a task notice into a session.
+    Own(Box<dyn Sessions>),
+    /// This surface only re-lists when a session is announced.
+    Watch,
+}
+
+/// How this host reads the bus.
+enum Mode {
+    Own(Box<dyn Sessions>),
+    Watch,
+}
+
 /// Turns task notices into sessions and announces what it created.
 pub struct Dispatch {
     bus: Arc<dyn Bus>,
-    sessions: Box<dyn Sessions>,
+    mode: Mode,
     tasks: Option<String>,
     notices: Option<String>,
     seen: VecDeque<Mark>,
@@ -62,7 +80,7 @@ impl Dispatch {
     pub fn new(bus: Arc<dyn Bus>, sessions: Box<dyn Sessions>) -> Self {
         Self {
             bus,
-            sessions,
+            mode: Mode::Own(sessions),
             tasks: None,
             notices: None,
             seen: VecDeque::new(),
@@ -75,6 +93,18 @@ impl Dispatch {
         Self::new(bus, Box::new(NoSessions))
     }
 
+    /// A second surface in the same process: it re-lists, and leaves the task
+    /// queue to the one surface that owns dispatch.
+    pub fn watcher(bus: Arc<dyn Bus>) -> Self {
+        Self {
+            bus,
+            mode: Mode::Watch,
+            tasks: None,
+            notices: None,
+            seen: VecDeque::new(),
+        }
+    }
+
     /// One tick.
     ///
     /// `agents` is the roster the announcement is about: a session created here
@@ -83,23 +113,33 @@ impl Dispatch {
     pub fn pump(&mut self, agents: &mut dyn AgentBackend) {
         let mut relist = !self.read(Slot::Notices, SESSION_NOTICE).is_empty();
 
-        for frame in self.read(Slot::Tasks, TASK_NOTICE) {
-            let Some(task) = task_from_body(&frame.body) else {
-                // A malformed task is a failed dispatch: somebody asked and the
-                // work will not happen, which is exactly what must not be silent.
-                self.publish(TASK_FAILED_NOTICE, &failure_body(None, None, Error::Invalid));
-                continue;
-            };
-            match self.sessions.create(&task) {
-                Ok(created) => {
-                    self.publish(SESSION_NOTICE, &session_body(&created));
-                    relist = true;
-                }
-                Err(error) => {
-                    self.publish(
-                        TASK_FAILED_NOTICE,
-                        &failure_body(Some(&task.harness), task.title.as_deref(), error),
-                    );
+        // A surface that only watches leaves the task queue to the one that
+        // owns dispatch: a task read twice would become two sessions.
+        let tasks = match self.mode {
+            Mode::Own(_) => self.read(Slot::Tasks, TASK_NOTICE),
+            Mode::Watch => Vec::new(),
+        };
+        if let Mode::Own(sessions) = &mut self.mode {
+            for frame in tasks {
+                let Some(task) = task_from_body(&frame.body) else {
+                    // A malformed task is a failed dispatch: somebody asked and
+                    // the work will not happen, which is exactly what must not
+                    // be silent.
+                    publish(&self.bus, TASK_FAILED_NOTICE, &failure_body(None, None, Error::Invalid));
+                    continue;
+                };
+                match sessions.create(&task) {
+                    Ok(created) => {
+                        publish(&self.bus, SESSION_NOTICE, &session_body(&created));
+                        relist = true;
+                    }
+                    Err(error) => {
+                        publish(
+                            &self.bus,
+                            TASK_FAILED_NOTICE,
+                            &failure_body(Some(&task.harness), task.title.as_deref(), error),
+                        );
+                    }
                 }
             }
         }
@@ -156,15 +196,13 @@ impl Dispatch {
         out
     }
 
-    /// A publish that fails is logged where the host can see it: the guest is
-    /// not the audience for a control-plane notice.
-    fn publish(&self, kind: &str, body: &str) {
-        if let Err(error) = self
-            .bus
-            .publish(kind, body.as_bytes(), None, NOTICE_TTL_MS)
-        {
-            tracing::warn!(kind, %error, "session notice not published");
-        }
+}
+
+/// A publish that fails is logged where the host can see it: the guest is not
+/// the audience for a control-plane notice.
+fn publish(bus: &Arc<dyn Bus>, kind: &str, body: &str) {
+    if let Err(error) = bus.publish(kind, body.as_bytes(), None, NOTICE_TTL_MS) {
+        tracing::warn!(kind, %error, "session notice not published");
     }
 }
 
@@ -406,6 +444,26 @@ mod tests {
         let failures = body_of(&bus, TASK_FAILED_NOTICE);
         assert_eq!(failures.len(), 1);
         assert_eq!(failures[0]["cause"], "invalid");
+    }
+
+    #[test]
+    fn a_watcher_re_lists_but_does_not_dispatch() {
+        let bus = Arc::new(MemoryBus::default());
+        let asked: Arc<Mutex<Vec<Task>>> = Arc::new(Mutex::new(Vec::new()));
+        let mut dispatch = Dispatch::watcher(bus.clone());
+        let mut agents = Recorder::default();
+        seed(&bus, TASK_NOTICE, TASK);
+        seed(&bus, SESSION_NOTICE, br#"{"id":"session-3"}"#);
+
+        dispatch.pump(&mut agents);
+
+        // The same task frame is on the bus the dispatcher reads; a second
+        // reader must not make a second session of it, nor announce a failure
+        // for work it never tried.
+        assert!(asked.lock().expect("script poisoned").is_empty());
+        assert_eq!(body_of(&bus, SESSION_NOTICE).len(), 1);
+        assert_eq!(body_of(&bus, TASK_FAILED_NOTICE).len(), 0);
+        assert_eq!(agents.refreshed, 1);
     }
 
     #[test]

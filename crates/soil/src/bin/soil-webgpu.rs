@@ -426,7 +426,7 @@ fn run_capture(capture: Capture<'_>) -> anyhow::Result<()> {
     }
     // A capture that was given an endpoint can dispatch; one that was not
     // announces the refusal, which is what a seeded task should show.
-    setup.sessions = soil::webgpu::session_creator(edgerunner.as_deref());
+    setup.dispatch = soil::webgpu::session_role(edgerunner.as_deref());
     if let Some(root) = records_dir {
         setup.records = Some(RecordsAccess::vitals(root));
     }
