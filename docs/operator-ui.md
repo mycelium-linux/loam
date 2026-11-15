@@ -153,7 +153,7 @@ can be rebuilt and the other cannot.
 | Build placement and reuse | bob | changeset + artifact store | exists; surfaces nothing to the UI yet |
 | Identity of the person | principal | `soil:principal` | host grant exists |
 | Notifications | notify host | `soil:notify` + `soil:unibus` | host crate exists; not linked into the runner |
-| Search hits | search host | `soil:search` (VFS + records + git + graph) | host crate exists; not linked into the runner |
+| Search hits | search host | `soil:search` (VFS + records + git + graph) | `soil::search_host`, linked in the runner and granted with `--search`; colony does not import it yet |
 | Settings (models, MCP, themes) | host | records book + host config | missing contract; themes are Spore-local today |
 
 ### The thread contract, deliberately small
@@ -180,7 +180,7 @@ way to say `soil:records` with fewer capabilities.
 |---|---|---|---|
 | List threads, group by project | `delta thread list` through `delta-acp`; no thread rail in colony | adapter now, records later | thread rail + `soil:records` schema (S1) |
 | Open a thread and read it | `focus` view has a feed; rows clip mid-sentence | records / `observe.transcript` | transcript rows with wrapping, paging, tool blocks (S1) |
-| Search all threads and files | `soil-search-host` merges VFS index, records, git, graph, marbles; **not linked into the runner** | search host | link `soil:search` + one host grant (S2) |
+| Search all threads and files | `soil::search_host` composes VFS index, records, git, graph and marbles; linked in the runner and granted with `--search` | search host | colony imports `soil:search` and draws the rail (S2) |
 | `@` file mentions | search host has a mention resolver; colony has no composer | search host | composer mention picker (S2) |
 | Tool calls, diffs, images in the transcript | Delta adapter projects `tool_call`/`tool_call_update`; colony renders text only | records / adapter | one `tool` row renderer shared by live and stored transcripts (S3) |
 
@@ -309,10 +309,10 @@ What is missing in code:
   roster needs a merge of adapters with stable ids and a single ordering
   (needs-you, failed, working, thinking, quiet). This is the smallest change
   that makes colony show the real fleet.
-- **The ACP client** — it lived in the old `soil-webgpu` crate and was not
-  carried into `soil::webgpu`. It belongs in `soil` behind an `acp` feature (or
-  its own crate if the dependency weight argues for it), constructed from a
-  local process or an edgerunner `service_url`.
+- **`AcpAgents`** — the client is in place as `soil::acp` (behind the `acp`
+  feature). What is missing is the adapter that builds it from a local command
+  or an edgerunner `service_url`, and a `CompositeAgents` to merge it with the
+  fixture (and later Delta).
 - **The dispatcher** — a host process that reads `agent.task.v1` and calls
   edgerunner's `POST /v1/sessions`. One lifecycle authority, not two.
 - **`SessionAgents`** — edgerunner already carries the facts (session id, status,
@@ -401,8 +401,9 @@ not connected to the runner), **design** (no code path yet).
 | colony -> host: agents observe/control | **wired against the fixture** | `--agents demo`; the window passes `NoAgents`, so it draws the empty state |
 | colony -> host: unibus (notices, popup) | **wired** | `agent.prompt.v1` capture + seeded popup |
 | colony -> host: records (threads) | **design** | colony imports only present/agents/unibus; no thread schema |
-| colony -> host: search / notify / command | **built, not linked** | `soil-search-host`, `soil-notify-host`, `soil-command`; the runner links none |
-| host -> agents: ACP / edgerunner / Delta adapters | **missing** | only `FixtureAgents` and `NoAgents` exist |
+| colony -> host: search | **linked, not imported** | the runner links `soil:search` + `mentions` and grants them with `--search`; colony does not import them yet |
+| colony -> host: notify / command | **optional / built, not linked** | the popup covers in-process notices, so `soil:notify` is not on the critical path; `soil-command` is still unlinked |
+| host -> agents: ACP / edgerunner / Delta adapters | **client moved, adapters missing** | `soil::acp` provides the ACP client (`acp` feature); no `AcpAgents`, `CompositeAgents` or `DeltaAgents` wiring |
 | host -> dispatcher -> edgerunner | **missing in soil; ready in edgerunner** | `POST /v1/sessions` and `/v1/sessions/{id}/acp` exist; no client in soil |
 | edgerunner -> operator / pi | **wired** | `LocalBackend` argv, `CreateAgentSessionRequest{agent, runner, operator, labels}`, ACP proxy with prompt/permission/update |
 | agentsmith -> edgerunner | **design** | org chart and reconciler not built |
@@ -417,9 +418,9 @@ not connected to the runner), **design** (no code path yet).
 
 The agent half is one adapter, one composite, one dispatcher, and two flags:
 
-1. **`AcpAgents`** — the ACP client lived on `feat/acp-client` and was not
-   carried into `soil::webgpu`. Port it behind an `acp` feature and point it at
-   edgerunner's `/v1/sessions/{id}/acp` (or a local stdio process).
+1. **`AcpAgents`** — `soil::acp` is the client; wrap it as an `AgentBackend`
+   selected by `--agents acp`, pointed at edgerunner's
+   `/v1/sessions/{id}/acp` (or a local stdio process).
 2. **`CompositeAgents`** — merge fixture + ACP (+ Delta) with stable ids and the
    one ordering.
 3. **`--agents acp|all`** in both the window and the capture command.
@@ -458,11 +459,13 @@ the new session.
 
 ### S2 — find things
 
-- Link `soil:search` into the runner; search rail + `@` mention picker.
-- Link `soil:notify`; popup survives focus loss.
+- Import `soil:search` in colony (the runner already links and grants it);
+  search rail + `@` mention picker.
+- Skip `soil:notify` for now: the in-process popup and `soil:unibus` cover the
+  notice, and an OS notification is a host capability that can land later.
 
-**Acceptance:** one query returns files, records and spored commands; a prompt
-in a background window raises a real notification.
+**Acceptance:** one query returns files, records and spored commands; `@`
+suggests from the same grant.
 
 ### S3 — work in the thread
 
