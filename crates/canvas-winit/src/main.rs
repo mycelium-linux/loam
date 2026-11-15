@@ -1510,6 +1510,90 @@ fn build_http(launch: &LaunchConfig) -> Result<Option<HttpAccess>> {
     Ok(Some(access))
 }
 
+/// One window: its own resolution, and the view it should open on.
+///
+/// A wall and a popup are different shapes. The wall is a phone because it is
+/// read at a glance from a desk; a popup is a card because it exists to be
+/// answered and then go away. Nothing in the Spore assumes one size — it lays
+/// out in `surface::size()` — so the resolution belongs to the window, not to
+/// the module.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SurfaceSpec {
+    /// The window's opening size in points.
+    pub size: (u32, u32),
+    /// The view to open on, as the Spore names it (`grid`, `popup`, ...).
+    pub view: Option<String>,
+    /// The agent to open on, when the surface is about one agent.
+    pub agent: Option<String>,
+}
+
+impl SurfaceSpec {
+    /// `420x300:view=popup:agent=op-7f3a`, or `430x680` for a plain wall.
+    pub fn parse(text: &str) -> Result<Self> {
+        let mut parts = text.split(':');
+        let size = parts.next().context("surface needs a WxH size")?;
+        let (width, height) = size
+            .split_once('x')
+            .context("surface size is WxH, e.g. 430x680")?;
+        let size = (
+            width.parse::<u32>().context("surface width")?,
+            height.parse::<u32>().context("surface height")?,
+        );
+        anyhow::ensure!(size.0 > 0 && size.1 > 0, "surface size must be positive");
+        let mut view = None;
+        let mut agent = None;
+        for part in parts {
+            match part.split_once('=') {
+                Some(("view", value)) if known_view(value) => {
+                    view = Some(value.to_string());
+                }
+                Some(("agent", value)) if !value.is_empty() => {
+                    agent = Some(value.to_string());
+                }
+                _ => anyhow::bail!("surface setting {part:?} is not view= or agent="),
+            }
+        }
+        Ok(Self { size, view, agent })
+    }
+}
+
+/// Views a host may open a surface on. A typo is a startup error, not a window
+/// that silently opens on the grid.
+fn known_view(name: &str) -> bool {
+    matches!(
+        name,
+        "grid" | "board" | "roster" | "stage" | "focus" | "popup"
+    )
+}
+
+#[cfg(test)]
+mod surface_tests {
+    use super::SurfaceSpec;
+
+    #[test]
+    fn a_size_alone_is_a_wall() {
+        let spec = SurfaceSpec::parse("430x680").unwrap();
+        assert_eq!(spec.size, (430, 680));
+        assert_eq!(spec.view, None);
+    }
+
+    #[test]
+    fn a_popup_carries_its_view_and_agent() {
+        let spec = SurfaceSpec::parse("420x300:view=popup:agent=op-7f3a").unwrap();
+        assert_eq!(spec.size, (420, 300));
+        assert_eq!(spec.view.as_deref(), Some("popup"));
+        assert_eq!(spec.agent.as_deref(), Some("op-7f3a"));
+    }
+
+    #[test]
+    fn a_typo_is_refused_rather_than_opened() {
+        assert!(SurfaceSpec::parse("420x300:view=popupp").is_err());
+        assert!(SurfaceSpec::parse("420x300:volume=up").is_err());
+        assert!(SurfaceSpec::parse("420").is_err());
+        assert!(SurfaceSpec::parse("0x300").is_err());
+    }
+}
+
 /// `dir/frame.rgba` -> `dir/frame.0007.rgba`.
 fn sequence_path(path: &std::path::Path, index: usize) -> PathBuf {
     let stem = path
@@ -1529,6 +1613,7 @@ fn main() -> Result<()> {
     let mut frames = None;
     let mut key = None;
     let mut keys = None;
+    let mut surfaces: Vec<SurfaceSpec> = Vec::new();
     let mut command = None;
     let mut pointer = None;
     let mut click = None;
@@ -1538,6 +1623,7 @@ fn main() -> Result<()> {
     let mut prewarm = false;
     let mut spores = None;
     let mut logical_size = LOGICAL_SIZE;
+    let mut size_given = false;
     let mut origins = Vec::new();
     let mut geode_socket = None;
     let mut geode_purpose = None;
@@ -1562,6 +1648,10 @@ fn main() -> Result<()> {
                         .parse()
                         .context("--frames needs a number")?,
                 );
+            }
+            "--surface" => {
+                let text = args.next().context("--surface needs WxH:view=..")?;
+                surfaces.push(SurfaceSpec::parse(&text)?);
             }
             "--key" => key = Some(args.next().context("--key needs a key name")?),
             "--keys" => keys = Some(args.next().context("--keys needs text")?),
@@ -1603,6 +1693,7 @@ fn main() -> Result<()> {
                     anyhow::bail!("--size needs positive numbers");
                 }
                 logical_size = (width, height);
+                size_given = true;
             }
             "--allow-origin" | "--store-origin" => {
                 origins.push(args.next().context("--allow-origin needs a URL")?);
@@ -1648,7 +1739,7 @@ fn main() -> Result<()> {
             }
             value if module.is_none() => module = Some(PathBuf::from(value)),
             _ => anyhow::bail!(
-                "usage: canvas-winit <module.wasm> [--capture FILE.rgba] [--frames N] [--key KEY] [--keys TEXT] [--command LINE] [--pointer X,Y] [--click X,Y] [--drag X1,Y1,X2,Y2] [--after MS] [--spores DIR] [--size WxH] [--allow-origin URL]... [--geode-socket PATH --geode-purpose PURPOSE] [--hue-bridge URL] [--records-root DIR]"
+                "usage: canvas-winit <module.wasm> [--capture FILE.rgba] [--frames N] [--surface WxH:view=NAME] [--key KEY] [--keys TEXT] [--command LINE] [--pointer X,Y] [--click X,Y] [--drag X1,Y1,X2,Y2] [--after MS] [--spores DIR] [--size WxH] [--allow-origin URL]... [--geode-socket PATH --geode-purpose PURPOSE] [--hue-bridge URL] [--records-root DIR]"
             ),
         }
     }
@@ -1675,7 +1766,7 @@ fn main() -> Result<()> {
             };
             if !candidate.is_file() {
                 anyhow::bail!(
-                    "usage: canvas-winit <module.wasm> [--capture FILE.rgba] [--frames N] [--key KEY] [--keys TEXT] [--command LINE] [--pointer X,Y] [--click X,Y] [--drag X1,Y1,X2,Y2] [--after MS] [--spores DIR] [--size WxH] [--allow-origin URL]... [--geode-socket PATH --geode-purpose PURPOSE] [--hue-bridge URL] [--vfs-root DIR] [--records-root DIR] [--records-book NAME --records-collection NAME] [--actor WHO]"
+                    "usage: canvas-winit <module.wasm> [--capture FILE.rgba] [--frames N] [--surface WxH:view=NAME] [--key KEY] [--keys TEXT] [--command LINE] [--pointer X,Y] [--click X,Y] [--drag X1,Y1,X2,Y2] [--after MS] [--spores DIR] [--size WxH] [--allow-origin URL]... [--geode-socket PATH --geode-purpose PURPOSE] [--hue-bridge URL] [--vfs-root DIR] [--records-root DIR] [--records-book NAME --records-collection NAME] [--actor WHO]"
                 );
             }
             candidate
@@ -1812,6 +1903,9 @@ fn main() -> Result<()> {
         (Some(_), None) => anyhow::bail!("--records-book needs --records-root"),
         (None, None) => None,
     };
+    if !size_given && let Some(surface) = surfaces.first() {
+        logical_size = (surface.size.0 as f64, surface.size.1 as f64);
+    }
     let (tx, rx) = mpsc::channel();
     let mut app = App {
         module,
