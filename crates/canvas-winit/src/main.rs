@@ -540,7 +540,6 @@ impl CanvasGpuPresenter for FramePresenter {
     }
 
     fn present(&mut self, frame: CanvasFrame) -> Result<()> {
-        eprintln!("canvas-winit: presenter {}x{}", frame.width, frame.height);
         self.tx
             .send(frame)
             .map_err(|_| anyhow::anyhow!("the window closed before the frame arrived"))?;
@@ -609,6 +608,9 @@ struct App {
     command: Option<String>,
     modifiers: ModifiersState,
     started: bool,
+    /// The size the last frame was painted at, so the window narrates a
+    /// resolution change once instead of every frame.
+    painted_size: Option<(u32, u32)>,
 }
 
 impl App {
@@ -772,7 +774,9 @@ impl App {
 
     fn take_frames(&mut self, event_loop: &ActiveEventLoop) {
         while let Ok(frame) = self.rx.try_recv() {
-            eprintln!("canvas-winit: frame {}x{}", frame.width, frame.height);
+            if self.capture.is_some() {
+                eprintln!("canvas-winit: frame {}x{}", frame.width, frame.height);
+            }
             if let Some(path) = &self.capture {
                 // One frame is a still; several are a sequence, and they cannot
                 // share a path or every write lands on the last one. A sequence
@@ -980,7 +984,10 @@ impl App {
         }
         if let Err(error) = buffer.present() {
             eprintln!("canvas-winit: present: {error}");
-        } else {
+        } else if self.painted_size != Some((size.width, size.height)) {
+            // Once per size, not once per frame: a live window paints at 60 Hz
+            // and the terminal that started it is not a frame log.
+            self.painted_size = Some((size.width, size.height));
             eprintln!(
                 "canvas-winit: painted {}x{} into {}x{}",
                 frame.width, frame.height, size.width, size.height
@@ -2006,6 +2013,7 @@ fn main() -> Result<()> {
             roots
         }),
         started: false,
+        painted_size: None,
     };
     let event_loop = EventLoop::new()?;
     event_loop.run_app(&mut app)?;
