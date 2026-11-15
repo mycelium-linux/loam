@@ -48,11 +48,13 @@ bindgen!({
     require_store_data_send: true,
 });
 
+mod agents;
 mod fb;
 mod host;
 mod present;
 mod runtime;
 
+pub use agents::agent_backend;
 pub use fb::FramebufferPresenter;
 pub use host::{
     CatalogEntry, CatalogError, CatalogHost, CatalogLaunched, CatalogSurface, CatalogSurfaceKind,

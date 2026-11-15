@@ -8,8 +8,10 @@
 //! The contract carries facts, not moods: no energy, health or mood lives here.
 //! A view derives those from `usage`, `activity` and `prompts`.
 
+pub mod composite;
 pub mod fixture;
 
+pub use composite::CompositeAgents;
 pub use fixture::FixtureAgents;
 
 /// Why an observation or an answer was refused. Mirrors `soil:agents/types.error`.

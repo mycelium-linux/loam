@@ -44,6 +44,7 @@ fn main() -> ExitCode {
     let mut geode_socket = None;
     let mut geode_purpose = None;
     let mut agents = None;
+    let mut acp_cmd = None;
     let mut view = None;
     let mut agent = None;
     let mut search = false;
@@ -149,18 +150,24 @@ fn main() -> ExitCode {
                 store_origin = Some(origin);
             }
             "--agents" => {
-                // Only one cast exists so far. Naming it explicitly keeps a
-                // capture honest: a frame of the demo cast is not a frame of a
-                // running Operator session.
+                // Name the source explicitly: a frame of the demo cast is not
+                // a frame of a running Operator session.
                 let Some(value) = args.next() else {
-                    eprintln!("--agents requires a cast name (demo)");
+                    eprintln!("--agents requires a source (demo, acp, all)");
                     return ExitCode::FAILURE;
                 };
-                if value != "demo" {
-                    eprintln!("--agents: unknown cast {value:?} (demo)");
+                if !matches!(value.as_str(), "demo" | "acp" | "all") {
+                    eprintln!("--agents: unknown source {value:?} (demo, acp, all)");
                     return ExitCode::FAILURE;
                 }
                 agents = Some(value);
+            }
+            "--acp-cmd" => {
+                let Some(value) = args.next() else {
+                    eprintln!("--acp-cmd requires a command");
+                    return ExitCode::FAILURE;
+                };
+                acp_cmd = Some(value);
             }
             "--bus-seed" => {
                 let Some(path) = args.next() else {
@@ -258,10 +265,21 @@ fn main() -> ExitCode {
         } else {
             Some(Box::new(InstallCatalog::with_roots(spores_roots)))
         };
-        let cast: Option<Box<dyn AgentBackend>> = agents.map(|_| {
-            Box::new(soil_agent_host::FixtureAgents::new().bind(agent.clone(), view.clone()))
-                as Box<dyn AgentBackend>
-        });
+        let cast: Option<Box<dyn AgentBackend>> = match agents.as_deref() {
+            Some(source) => match soil::webgpu::agent_backend(
+                source,
+                acp_cmd.as_deref(),
+                agent.clone(),
+                view.clone(),
+            ) {
+                Ok(backend) => Some(backend),
+                Err(error) => {
+                    eprintln!("--agents: {error}");
+                    return ExitCode::FAILURE;
+                }
+            },
+            None => None,
+        };
         let document_grants = vfs_root.is_some() || actor.is_some() || records_root.is_some();
         let search = if search {
             let Some(vfs) = vfs_root.clone() else {
@@ -333,7 +351,7 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "usage: soil-webgpu [--frame FILE.bgr] [--fb DEVICE] [--size WxH] [--records-dir DIR] [--spores-root DIR]... [--allow-origin URL]... [--store-origin URL] [--agents demo] [--view NAME] [--agent ID] [--search] [--bus-seed FILE] [--geode-socket PATH --geode-purpose PURPOSE] <component.wasm>";
+const USAGE: &str = "usage: soil-webgpu [--frame FILE.bgr] [--fb DEVICE] [--size WxH] [--records-dir DIR] [--spores-root DIR]... [--allow-origin URL]... [--store-origin URL] [--agents demo|acp|all] [--acp-cmd CMD] [--view NAME] [--agent ID] [--search] [--bus-seed FILE] [--geode-socket PATH --geode-purpose PURPOSE] <component.wasm>";
 
 /// Everything one capture run was asked for.
 struct Capture<'a> {

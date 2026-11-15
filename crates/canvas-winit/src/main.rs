@@ -552,6 +552,13 @@ impl CanvasGpuPresenter for FramePresenter {
 
 struct App {
     module: PathBuf,
+    /// The agent source the window was asked to attach (`demo`, `acp`, `all`).
+    agents: Option<String>,
+    /// The ACP command, when the source is `acp` or `all`.
+    acp_cmd: Option<String>,
+    /// The launch intent, from the first `--surface`.
+    agent: Option<String>,
+    view: Option<String>,
     tx: mpsc::Sender<CanvasFrame>,
     rx: mpsc::Receiver<CanvasFrame>,
     window: Option<Arc<Window>>,
@@ -680,6 +687,10 @@ impl App {
         let (width, height) = *extent.lock().expect("surface extent poisoned");
         eprintln!("canvas-winit: starting component at {width}x{height}");
         let module = self.module.clone();
+        let agents_choice = self.agents.clone();
+        let acp_cmd = self.acp_cmd.clone();
+        let bound_agent = self.agent.clone();
+        let bound_view = self.view.clone();
         let command = self.command.clone();
         let tx = self.tx.clone();
         let input = self.input.clone();
@@ -698,6 +709,16 @@ impl App {
                 let runtime = WebGpuRuntime::new()?.with_component_cache(component_cache(&module));
                 let catalog = SporeCatalog::new(&spores, launch)
                     .map_err(|error| anyhow::anyhow!("catalog: {error:?}"))?;
+                let agents = match agents_choice {
+                    Some(source) => soil::webgpu::agent_backend(
+                        &source,
+                        acp_cmd.as_deref(),
+                        bound_agent,
+                        bound_view,
+                    )
+                    .map_err(|error| anyhow::anyhow!("--agents: {error}"))?,
+                    None => Box::new(NoAgents),
+                };
                 let status = pollster::block_on(runtime.run_component_with(
                     &bytes,
                     HostSetup {
@@ -718,7 +739,7 @@ impl App {
                         // The storefront origin is already in the HTTP policy
                         // `build_http` constructs; this presenter has no agent
                         // cast of its own and needs no single-origin shorthand.
-                        agents: Box::new(NoAgents),
+                        agents,
                         store_origin: None,
                         terminal: Box::new(Terminals::new(80, 24, command)),
                         cursor: Some(Box::new(WindowCursor(window))),
@@ -1617,6 +1638,8 @@ fn main() -> Result<()> {
     let mut key = None;
     let mut keys = None;
     let mut surfaces: Vec<SurfaceSpec> = Vec::new();
+    let mut agents = None;
+    let mut acp_cmd = None;
     let mut command = None;
     let mut pointer = None;
     let mut click = None;
@@ -1656,6 +1679,14 @@ fn main() -> Result<()> {
                 let text = args.next().context("--surface needs WxH:view=..")?;
                 surfaces.push(SurfaceSpec::parse(&text)?);
             }
+            "--agents" => {
+                let value = args.next().context("--agents needs a source")?;
+                if !matches!(value.as_str(), "demo" | "acp" | "all") {
+                    anyhow::bail!("--agents: unknown source {value:?} (demo, acp, all)");
+                }
+                agents = Some(value);
+            }
+            "--acp-cmd" => acp_cmd = Some(args.next().context("--acp-cmd needs a command")?),
             "--key" => key = Some(args.next().context("--key needs a key name")?),
             "--keys" => keys = Some(args.next().context("--keys needs text")?),
             "--command" => command = Some(args.next().context("--command needs a command line")?),
@@ -1742,7 +1773,7 @@ fn main() -> Result<()> {
             }
             value if module.is_none() => module = Some(PathBuf::from(value)),
             _ => anyhow::bail!(
-                "usage: canvas-winit <module.wasm> [--capture FILE.rgba] [--frames N] [--surface WxH:view=NAME] [--key KEY] [--keys TEXT] [--command LINE] [--pointer X,Y] [--click X,Y] [--drag X1,Y1,X2,Y2] [--after MS] [--spores DIR] [--size WxH] [--allow-origin URL]... [--geode-socket PATH --geode-purpose PURPOSE] [--hue-bridge URL] [--records-root DIR]"
+                "usage: canvas-winit <module.wasm> [--capture FILE.rgba] [--frames N] [--surface WxH:view=NAME] [--agents demo|acp|all] [--acp-cmd CMD] [--key KEY] [--keys TEXT] [--command LINE] [--pointer X,Y] [--click X,Y] [--drag X1,Y1,X2,Y2] [--after MS] [--spores DIR] [--size WxH] [--allow-origin URL]... [--geode-socket PATH --geode-purpose PURPOSE] [--hue-bridge URL] [--records-root DIR]"
             ),
         }
     }
@@ -1769,7 +1800,7 @@ fn main() -> Result<()> {
             };
             if !candidate.is_file() {
                 anyhow::bail!(
-                    "usage: canvas-winit <module.wasm> [--capture FILE.rgba] [--frames N] [--surface WxH:view=NAME] [--key KEY] [--keys TEXT] [--command LINE] [--pointer X,Y] [--click X,Y] [--drag X1,Y1,X2,Y2] [--after MS] [--spores DIR] [--size WxH] [--allow-origin URL]... [--geode-socket PATH --geode-purpose PURPOSE] [--hue-bridge URL] [--vfs-root DIR] [--records-root DIR] [--records-book NAME --records-collection NAME] [--actor WHO]"
+                    "usage: canvas-winit <module.wasm> [--capture FILE.rgba] [--frames N] [--surface WxH:view=NAME] [--agents demo|acp|all] [--acp-cmd CMD] [--key KEY] [--keys TEXT] [--command LINE] [--pointer X,Y] [--click X,Y] [--drag X1,Y1,X2,Y2] [--after MS] [--spores DIR] [--size WxH] [--allow-origin URL]... [--geode-socket PATH --geode-purpose PURPOSE] [--hue-bridge URL] [--vfs-root DIR] [--records-root DIR] [--records-book NAME --records-collection NAME] [--actor WHO]"
                 );
             }
             candidate
@@ -1909,9 +1940,17 @@ fn main() -> Result<()> {
     if !size_given && let Some(surface) = surfaces.first() {
         logical_size = (surface.size.0 as f64, surface.size.1 as f64);
     }
+    let (bound_agent, bound_view) = surfaces
+        .first()
+        .map(|surface| (surface.agent.clone(), surface.view.clone()))
+        .unwrap_or_default();
     let (tx, rx) = mpsc::channel();
     let mut app = App {
         module,
+        agents,
+        acp_cmd,
+        agent: bound_agent,
+        view: bound_view,
         tx,
         rx,
         window: None,
