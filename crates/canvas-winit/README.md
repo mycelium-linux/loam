@@ -7,7 +7,7 @@ the future web bridge implement.
 ```sh
 canvas-winit <module.wasm>
 canvas-winit <module.wasm> --capture frame.rgba --frames 2 --key a --size 480x800
-canvas-winit <module.wasm> --surface 420x300:view=popup
+canvas-winit <module.wasm> --surface 430x680:view=grid --surface 420x300:view=popup
 canvas-winit <module.wasm> --agents acp --acp-cmd delta-acp
 canvas-winit <module.wasm> --agents all --acp-cmd ~/.local/bin/operator-acp \
   --hue-bridge http://192.168.10.15 \
@@ -34,6 +34,15 @@ and desktop layouts; `--surface WxH:view=NAME[:agent=ID]` says the same thing
 per window, and a typo in the view is a startup error instead of a window that
 quietly opens on the grid.
 
+`--surface` is repeatable: each one opens a window, and every window runs its own
+instance of the module. One process is one machine, though, so the module bytes,
+the agent roster, the bus and the grants are shared ([`Shared`]). That is what
+makes a popup work — the wall publishes an `agent.prompt.v1` notice and the
+popup, watching the same bus, opens on the agent that asked. The first surface
+owns dispatch; any other *watches* the session notices instead, because a task
+read by two windows would become two sessions. `--capture` belongs to the first
+surface: one file, one window.
+
 ## What it does
 
 - Runs the component in a `wasmtime` store through `soil::webgpu`, so the Spore
@@ -57,7 +66,7 @@ A Spore gets only the capabilities the presenter was configured to provide:
 - `soil:http` against `--allow-origin` origins plus the local storefront origin;
 - `soil:records` for the read-only `vitals.view` namespace when `--records-root`
 is set;
-- `soil:unibus` over one in-process bus per window, which is how a wall announces
+- `soil:unibus` over one in-process bus per process, which is how a wall announces
   a prompt and a popup in the same process reads it.
 
 `--hue-bridge URL` binds the stable `http://hue.local` capability to a bridge.
@@ -67,7 +76,8 @@ credential returns `unavailable`/`denied`, never an invented success.
 
 ## Status
 
-One window per process. Keyboard, pointer, scroll, cursor, catalog/launcher,
-the PTY-backed terminal, and the macOS bundle are live. The one-shot
-`soil-webgpu` command (`soil`'s `webgpu` feature) remains the capture/debug
-path.
+One process, one or more windows: `--surface` opens a window each, and every
+window runs its own instance of the module over a shared roster, bus and grant
+set. Keyboard, pointer, scroll, cursor, catalog/launcher, the PTY-backed
+terminal, and the macOS bundle are live. The one-shot `soil-webgpu` command
+(`soil`'s `webgpu` feature) remains the capture/debug path.

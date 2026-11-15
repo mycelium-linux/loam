@@ -217,8 +217,8 @@ way to say `soil:records` with fewer capabilities.
 
 | Promise | Today | Owner | Gap / next slice |
 |---|---|---|---|
-| Popup over other apps | `agent.prompt.v1` + `view=popup` works in-process | unibus | `soil:notify` host wiring for OS-level popups (S4) |
-| Many windows, one desktop | one window per process | host | `HashMap<WindowId, Surface>`; one engine, bus, store (S4) |
+| Popup over other apps | `agent.prompt.v1` + `view=popup`, now in the wall's own process | unibus | `soil:notify` host wiring for OS-level popups (S4) |
+| Many windows, one desktop | **wired**: `HashMap<WindowId, Surface>`, one roster, one bus, one store | host | terminal pane and command palette (S4) |
 
 ### Collaboration
 
@@ -397,7 +397,7 @@ not connected to the runner), **design** (no code path yet).
 |---|---|---|
 | colony -> host: present, input, cursor, clipboard | **wired** | `canvas-winit` and the `soil-webgpu` capture both present frames |
 | colony -> host: agents observe/control | **wired against the fixture** | `--agents demo`; the window passes `NoAgents`, so it draws the empty state |
-| colony -> host: unibus (notices, popup) | **wired** | `agent.prompt.v1` capture + seeded popup |
+| colony -> host: unibus (notices, popup) | **wired** | `agent.prompt.v1` reaches a popup in the same process: a wall + popup run of `canvas-winit` shows the wall's question in the popup |
 | colony -> host: records (threads) | **design** | colony imports only present/agents/unibus; no thread schema |
 | colony -> host: search | **linked, not imported** | the runner links `soil:search` + `mentions` and grants them with `--search`; colony does not import them yet |
 | colony -> host: notify / command | **optional / built, not linked** | the popup covers in-process notices, so `soil:notify` is not on the critical path; `soil-command` is still unlinked |
@@ -410,7 +410,7 @@ not connected to the runner), **design** (no code path yet).
 | mush -> vfs | **wired** | `mush --root`; VFS grants |
 | mush -> bob | **wired** | `bob-cargo` in host commands |
 | host -> vfs | **wired but ungranted** | `VfsHost` is linked; canvas-winit grants `--vfs-root` only |
-| one process, many surfaces | **design** | one window per process |
+| one process, many surfaces | **wired** | `--surface` twice opens two windows over one roster, bus and store; the first owns dispatch, the rest watch the notices |
 
 ### The shortest path to the diagram running
 
@@ -478,8 +478,9 @@ a comment in records.
 
 ### S4 — one process, many surfaces
 
-- `HashMap<WindowId, Surface>`: one engine, one bus, one agent backend, one
-  store. `--surface 420x300:view=popup` opens the popup from the wall process.
+- ~~`HashMap<WindowId, Surface>`~~: one engine, one bus, one agent backend, one
+  store. `--surface 420x300:view=popup` opens the popup from the wall process;
+  the wall's `agent.prompt.v1` becomes the popup's subject.
 - Terminal pane over a mush session; command palette over `soil:command`.
 
 **Acceptance:** wall + popup + terminal, one process, idle CPU near zero.

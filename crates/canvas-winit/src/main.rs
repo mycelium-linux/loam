@@ -6,7 +6,7 @@
 //! no hit-testing here — those belong to the Spore.
 
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     num::NonZeroU32,
     path::PathBuf,
     sync::{Arc, Mutex, mpsc},
@@ -26,9 +26,11 @@ use ::soil::http_host::{
 };
 use soil::webgpu::{
     CanvasFrame, CanvasGpuPresenter, CatalogEntry, CatalogError, CatalogHost, CatalogLaunched,
-    CatalogSurface, CatalogSurfaceKind, ClipboardHost, CursorHost, CursorStyle, HostSetup,
-    HttpAccess, InputEvent, InputKey, NoAgents, PointerButton, RecordsAccess, WebGpuRuntime,
+    Binding, CatalogSurface, CatalogSurfaceKind, ClipboardHost, CursorHost, CursorStyle,
+    DispatchRole, HostSetup, HttpAccess, InputEvent, InputKey, NoAgents, PointerButton,
+    RecordsAccess, SharedAgents, WebGpuRuntime,
 };
+use soil::unibus::Bus;
 use terminal::Terminals;
 use winit::{
     application::ApplicationHandler,
@@ -549,51 +551,20 @@ impl CanvasGpuPresenter for FramePresenter {
     }
 }
 
-struct App {
+/// What every surface in one process shares.
+///
+/// A window is a view of a machine, not a machine: the module, the roster, the
+/// bus and the grants belong to the process. Only the window, the software
+/// surface it blits through, and the clocks that decide when it repaints belong
+/// to one surface.
+#[derive(Clone)]
+struct Shared {
     module: PathBuf,
-    /// The agent source the window was asked to attach (`demo`, `acp`, `all`).
-    agents: Option<String>,
-    /// The ACP command, when the source is `acp` or `all`.
-    acp_cmd: Option<String>,
-    /// The edgerunner service a task notice dispatches to. `None` refuses every
-    /// task and announces the refusal on the bus.
+    /// The edgerunner service a task notice dispatches to.
     edgerunner: Option<String>,
-    /// The launch intent, from the first `--surface`.
-    agent: Option<String>,
-    view: Option<String>,
-    tx: mpsc::Sender<CanvasFrame>,
-    rx: mpsc::Receiver<CanvasFrame>,
-    window: Option<Arc<Window>>,
-    context: Option<SoftContext>,
-    surface: Option<SoftSurface>,
-    frame: Option<CanvasFrame>,
-    capture: Option<PathBuf>,
-    frames: usize,
-    frames_seen: usize,
-    input: Arc<Mutex<VecDeque<InputEvent>>>,
-    /// Last surface-space pointer position, so a click can name its location.
-    pointer: (f32, f32),
-    /// Device pixels per surface pixel. The window is sized in points; the Spore
-    /// lays out in points too, so pointer events are converted before they reach
-    /// it and a click lands where the user aimed.
-    scale: f32,
-    /// Surface extent shared with the presenter; the window owns it.
-    extent: Arc<Mutex<(u32, u32)>>,
-    /// The size the window last reported, and when. A resize is applied once
-    /// the drag goes quiet: reflowing the emulator and re-rendering the grid on
-    /// every mouse-move is what makes a drag feel broken.
-    pending_resize: Option<(std::time::Instant, (u32, u32))>,
-    /// Which splash to draw.
-    splash: Splash,
-    /// When the window opened, so the splash animation has a clock.
-    opened: std::time::Instant,
-    /// When the splash last painted, so it runs at a steady rate instead of
-    /// spinning the event loop for the whole start-up.
-    splashed: std::time::Instant,
+    /// What runs on the terminal's pty: a login shell when absent.
+    command: Option<String>,
     spores: Vec<PathBuf>,
-    /// Initial logical window size; captures use this to exercise the same
-    /// layouts a phone, flip, or desktop presents.
-    logical_size: (f64, f64),
     /// The HTTP grant passed to the Spore. `None` means no network at all.
     http: Option<HttpAccess>,
     /// The records grant passed to the Spore, when it was given a root.
@@ -604,59 +575,220 @@ struct App {
     actor: Option<String>,
     /// Grants a child Spore inherits when the launcher opens it.
     launch: LaunchConfig,
-    /// What runs on the terminal's pty: a login shell when absent.
-    command: Option<String>,
-    modifiers: ModifiersState,
-    started: bool,
+    /// One bus per process, shared by every window in it: the wall announces a
+    /// prompt and the popup it opens reads the same frame.
+    bus: Arc<dyn Bus>,
+    /// One roster per process, behind a lock: two windows must not each spawn
+    /// an adapter process for the same conversation.
+    roster: SharedAgents,
+}
+
+/// One window and the Spore instance that draws into it.
+struct Surface {
+    /// The size and view this window was asked for. Kept for messages: a
+    /// process with two windows has to say which one failed.
+    spec: SurfaceSpec,
+    window: Arc<Window>,
+    /// Kept alive for the window's life: a software surface borrows the display
+    /// the context opened.
+    _context: SoftContext,
+    surface: SoftSurface,
+    /// Surface extent shared with the presenter; the window owns it.
+    extent: Arc<Mutex<(u32, u32)>>,
+    tx: mpsc::Sender<CanvasFrame>,
+    rx: mpsc::Receiver<CanvasFrame>,
+    frame: Option<CanvasFrame>,
+    input: Arc<Mutex<VecDeque<InputEvent>>>,
+    /// Which splash to draw.
+    splash: Splash,
+    /// When the window opened, so the splash animation has a clock.
+    opened: std::time::Instant,
+    /// When the splash last painted, so it runs at a steady rate instead of
+    /// spinning the event loop for the whole start-up.
+    splashed: std::time::Instant,
     /// The size the last frame was painted at, so the window narrates a
     /// resolution change once instead of every frame.
     painted_size: Option<(u32, u32)>,
+    /// Device pixels per surface pixel. The window is sized in points; the Spore
+    /// lays out in points too, so pointer events are converted before they reach
+    /// it and a click lands where the user aimed.
+    scale: f32,
+    /// Last surface-space pointer position, so a click can name its location.
+    pointer: (f32, f32),
+    /// The size the window last reported, and when. A resize is applied once
+    /// the drag goes quiet: reflowing the emulator and re-rendering the grid on
+    /// every mouse-move is what makes a drag feel broken.
+    pending_resize: Option<(std::time::Instant, (u32, u32))>,
+    /// Where captured frames are written, when this surface was asked for any.
+    capture: Option<PathBuf>,
+    /// How many frames the capture wants before the app may exit.
+    frames: usize,
+    frames_seen: usize,
+    started: bool,
 }
 
-impl App {
+impl Surface {
+    /// Bring up one window and the software surface it presents through.
+    fn open(
+        event_loop: &ActiveEventLoop,
+        spec: &SurfaceSpec,
+        title: String,
+        splash: Splash,
+        input: Arc<Mutex<VecDeque<InputEvent>>>,
+        capture: Option<PathBuf>,
+        frames: usize,
+    ) -> Result<Self> {
+        let attributes = Window::default_attributes()
+            .with_title(title)
+            .with_inner_size(LogicalSize::new(spec.size.0 as f64, spec.size.1 as f64))
+            .with_resizable(true);
+        let window = Arc::new(event_loop.create_window(attributes).context("window")?);
+        let context = SoftContext::new(window.clone())
+            .map_err(|error| anyhow::anyhow!("softbuffer context: {error:?}"))?;
+        let surface = SoftSurface::new(&context, window.clone())
+            .map_err(|error| anyhow::anyhow!("softbuffer surface: {error:?}"))?;
+
+        // `surface.size()` is the coordinate space the Spore lays out in. It is
+        // the logical size of the window on every display, so a layout does not
+        // change shape when the window moves to a Retina screen; the presenter
+        // blits whatever resolution the Spore renders at.
+        let scale = window.scale_factor() as f32;
+        let inner = window.inner_size();
+        let extent = Arc::new(Mutex::new((
+            (inner.width as f32 / scale).round() as u32,
+            (inner.height as f32 / scale).round() as u32,
+        )));
+        let (tx, rx) = mpsc::channel();
+        let mut open = Self {
+            spec: spec.clone(),
+            window,
+            _context: context,
+            surface,
+            extent,
+            tx,
+            rx,
+            frame: None,
+            input,
+            splash,
+            opened: std::time::Instant::now(),
+            splashed: std::time::Instant::now(),
+            painted_size: None,
+            scale,
+            pointer: (0.0, 0.0),
+            pending_resize: None,
+            capture,
+            frames,
+            frames_seen: 0,
+            started: false,
+        };
+        let physical = LogicalSize::new(spec.size.0 as f64, spec.size.1 as f64)
+            .to_physical::<u32>(open.window.scale_factor());
+        open.paint_splash((physical.width, physical.height), 0.0);
+        Ok(open)
+    }
+
+    /// The view this window was asked to open on, for messages.
+    fn label(&self) -> &str {
+        self.spec.label()
+    }
+
     fn push(&self, event: InputEvent) {
         self.input
             .lock()
             .expect("input queue poisoned")
             .push_back(event);
         // The guest polls with a timeout; nothing else would wake it sooner.
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
+        self.window.request_redraw();
     }
 
-    /// Bring up another launcher. It is a separate app instance, so it gets its
-    /// own window without disturbing the Spore in this one.
-    fn open_launcher(&mut self) {
-        let Ok(executable) = std::env::current_exe() else {
+    /// Open this surface's Spore. One thread and one store per window: two
+    /// windows are two instances of the component, which is what lets a popup
+    /// and a wall hold different views of the same roster.
+    fn start(&mut self, shared: &Shared, dispatch: DispatchRole) {
+        if self.started {
             return;
-        };
-        let mut command = match bundle_root(&executable) {
-            // The launcher is the app bundle itself: no module argument means
-            // "show me the Spores".
-            Some(bundle) => {
-                let mut command = std::process::Command::new("/usr/bin/open");
-                command.arg("-n").arg(bundle);
-                command
-            }
-            // A bare binary has no launcher bundle to open; the shortcut is
-            // only meaningful for the app.
-            None => return,
-        };
-        if let Ok(mut child) = command.spawn() {
-            std::thread::spawn(move || {
-                let _ = child.wait();
-            });
         }
+        self.started = true;
+        let extent = self.extent.clone();
+        let (width, height) = *extent.lock().expect("surface extent poisoned");
+        eprintln!(
+            "canvas-winit: {}: starting component at {width}x{height}",
+            self.label()
+        );
+        let binding = Binding {
+            agent: self.spec.agent.clone(),
+            view: self.spec.view.clone(),
+        };
+        let label = self.label().to_string();
+        let shared = shared.clone();
+        let window = self.window.clone();
+        let tx = self.tx.clone();
+        let input = self.input.clone();
+        thread::spawn(move || {
+            let result = (|| -> Result<()> {
+                let bytes = std::fs::read(&shared.module)
+                    .with_context(|| format!("read {}", shared.module.display()))?;
+                // A Spore that has not changed should not be compiled again:
+                // the first start is seconds, every one after it is a read.
+                let runtime =
+                    WebGpuRuntime::new()?.with_component_cache(component_cache(&shared.module));
+                let catalog = SporeCatalog::new(&shared.spores, shared.launch.clone())
+                    .map_err(|error| anyhow::anyhow!("catalog: {error:?}"))?;
+                let status = pollster::block_on(runtime.run_component_with(
+                    &bytes,
+                    HostSetup {
+                        presenter: Box::new(FramePresenter {
+                            size: extent,
+                            tx,
+                            window: window.clone(),
+                        }),
+                        input,
+                        interactive: true,
+                        catalog: Box::new(catalog),
+                        http: shared.http.clone(),
+                        records: shared.records.clone(),
+                        vfs: shared.vfs_root.clone(),
+                        principal: shared
+                            .actor
+                            .clone()
+                            .map(|actor| ::soil::webgpu::Grants::new().actor(actor).principal)
+                            .flatten(),
+                        // One roster per process: a second window is another
+                        // view of the same agents, not another adapter.
+                        agents: Box::new(shared.roster.clone()),
+                        // The window named its view, so the intent is the
+                        // window's even though the roster is shared.
+                        binding: Some(binding),
+                        // The first window owns dispatch; a popup watches the
+                        // announcements the wall publishes.
+                        dispatch,
+                        // The storefront origin is already in the HTTP policy
+                        // `build_http` constructs; this presenter has no agent
+                        // cast of its own and needs no single-origin shorthand.
+                        store_origin: None,
+                        terminal: Box::new(Terminals::new(80, 24, shared.command.clone())),
+                        cursor: Some(Box::new(WindowCursor(window))),
+                        clipboard: Some(Box::new(SystemClipboard)),
+                        bus: shared.bus.clone(),
+                        // Search is granted by the desktop root once the thread
+                        // surface lands; the window does not guess at one.
+                        search: None,
+                    },
+                ))?;
+                eprintln!("canvas-winit: {label}: guest returned {status}");
+                anyhow::ensure!(status == 0, "guest returned status {status}");
+                Ok(())
+            })();
+            if let Err(error) = result {
+                eprintln!("canvas-winit: {error:#}");
+            }
+        });
     }
 
     /// Note the window's new size. The extent itself is committed once the drag
     /// has been still for a moment.
     fn resized(&mut self) {
-        let Some(window) = &self.window else {
-            return;
-        };
-        let size = window.inner_size();
+        let size = self.window.inner_size();
         let width = (size.width as f32 / self.scale).round() as u32;
         let height = (size.height as f32 / self.scale).round() as u32;
         if width == 0 || height == 0 {
@@ -678,101 +810,23 @@ impl App {
         if let Ok(mut extent) = self.extent.lock() {
             *extent = size;
         }
-        if let Some(window) = &self.window {
-            window.request_redraw();
+        self.window.request_redraw();
+    }
+
+    /// How soon this window needs the loop back, if at all.
+    fn next_wake(&self) -> Option<std::time::Duration> {
+        if self.frame.is_none() {
+            Some(std::time::Duration::from_millis(16))
+        } else if self.pending_resize.is_some() {
+            Some(std::time::Duration::from_millis(50))
+        } else {
+            None
         }
     }
 
-    fn start_component(&mut self, window: Arc<Window>) {
-        if self.started {
-            return;
-        }
-        self.started = true;
-        let extent = self.extent.clone();
-        let (width, height) = *extent.lock().expect("surface extent poisoned");
-        eprintln!("canvas-winit: starting component at {width}x{height}");
-        let module = self.module.clone();
-        let agents_choice = self.agents.clone();
-        let acp_cmd = self.acp_cmd.clone();
-        let edgerunner = self.edgerunner.clone();
-        let bound_agent = self.agent.clone();
-        let bound_view = self.view.clone();
-        let command = self.command.clone();
-        let tx = self.tx.clone();
-        let input = self.input.clone();
-        let spores = self.spores.clone();
-        let http = self.http.clone();
-        let records = self.records.clone();
-        let vfs_root = self.vfs_root.clone();
-        let actor = self.actor.clone();
-        let launch = self.launch.clone();
-        thread::spawn(move || {
-            let result = (|| -> Result<()> {
-                let bytes =
-                    std::fs::read(&module).with_context(|| format!("read {}", module.display()))?;
-                // A Spore that has not changed should not be compiled again:
-                // the first start is seconds, every one after it is a read.
-                let runtime = WebGpuRuntime::new()?.with_component_cache(component_cache(&module));
-                let catalog = SporeCatalog::new(&spores, launch)
-                    .map_err(|error| anyhow::anyhow!("catalog: {error:?}"))?;
-                let agents = match agents_choice {
-                    Some(source) => soil::webgpu::agent_backend(
-                        &source,
-                        acp_cmd.as_deref(),
-                        bound_agent,
-                        bound_view,
-                    )
-                    .map_err(|error| anyhow::anyhow!("--agents: {error}"))?,
-                    None => Box::new(NoAgents),
-                };
-                let status = pollster::block_on(runtime.run_component_with(
-                    &bytes,
-                    HostSetup {
-                        presenter: Box::new(FramePresenter {
-                            size: extent,
-                            tx,
-                            window: window.clone(),
-                        }),
-                        input,
-                        interactive: true,
-                        catalog: Box::new(catalog),
-                        http,
-                        records,
-                        vfs: vfs_root,
-                        principal: actor.map(|actor| {
-                            ::soil::webgpu::Grants::new().actor(actor).principal
-                        }).flatten(),
-                        // The storefront origin is already in the HTTP policy
-                        // `build_http` constructs; this presenter has no agent
-                        // cast of its own and needs no single-origin shorthand.
-                        agents,
-                        // One dispatcher per window process. Without an
-                        // edgerunner endpoint a task notice still fails loudly
-                        // on the bus instead of being dropped.
-                        sessions: soil::webgpu::session_creator(edgerunner.as_deref()),
-                        store_origin: None,
-                        terminal: Box::new(Terminals::new(80, 24, command)),
-                        cursor: Some(Box::new(WindowCursor(window))),
-                        clipboard: Some(Box::new(SystemClipboard)),
-                        // One bus per process, shared by every window in it:
-                        // the wall announces a prompt and a popup reads it.
-                        bus: soil::webgpu::in_process_bus(),
-                        // Search is granted by the desktop root once the thread
-                        // surface lands; the window does not guess at one.
-                        search: None,
-                    },
-                ))?;
-                eprintln!("canvas-winit: guest returned {status}");
-                anyhow::ensure!(status == 0, "guest returned status {status}");
-                Ok(())
-            })();
-            if let Err(error) = result {
-                eprintln!("canvas-winit: {error:#}");
-            }
-        });
-    }
-
-    fn take_frames(&mut self, event_loop: &ActiveEventLoop) {
+    /// Take every frame the Spore has published. Returns true when this
+    /// surface's capture is complete, which ends the run.
+    fn take_frames(&mut self) -> bool {
         while let Ok(frame) = self.rx.try_recv() {
             if self.capture.is_some() {
                 eprintln!("canvas-winit: frame {}x{}", frame.width, frame.height);
@@ -794,9 +848,10 @@ impl App {
             self.frames_seen += 1;
             self.frame = Some(frame);
             if self.frames_seen >= self.frames {
-                event_loop.exit();
+                return true;
             }
         }
+        false
     }
 
     /// What the window shows until the Spore's first frame arrives.
@@ -806,16 +861,13 @@ impl App {
     /// wait with a lissajous pair the way the fungus draws itself, so the pause
     /// reads as starting rather than as hung.
     fn paint_splash(&mut self, (width, height): (u32, u32), phase: f32) {
-        let Some(surface) = self.surface.as_mut() else {
-            return;
-        };
         let (Some(width), Some(height)) = (NonZeroU32::new(width), NonZeroU32::new(height)) else {
             return;
         };
-        if surface.resize(width, height).is_err() {
+        if self.surface.resize(width, height).is_err() {
             return;
         }
-        let Ok(mut buffer) = surface.buffer_mut() else {
+        let Ok(mut buffer) = self.surface.buffer_mut() else {
             return;
         };
         let (width_px, height_px) = (width.get(), height.get());
@@ -934,18 +986,14 @@ impl App {
     }
 
     fn paint(&mut self) {
-        let (Some(surface), Some(frame), Some(window)) = (
-            self.surface.as_mut(),
-            self.frame.as_ref(),
-            self.window.as_ref(),
-        ) else {
+        let Some(frame) = self.frame.as_ref() else {
             return;
         };
         // The window decides the resolution; the Spore decides the layout. A
         // frame rendered at a different pixel count than the window is scaled
         // here rather than cropped, so a Spore is never clipped by a display it
         // did not know about.
-        let size = window.inner_size();
+        let size = self.window.inner_size();
         let (Some(width), Some(height)) =
             (NonZeroU32::new(size.width), NonZeroU32::new(size.height))
         else {
@@ -968,11 +1016,11 @@ impl App {
             );
             scaled.as_raw().as_slice()
         };
-        if let Err(error) = surface.resize(width, height) {
+        if let Err(error) = self.surface.resize(width, height) {
             eprintln!("canvas-winit: resize: {error}");
             return;
         }
-        let mut buffer = match surface.buffer_mut() {
+        let mut buffer = match self.surface.buffer_mut() {
             Ok(buffer) => buffer,
             Err(error) => {
                 eprintln!("canvas-winit: buffer: {error}");
@@ -989,95 +1037,147 @@ impl App {
             // and the terminal that started it is not a frame log.
             self.painted_size = Some((size.width, size.height));
             eprintln!(
-                "canvas-winit: painted {}x{} into {}x{}",
-                frame.width, frame.height, size.width, size.height
+                "canvas-winit: {}: painted {}x{} into {}x{}",
+                self.label(),
+                frame.width,
+                frame.height,
+                size.width,
+                size.height
             );
         }
     }
 }
 
+/// Bring up another launcher. It is a separate app instance, so it gets its own
+/// window without disturbing the surfaces in this one.
+fn open_launcher() {
+    let Ok(executable) = std::env::current_exe() else {
+        return;
+    };
+    let Some(bundle) = bundle_root(&executable) else {
+        // A bare binary has no launcher bundle to open; the shortcut is only
+        // meaningful for the app.
+        return;
+    };
+    // The launcher is the app bundle itself: no module argument means "show me
+    // the Spores".
+    let mut command = std::process::Command::new("/usr/bin/open");
+    command.arg("-n").arg(bundle);
+    if let Ok(mut child) = command.spawn() {
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+    }
+}
+
+struct App {
+    shared: Shared,
+    /// Every surface this process was asked to open, in order. The first owns
+    /// dispatch; the rest watch the announcements it publishes.
+    specs: Vec<SurfaceSpec>,
+    surfaces: HashMap<WindowId, Surface>,
+    splash: Splash,
+    modifiers: ModifiersState,
+    /// Input scripted on the command line, delivered to the first surface.
+    seed: Option<Arc<Mutex<VecDeque<InputEvent>>>>,
+    /// Where the first surface writes frames, and how many it writes before
+    /// the run ends. One capture belongs to one window; two would race for the
+    /// same path.
+    capture: Option<PathBuf>,
+    frames: usize,
+}
+
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window.is_some() {
+        if !self.surfaces.is_empty() {
             return;
         }
-        let attributes = Window::default_attributes()
-            .with_title(window_title(&self.module))
-            .with_inner_size(LogicalSize::new(self.logical_size.0, self.logical_size.1))
-            .with_resizable(true);
-        let window = match event_loop.create_window(attributes) {
-            Ok(window) => Arc::new(window),
-            Err(error) => {
-                eprintln!("canvas-winit: window: {error}");
-                event_loop.exit();
-                return;
-            }
-        };
-        let context = match SoftContext::new(window.clone()) {
-            Ok(context) => context,
-            Err(error) => {
-                eprintln!("canvas-winit: softbuffer context: {error}");
-                event_loop.exit();
-                return;
-            }
-        };
-        let surface = match SoftSurface::new(&context, window.clone()) {
-            Ok(surface) => surface,
-            Err(error) => {
-                eprintln!("canvas-winit: softbuffer surface: {error}");
-                event_loop.exit();
-                return;
-            }
-        };
-
-        // `surface.size()` is the coordinate space the Spore lays out in. It is
-        // the logical size of the window on every display, so a layout does not
-        // change shape when the window moves to a Retina screen; the presenter
-        // blits whatever resolution the Spore renders at.
-        self.scale = window.scale_factor() as f32;
-        let inner = window.inner_size();
-        if let Ok(mut extent) = self.extent.lock() {
-            *extent = (
-                (inner.width as f32 / self.scale).round() as u32,
-                (inner.height as f32 / self.scale).round() as u32,
-            );
+        for (index, spec) in self.specs.clone().into_iter().enumerate() {
+            let input = match index {
+                0 => self
+                    .seed
+                    .take()
+                    .unwrap_or_else(|| Arc::new(Mutex::new(VecDeque::new()))),
+                _ => Arc::new(Mutex::new(VecDeque::new())),
+            };
+            // A capture is one file for one window; asking two surfaces to
+            // write the same frames would only race them.
+            let capture = (index == 0).then(|| self.capture.clone()).flatten();
+            // The frame budget belongs to the capture, not to every window: a
+            // popup that paints faster must not end a wall's capture early.
+            let frames = if index == 0 { self.frames } else { usize::MAX };
+            let title = match &spec.view {
+                Some(view) => format!("{} · {view}", window_title(&self.shared.module)),
+                None => window_title(&self.shared.module),
+            };
+            let mut surface = match Surface::open(
+                event_loop,
+                &spec,
+                title,
+                self.splash,
+                input,
+                capture,
+                frames,
+            ) {
+                Ok(surface) => surface,
+                Err(error) => {
+                    eprintln!("canvas-winit: {}: {error:#}", spec.label());
+                    event_loop.exit();
+                    return;
+                }
+            };
+            let dispatch = if index == 0 {
+                soil::webgpu::session_role(self.shared.edgerunner.as_deref())
+            } else {
+                soil::webgpu::watch_only()
+            };
+            surface.start(&self.shared, dispatch);
+            let id = surface.window.id();
+            self.surfaces.insert(id, surface);
         }
-        let physical = LogicalSize::new(self.logical_size.0, self.logical_size.1)
-            .to_physical::<u32>(window.scale_factor());
-        self.window = Some(window);
-        self.context = Some(context);
-        self.surface = Some(surface);
-        self.paint_splash((physical.width, physical.height), 0.0);
-        self.start_component(self.window.as_ref().unwrap().clone());
-        warm_installed(&self.spores, &self.module);
+        warm_installed(&self.shared.spores, &self.shared.module);
     }
 
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
-        _window_id: WindowId,
+        window_id: WindowId,
         event: WindowEvent,
     ) {
+        if matches!(event, WindowEvent::CloseRequested) {
+            // One window closing is not the app closing while another is open.
+            self.surfaces.remove(&window_id);
+            if self.surfaces.is_empty() {
+                event_loop.exit();
+            }
+            return;
+        }
+        if let WindowEvent::ModifiersChanged(modifiers) = event {
+            self.modifiers = modifiers.state();
+            return;
+        }
+        let Some(surface) = self.surfaces.get_mut(&window_id) else {
+            return;
+        };
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::RedrawRequested => {
-                self.settle_resize();
-                self.take_frames(event_loop);
-                if self.frame.is_some() {
-                    self.paint();
-                } else if let Some(window) = &self.window {
+                surface.settle_resize();
+                if surface.take_frames() {
+                    event_loop.exit();
+                    return;
+                }
+                if surface.frame.is_some() {
+                    surface.paint();
+                } else {
                     // Sixty frames a second: the sweep is the only thing
                     // moving, and a stepping animation reads as a stutter.
-                    if self.splashed.elapsed() >= std::time::Duration::from_millis(16) {
-                        self.splashed = std::time::Instant::now();
-                        let size = window.inner_size();
-                        let phase = self.opened.elapsed().as_secs_f32();
-                        self.paint_splash((size.width, size.height), phase);
+                    if surface.splashed.elapsed() >= std::time::Duration::from_millis(16) {
+                        surface.splashed = std::time::Instant::now();
+                        let size = surface.window.inner_size();
+                        let phase = surface.opened.elapsed().as_secs_f32();
+                        surface.paint_splash((size.width, size.height), phase);
                     }
                 }
-            }
-            WindowEvent::ModifiersChanged(modifiers) => {
-                self.modifiers = modifiers.state();
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.state == ElementState::Pressed
@@ -1087,12 +1187,12 @@ impl ApplicationHandler for App {
                         WinitKey::Character(ref text) if matches!(text.as_str(), "o" | "l")
                     )
                 {
-                    self.open_launcher();
+                    open_launcher();
                 }
                 if event.state == ElementState::Pressed {
                     let key = key_name(&event.logical_key);
                     let text = event.text.as_ref().map(|text| text.to_string());
-                    self.push(InputEvent::Key(InputKey {
+                    surface.push(InputEvent::Key(InputKey {
                         key,
                         text,
                         pressed: true,
@@ -1104,34 +1204,32 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                self.scale = scale_factor as f32;
-                self.resized();
+                surface.scale = scale_factor as f32;
+                surface.resized();
             }
-            WindowEvent::Resized(_) => self.resized(),
+            WindowEvent::Resized(_) => surface.resized(),
             WindowEvent::CursorMoved { position, .. } => {
-                self.pointer = (
-                    (position.x as f32) / self.scale,
-                    (position.y as f32) / self.scale,
+                surface.pointer = (
+                    (position.x as f32) / surface.scale,
+                    (position.y as f32) / surface.scale,
                 );
-                self.push(InputEvent::Moved {
-                    x: self.pointer.0,
-                    y: self.pointer.1,
+                surface.push(InputEvent::Moved {
+                    x: surface.pointer.0,
+                    y: surface.pointer.1,
                 });
             }
             WindowEvent::MouseInput { state, button, .. } => {
-                if state == ElementState::Pressed
-                    && let Some(window) = &self.window
-                {
+                if state == ElementState::Pressed {
                     // A click on a terminal means "type here". The window has to
                     // be key before any of that reaches the Spore.
-                    window.focus_window();
+                    surface.window.focus_window();
                 }
                 let Some(button) = pointer_button(button) else {
                     return;
                 };
-                self.push(InputEvent::Button {
-                    x: self.pointer.0,
-                    y: self.pointer.1,
+                surface.push(InputEvent::Button {
+                    x: surface.pointer.0,
+                    y: surface.pointer.1,
                     button,
                     pressed: state == ElementState::Pressed,
                 });
@@ -1143,9 +1241,9 @@ impl ApplicationHandler for App {
                     MouseScrollDelta::LineDelta(_, vertical) => vertical,
                     MouseScrollDelta::PixelDelta(position) => (position.y as f32) / 20.0,
                 };
-                self.push(InputEvent::Scrolled {
-                    x: self.pointer.0,
-                    y: self.pointer.1,
+                surface.push(InputEvent::Scrolled {
+                    x: surface.pointer.0,
+                    y: surface.pointer.1,
                     lines,
                 });
             }
@@ -1154,31 +1252,32 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        self.settle_resize();
-        // Come back on a clock while there is something to animate: the splash
-        // before the first frame, and a resize settling. With a frame on screen
-        // and nothing moving, wait for an event instead of spinning.
-        let wake = if self.frame.is_none() {
-            Some(std::time::Duration::from_millis(16))
-        } else if self.pending_resize.is_some() {
-            Some(std::time::Duration::from_millis(50))
-        } else {
-            None
-        };
+        let mut wake: Option<std::time::Duration> = None;
+        for surface in self.surfaces.values_mut() {
+            surface.settle_resize();
+            // Come back on a clock while there is something to animate on any
+            // window: the splash before its first frame, and a resize settling.
+            // With a frame on every window and nothing moving, wait for an
+            // event instead of spinning.
+            if let Some(next) = surface.next_wake() {
+                wake = Some(wake.map_or(next, |current| current.min(next)));
+            }
+            let before = surface.frames_seen;
+            if surface.take_frames() {
+                event_loop.exit();
+                return;
+            }
+            if surface.frames_seen > before || surface.frame.is_none() {
+                // Before the first frame the splash is the only thing on screen,
+                // so it keeps its own clock; afterwards a redraw means a frame.
+                surface.window.request_redraw();
+            }
+        }
         match wake {
             Some(after) => event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
                 std::time::Instant::now() + after,
             )),
             None => event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait),
-        }
-        let before = self.frames_seen;
-        self.take_frames(event_loop);
-        if let Some(window) = &self.window
-            && (self.frames_seen > before || self.frame.is_none())
-        {
-            // Before the first frame the splash is the only thing on screen, so
-            // it keeps its own clock; afterwards a redraw means a new frame.
-            window.request_redraw();
         }
     }
 }
@@ -1567,6 +1666,12 @@ pub struct SurfaceSpec {
 }
 
 impl SurfaceSpec {
+    /// What to call this surface in a message: the view it opens on, or the
+    /// wall when it was not told.
+    pub fn label(&self) -> &str {
+        self.view.as_deref().unwrap_or("wall")
+    }
+
     /// `420x300:view=popup:agent=op-7f3a`, or `430x680` for a plain wall.
     pub fn parse(text: &str) -> Result<Self> {
         let mut parts = text.split(':');
@@ -1956,46 +2061,29 @@ fn main() -> Result<()> {
         (Some(_), None) => anyhow::bail!("--records-book needs --records-root"),
         (None, None) => None,
     };
-    if !size_given && let Some(surface) = surfaces.first() {
-        logical_size = (surface.size.0 as f64, surface.size.1 as f64);
+    // A `--surface` names a window; `--size` still fits the one-window case,
+    // and wins over the first `--surface` when both were given.
+    let mut specs = surfaces;
+    if specs.is_empty() {
+        specs.push(SurfaceSpec {
+            size: (logical_size.0 as u32, logical_size.1 as u32),
+            view: None,
+            agent: None,
+        });
+    } else if size_given {
+        specs[0].size = (logical_size.0 as u32, logical_size.1 as u32);
     }
-    let (bound_agent, bound_view) = surfaces
-        .first()
-        .map(|surface| (surface.agent.clone(), surface.view.clone()))
-        .unwrap_or_default();
-    let (tx, rx) = mpsc::channel();
-    let mut app = App {
+    // One adapter for the process. A window's intent is its own, so the roster
+    // is built without one; two windows then read one set of sessions.
+    let roster = match agents.as_deref() {
+        Some(source) => soil::webgpu::agent_backend(source, acp_cmd.as_deref(), None, None)
+            .map_err(|error| anyhow::anyhow!("--agents: {error}"))?,
+        None => Box::new(NoAgents),
+    };
+    let shared = Shared {
         module,
-        agents,
-        acp_cmd,
         edgerunner,
-        agent: bound_agent,
-        view: bound_view,
-        tx,
-        rx,
-        window: None,
-        context: None,
-        surface: None,
-        frame: None,
-        capture,
-        frames,
-        frames_seen: 0,
-        input,
-        pointer: (0.0, 0.0),
-        scale: 1.0,
-        extent: Arc::new(Mutex::new((logical_size.0 as u32, logical_size.1 as u32))),
-        logical_size,
-        pending_resize: None,
-        splash,
-        opened: std::time::Instant::now(),
-        splashed: std::time::Instant::now(),
-        modifiers: ModifiersState::default(),
         command,
-        http,
-        records,
-        vfs_root,
-        actor,
-        launch,
         spores: spores.map(|path| vec![path]).unwrap_or_else(|| {
             let home = std::env::var_os("HOME")
                 .map(PathBuf::from)
@@ -2012,8 +2100,25 @@ fn main() -> Result<()> {
             }
             roots
         }),
-        started: false,
-        painted_size: None,
+        http,
+        records,
+        vfs_root,
+        actor,
+        launch,
+        // One bus per process, shared by every window in it: the wall announces
+        // a prompt and the popup it opens reads the same frame.
+        bus: soil::webgpu::in_process_bus(),
+        roster: SharedAgents::new(roster),
+    };
+    let mut app = App {
+        shared,
+        specs,
+        surfaces: HashMap::new(),
+        splash,
+        modifiers: ModifiersState::default(),
+        seed: Some(input),
+        capture,
+        frames,
     };
     let event_loop = EventLoop::new()?;
     event_loop.run_app(&mut app)?;
