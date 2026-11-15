@@ -159,6 +159,56 @@ The inspection server exposes the same resolver:
 GET /api/suggest?q=ada&kinds=person,account&limit=10
 ```
 
+## Modes, and what "search" means
+
+`soil:search` is retrieval, not an answer: every hit is a locator plus a
+snippet. There is no generation step. A RAG-style surface would take these hits,
+fetch the chunks through `soil:vfs`/`soil:records`, and ask `soil:inference` —
+that is a separate composition, not something search does.
+
+| Mode | Files | Records | Backend |
+|---|---|---|---|
+| `substring` | yes | yes | linear scan over indexed text / `search_books` |
+| `fuzzy` | yes | no | path and text scoring |
+| `full-text` | yes | no | FTS5 `chunks_fts`, ranked by `bm25` |
+| `regex` | yes | no | in-process `regex` scan; `tgrep` when the host granted a binary |
+| `semantic` | yes | no | cosine over chunk vectors; needs an embedder |
+
+Semantic search is opt-in. `VfsHost::with_embeddings` wires a provider, the
+indexer embeds missing chunks in batches of 64, and `knn_search` returns the
+nearest chunk paths. The runner does **not** grant an embedder yet, so
+`--search` in `soil-webgpu` is substring/fuzzy/full-text/regex; a semantic query
+answers `unsupported`. Records are searched through `fungos-records`'
+`search_books`; they are not embedded.
+
+`tgrep` is Microsoft's trigram-index grep, not an in-process trigram index. The
+host shells out to an explicit binary (`--json`, host-owned root), parses
+ripgrep-shaped matches and caps the page. It is implemented and tested, but no
+production host wires it yet: `with_tgrep` appears only in tests, and neither
+the inspection binary nor the runner exposes a flag for it.
+
+## Caching
+
+The VFS index is the cache. `VfsHost::open` opens
+`<root>/.fungos/soil-index.sqlite3` and calls `refresh` once; refresh hashes the
+entry list and is a no-op when the tree has not moved. When it has moved, the
+rebuild is **whole-index**: entries, extracted text, chunk rows, the FTS5 table
+and every vector are deleted and rewritten. There is no per-file delta and no
+per-chunk vector reuse, so one edit invalidates the embeddings too, and a
+semantic host re-embeds the workspace in 64-chunk batches.
+
+During a session the index does not refresh per query; a Spore calls
+`soil:search.refresh` (or `soil:index.refresh`) after writes. The host's other
+sources (git, spores, applications, peers, services) are in-memory snapshots
+reloaded on `refresh` or when their file mtime moves; records are read from the
+book on every query. The MRU cache is a small JSON file (`--mru FILE` in the
+inspection binary; in-memory in the runner) used only to tilt ranking.
+
+There is no query-result cache. A full-text query costs one FTS5 `MATCH`;
+substring, fuzzy and regex scan every indexed node; semantic is brute-force
+cosine over every vector for the model. `Page.generation` names the index that
+produced the page.
+
 ## Host behavior
 
 `crates/soil/src/search_host` currently composes:
