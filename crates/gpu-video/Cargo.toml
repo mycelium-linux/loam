@@ -1,0 +1,17 @@
+[package]
+name = "gpu-video"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+wgpu = { version = "27", default-features = false, features = ["wgsl", "metal", "vulkan", "gles"] }
+
+[dev-dependencies]
+# the doctest names wgpu types in its signature
+wgpu = { version = "27", default-features = false }
+
+[lints]
+workspace = true

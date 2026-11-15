@@ -2864,6 +2864,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "gpu-video"
+version = "0.1.0"
+dependencies = [
+ "wgpu",
+]
+
+[[package]]
 name = "h2"
 version = "0.4.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
