@@ -42,5 +42,9 @@ jobs:
       - name: Clippy
         run: cargo clippy -p soil -p soil-agent-host --all-targets --locked -- -D warnings
 
+      # `soil`'s own suite joins this step once it is green: three
+      # `records_host` tests (upsert_get_scan_and_delete and two neighbours)
+      # fail in every checkout today. That is a bug to fix, not a hole to widen
+      # the gate around.
       - name: Test
         run: cargo test -p soil-agent-host --locked
