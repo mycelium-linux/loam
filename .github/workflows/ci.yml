@@ -1,0 +1,46 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: soil-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+
+      # A path dependency that escapes this checkout is a sibling worktree that
+      # happened to exist on the machine the branch was written on: the tree
+      # compiles there and nowhere else. Cheap and offline, so it runs before
+      # anything that has to compile.
+      - name: Path dependencies stay inside the checkout
+        run: scripts/check-path-deps.sh
+
+      # The lint gate is the dead-code gate. `dead_code`, `unused_imports`, and
+      # the rest of the unused family are warnings, `-D warnings` makes them
+      # failures, and the fix is a delete rather than a reword.
+      #
+      # The gate names crates instead of taking the whole workspace because the
+      # workspace does not build from a bare checkout yet: canvas-winit and
+      # ghostty-vt-sys need a pinned Zig this runner does not have, and mush and
+      # soil-notify-host embed a prebuilt Spore wasm. A gate that cannot run is
+      # worse than no gate, so a crate joins this list in the change that makes
+      # it buildable here.
+      - name: Clippy
+        run: cargo clippy -p soil -p soil-agent-host --all-targets --locked -- -D warnings
+
+      - name: Test
+        run: cargo test -p soil-agent-host --locked
