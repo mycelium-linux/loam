@@ -17,6 +17,7 @@
 //! there is no product that ships without them.
 
 pub mod http_host;
+pub mod mesh_identity;
 #[cfg(feature = "mycelium")]
 pub mod mycelium;
 pub mod records_host;

@@ -48,6 +48,10 @@ unibus = { git = "https://github.com/fungOS-linux/unibus.git", rev = "8bf8f79", 
 unibus-sdk = { git = "https://github.com/fungOS-linux/unibus.git", rev = "8bf8f79", optional = true }
 url = "2"
 ureq = { version = "2", features = ["json"] }
+# Presenting this node's mesh identity to an allowlisted origin. Same rustls
+# build ureq already links, with the `ring` provider the workspace already uses.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls-pemfile = "2"
 wasmtime = { version = "50", features = ["anyhow"] }
 wasmtime-wasi = { version = "50", default-features = false, features = ["p2"] }
 wasmtime-wasi-http = { version = "50", default-features = false, features = ["default-send-request", "p2"] }

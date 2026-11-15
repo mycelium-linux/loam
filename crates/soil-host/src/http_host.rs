@@ -95,6 +95,10 @@ pub struct HttpPolicy {
     origins: BTreeSet<String>,
     max_bytes: usize,
     timeout: Duration,
+    /// Origins that get this node's mesh identity presented to them. A subset
+    /// of `origins`: naming one here is a second decision, not a wider
+    /// allowlist, and an origin that is not allowed at all cannot be named.
+    mesh_origins: BTreeSet<String>,
 }
 
 impl HttpPolicy {
@@ -114,7 +118,32 @@ impl HttpPolicy {
             origins: allowed,
             max_bytes,
             timeout,
+            mesh_origins: BTreeSet::new(),
         })
+    }
+
+    /// Ask the transport to present this node's enrolment at `origin`.
+    ///
+    /// The origin has to be allowed already: identity is not a way to reach a
+    /// host the policy refused, only a way to answer one that asked who is
+    /// calling.
+    pub fn require_mesh_identity(&mut self, origin: &str) -> Result<()> {
+        let origin = normalize_origin(origin)?;
+        if !self.origins.contains(&origin) {
+            anyhow::bail!(
+                "{origin} must be allowed before it can require an identity; add it \
+                 to the origin allowlist first"
+            );
+        }
+        self.mesh_origins.insert(origin);
+        Ok(())
+    }
+
+    /// The identity a request to `origin` is made under, if any.
+    pub fn client_identity_for(&self, origin: &str) -> Option<ClientIdentity> {
+        self.mesh_origins
+            .contains(origin)
+            .then_some(ClientIdentity::Mesh)
     }
 
     pub fn allow(&mut self, origin: &str) -> Result<()> {
@@ -165,6 +194,17 @@ impl CredentialProvider for BearerCredential {
     }
 }
 
+/// A client identity the host holds and presents on the Spore's behalf.
+///
+/// The guest cannot name a certificate, a key, or a path — a Spore that could
+/// would be a way to exfiltrate the node's identity. It can only cause the host
+/// to use one, and only for an origin the policy named.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClientIdentity {
+    /// This node's Mycelium enrolment: `pki/node.pem` and its key.
+    Mesh,
+}
+
 /// One host-internal transport request. The Spore never sees this shape.
 #[derive(Clone, Debug)]
 pub struct TransportRequest {
@@ -174,6 +214,9 @@ pub struct TransportRequest {
     pub body: Option<Vec<u8>>,
     pub timeout: Duration,
     pub max_bytes: usize,
+    /// A certificate to present to the server, when the policy named one for
+    /// this origin. `None` means plain server-authenticated TLS.
+    pub client_identity: Option<ClientIdentity>,
 }
 
 impl TransportRequest {
@@ -222,6 +265,7 @@ impl TransportRequest {
             body,
             timeout,
             max_bytes,
+            client_identity: None,
         })
     }
 }
@@ -291,10 +335,17 @@ pub struct DirectTransport;
 
 impl HttpTransport for DirectTransport {
     fn fetch(&self, request: &TransportRequest) -> Result<TransportResponse, TransportError> {
-        let agent = ureq::AgentBuilder::new()
+        let mut builder = ureq::AgentBuilder::new()
             .timeout(request.timeout)
-            .redirects(0)
-            .build();
+            .redirects(0);
+        if let Some(identity) = request.client_identity {
+            let config = match identity {
+                ClientIdentity::Mesh => crate::mesh_identity::client_config(),
+            }
+            .map_err(|_| TransportError::Tls)?;
+            builder = builder.tls_config(config);
+        }
+        let agent = builder.build();
         let mut call = agent.request(method_name(request.method), request.url.as_str());
         for (name, value) in &request.headers {
             call = call.set(name, value);
@@ -493,6 +544,7 @@ pub fn perform(
         body: request.body,
         timeout: Duration::from_millis(request.timeout_ms as u64),
         max_bytes: request.max_bytes as usize,
+        client_identity: policy.client_identity_for(&origin),
     };
     let response = transport
         .fetch(&transport_request)
@@ -704,6 +756,88 @@ mod tests {
     }
 
     #[test]
+    fn an_allowed_origin_can_require_the_mesh_identity() {
+        let mut policy = HttpPolicy::new(
+            ["https://bob.example:8791".to_string()],
+            1024,
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        assert_eq!(policy.client_identity_for("https://bob.example:8791"), None);
+        policy
+            .require_mesh_identity("https://bob.example:8791")
+            .unwrap();
+        assert_eq!(
+            policy.client_identity_for("https://bob.example:8791"),
+            Some(ClientIdentity::Mesh)
+        );
+        // Another allowed origin, and an origin nobody allowed, both stay plain.
+        assert_eq!(
+            policy.client_identity_for("https://elsewhere.example"),
+            None
+        );
+    }
+
+    #[test]
+    fn an_identity_cannot_widen_the_allowlist() {
+        let mut policy = HttpPolicy::new(
+            ["https://bob.example:8791".to_string()],
+            1024,
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        let error = policy
+            .require_mesh_identity("https://elsewhere.example")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("must be allowed"), "{error}");
+        assert_eq!(
+            policy.client_identity_for("https://elsewhere.example"),
+            None
+        );
+    }
+
+    #[test]
+    fn the_policy_decides_the_identity_the_transport_is_given() {
+        struct Recorder(mpsc::Sender<Option<ClientIdentity>>);
+        impl HttpTransport for Recorder {
+            fn fetch(
+                &self,
+                request: &TransportRequest,
+            ) -> Result<TransportResponse, TransportError> {
+                self.0.send(request.client_identity).unwrap();
+                Ok(TransportResponse {
+                    status: 200,
+                    final_url: request.url.to_string(),
+                    headers: vec![],
+                    body: b"{\"members\":[]}".to_vec(),
+                })
+            }
+        }
+
+        let origin = "https://bob.example:8791".to_string();
+        let mut policy = HttpPolicy::new([origin.clone()], 1024, Duration::from_secs(5)).unwrap();
+        policy.require_mesh_identity(&origin).unwrap();
+        let (tx, rx) = mpsc::channel();
+        perform(
+            &policy,
+            &NoCredentials,
+            &Recorder(tx),
+            Request {
+                url: format!("{origin}/builders"),
+                method: Method::Get,
+                headers: vec![],
+                body: None,
+                credential: None,
+                max_bytes: 1024,
+                timeout_ms: 1000,
+            },
+        )
+        .unwrap();
+        assert_eq!(rx.recv().unwrap(), Some(ClientIdentity::Mesh));
+    }
+
+    #[test]
     fn fetches_allowlisted_origin_and_bounds_body() {
         let (origin, _rx, handle) = serve_once("hello", None);
         let policy = HttpPolicy::new([origin.clone()], 1024, Duration::from_secs(5)).unwrap();
@@ -824,6 +958,7 @@ mod tests {
             body: None,
             timeout: Duration::from_secs(1),
             max_bytes: 64,
+            client_identity: None,
         };
         let answer = |from: &'static str| {
             Arc::new(Always(Ok(TransportResponse {
