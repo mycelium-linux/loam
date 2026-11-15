@@ -204,7 +204,7 @@ fn main() -> ExitCode {
             "--search" => search = true,
             "--view" => {
                 let Some(value) = args.next() else {
-                    eprintln!("--view requires board|roster|stage|focus|popup");
+                    eprintln!("--view requires board|roster|stage|focus|grid|thread|popup");
                     return ExitCode::FAILURE;
                 };
                 view = Some(value);

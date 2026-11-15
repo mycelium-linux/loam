@@ -1706,7 +1706,7 @@ impl SurfaceSpec {
 fn known_view(name: &str) -> bool {
     matches!(
         name,
-        "grid" | "board" | "roster" | "stage" | "focus" | "popup"
+        "grid" | "board" | "roster" | "stage" | "focus" | "thread" | "popup"
     )
 }
 
