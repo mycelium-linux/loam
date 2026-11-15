@@ -13,7 +13,15 @@ use crate::{
 
 /// A fixed epoch so a captured frame shows stable timestamps. Real adapters
 /// report the harness's own clock.
-pub const EPOCH_MS: u64 = 1_766_000_000_000;
+/// The fixture's clock: twelve minutes before now, so relative times read as
+/// relative. A fixed constant aged into "7982h" as soon as the year turned.
+pub fn epoch_ms() -> u64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or(0);
+    now.saturating_sub(12 * 60_000)
+}
 
 pub struct FixtureAgents {
     agents: Vec<Agent>,
@@ -38,7 +46,7 @@ impl FixtureAgents {
             agents: Vec::new(),
             transcript: Vec::new(),
             revision: 1,
-            now_ms: EPOCH_MS + 6 * 60_000,
+            now_ms: epoch_ms() + 6 * 60_000,
             binding: Binding::default(),
         };
         cast.push(
@@ -51,7 +59,7 @@ impl FixtureAgents {
             Phase::NeedsYou,
             Some(Goal {
                 text: "Make the tool-output lane fire in serve mode".into(),
-                set_at_ms: EPOCH_MS,
+                set_at_ms: epoch_ms(),
             }),
             Usage {
                 context_tokens: 74_210,
@@ -61,7 +69,7 @@ impl FixtureAgents {
                 turns: 19,
             },
             vec![
-                activity(ActivityKind::You, "serve hooks", Status::Ok, EPOCH_MS, Some(1_400)),
+                activity(ActivityKind::You, "serve hooks", Status::Ok, epoch_ms(), Some(1_400)),
                 activity(ActivityKind::Model, "plan", Status::Ok, 2_100, Some(6_800)),
                 activity(ActivityKind::Files, "src/server.rs", Status::Ok, 9_000, Some(700)),
                 activity(ActivityKind::Files, "src/agent.rs", Status::Ok, 9_800, Some(1_150)),
@@ -103,7 +111,7 @@ impl FixtureAgents {
                     },
                 ],
                 allows_text: true,
-                asked_at_ms: EPOCH_MS + 52_000,
+                asked_at_ms: epoch_ms() + 52_000,
                 deadline_at_ms: None,
             }],
         );
@@ -118,7 +126,7 @@ impl FixtureAgents {
             Phase::Working,
             Some(Goal {
                 text: "Bring ARCHITECTURE.md back in line with agent.rs".into(),
-                set_at_ms: EPOCH_MS,
+                set_at_ms: epoch_ms(),
             }),
             Usage {
                 context_tokens: 38_940,
@@ -132,7 +140,7 @@ impl FixtureAgents {
                     ActivityKind::You,
                     "recheck the drift list",
                     Status::Ok,
-                    EPOCH_MS,
+                    epoch_ms(),
                     Some(900),
                 ),
                 activity(
@@ -171,7 +179,7 @@ impl FixtureAgents {
             Phase::Thinking,
             Some(Goal {
                 text: "Close or merge the nine stale marbles".into(),
-                set_at_ms: EPOCH_MS,
+                set_at_ms: epoch_ms(),
             }),
             Usage {
                 context_tokens: 121_500,
@@ -185,7 +193,7 @@ impl FixtureAgents {
                     ActivityKind::You,
                     "stale beads",
                     Status::Ok,
-                    EPOCH_MS,
+                    epoch_ms(),
                     Some(700),
                 ),
                 activity(
@@ -224,7 +232,7 @@ impl FixtureAgents {
             Phase::NeedsYou,
             Some(Goal {
                 text: "Land the creature board without a second renderer".into(),
-                set_at_ms: EPOCH_MS,
+                set_at_ms: epoch_ms(),
             }),
             Usage {
                 context_tokens: 18_002,
@@ -238,7 +246,7 @@ impl FixtureAgents {
                     ActivityKind::You,
                     "draw the board",
                     Status::Ok,
-                    EPOCH_MS,
+                    epoch_ms(),
                     Some(600),
                 ),
                 activity(
@@ -268,9 +276,24 @@ impl FixtureAgents {
                 ),
                 details: Some("src/views.rs\n  fn old_view() -> AnyElement   // 0 callers".into()),
                 origin: Some("finish_status".into()),
-                choices: Vec::new(),
+                // The question names two paths; the popup can only answer what
+                // it is given, so the two paths travel as choices.
+                choices: vec![
+                    crate::Choice {
+                        id: "delete".into(),
+                        label: "Delete it".into(),
+                        detail: Some("two-line diff".into()),
+                        danger: true,
+                    },
+                    crate::Choice {
+                        id: "leave".into(),
+                        label: "Leave it".into(),
+                        detail: None,
+                        danger: false,
+                    },
+                ],
                 allows_text: true,
-                asked_at_ms: EPOCH_MS + 31_000,
+                asked_at_ms: epoch_ms() + 31_000,
                 deadline_at_ms: None,
             }],
         );
@@ -285,7 +308,7 @@ impl FixtureAgents {
             Phase::Finished,
             Some(Goal {
                 text: "Verify the 0.2.0 cut builds on all three hosts".into(),
-                set_at_ms: EPOCH_MS,
+                set_at_ms: epoch_ms(),
             }),
             Usage {
                 context_tokens: 9_004,
@@ -299,7 +322,7 @@ impl FixtureAgents {
                     ActivityKind::You,
                     "cut 0.2.0",
                     Status::Ok,
-                    EPOCH_MS,
+                    epoch_ms(),
                     Some(500),
                 ),
                 activity(
@@ -373,7 +396,7 @@ impl FixtureAgents {
             prompts,
             usage,
             revision,
-            started_at_ms: EPOCH_MS,
+            started_at_ms: epoch_ms(),
             updated_at_ms,
         });
     }
@@ -485,7 +508,7 @@ impl FixtureAgents {
                     .map(|(index, (text, role))| Turn {
                         role,
                         text: text.into(),
-                        at_ms: EPOCH_MS + index as u64 * 60_000,
+                        at_ms: epoch_ms() + index as u64 * 60_000,
                     })
                     .collect();
                 (id.to_string(), turns)
@@ -536,8 +559,8 @@ fn activity(
         label: label.into(),
         detail: None,
         status,
-        started_at_ms: EPOCH_MS + started_at_ms,
-        finished_at_ms: duration_ms.map(|d| EPOCH_MS + started_at_ms + d),
+        started_at_ms: epoch_ms() + started_at_ms,
+        finished_at_ms: duration_ms.map(|d| epoch_ms() + started_at_ms + d),
     }
 }
 
