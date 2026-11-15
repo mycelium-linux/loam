@@ -5,6 +5,8 @@
 //!   soil-webgpu --frame FILE.bgr [--size WxH] [--agents demo] <component.wasm>
 //!   soil-webgpu --frame FILE.bgr --root VAULT --records DIR \
 //!     --book BOOK --collection NAME --actor WHO <component.wasm>
+//!   soil-webgpu --frame FILE.bgr --root VAULT --records DIR --collection NAME \
+//!     --search <component.wasm>
 //!   soil-webgpu --frame FILE.bgr --bus-seed FILE <component.wasm>
 //!
 //! `--root`, `--records`, `--book`, `--collection` and `--actor` are the grants
@@ -22,7 +24,7 @@ use soil::http_host::GeodeCredentials;
 use soil::http_host::HttpPolicy;
 use soil::webgpu::{
     CanvasFrame, CatalogHost, FrameCapture, FramebufferPresenter, Grants, HostSetup, HttpAccess,
-    InstallCatalog, RecordsAccess, WebGpuRuntime,
+    InstallCatalog, RecordsAccess, SearchAccess, WebGpuRuntime,
 };
 use soil_agent_host::AgentBackend;
 
@@ -44,6 +46,7 @@ fn main() -> ExitCode {
     let mut agents = None;
     let mut view = None;
     let mut agent = None;
+    let mut search = false;
     let mut seed: Vec<(String, String)> = Vec::new();
     let mut component = None;
     let mut args = env::args().skip(1);
@@ -183,6 +186,7 @@ fn main() -> ExitCode {
                     }
                 }
             }
+            "--search" => search = true,
             "--view" => {
                 let Some(value) = args.next() else {
                     eprintln!("--view requires board|roster|stage|focus|popup");
@@ -259,6 +263,23 @@ fn main() -> ExitCode {
                 as Box<dyn AgentBackend>
         });
         let document_grants = vfs_root.is_some() || actor.is_some() || records_root.is_some();
+        let search = if search {
+            let Some(vfs) = vfs_root.clone() else {
+                eprintln!("--search needs --root: search composes a workspace");
+                return ExitCode::FAILURE;
+            };
+            let Some(records) = records_root.clone().or_else(|| records_dir.clone()) else {
+                eprintln!("--search needs --records or --records-dir");
+                return ExitCode::FAILURE;
+            };
+            Some(SearchAccess::open(
+                vfs,
+                records,
+                collection.clone().into_iter().collect(),
+            ))
+        } else {
+            None
+        };
         let grants = if document_grants {
             let mut grants = Grants::new();
             grants.vfs = vfs_root;
@@ -291,6 +312,7 @@ fn main() -> ExitCode {
             agents: cast,
             records_dir,
             grants,
+            search,
             seed,
         })
     } else {
@@ -311,7 +333,7 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "usage: soil-webgpu [--frame FILE.bgr] [--fb DEVICE] [--size WxH] [--records-dir DIR] [--spores-root DIR]... [--allow-origin URL]... [--store-origin URL] [--agents demo] [--view NAME] [--agent ID] [--bus-seed FILE] [--geode-socket PATH --geode-purpose PURPOSE] <component.wasm>";
+const USAGE: &str = "usage: soil-webgpu [--frame FILE.bgr] [--fb DEVICE] [--size WxH] [--records-dir DIR] [--spores-root DIR]... [--allow-origin URL]... [--store-origin URL] [--agents demo] [--view NAME] [--agent ID] [--search] [--bus-seed FILE] [--geode-socket PATH --geode-purpose PURPOSE] <component.wasm>";
 
 /// Everything one capture run was asked for.
 struct Capture<'a> {
@@ -324,6 +346,7 @@ struct Capture<'a> {
     agents: Option<Box<dyn AgentBackend>>,
     records_dir: Option<PathBuf>,
     grants: Option<Grants>,
+    search: Option<SearchAccess>,
     seed: Vec<(String, String)>,
 }
 
@@ -343,6 +366,7 @@ fn run_capture(capture: Capture<'_>) -> anyhow::Result<()> {
         agents,
         records_dir,
         grants,
+        search,
         seed,
     } = capture;
     let (presenter, sink): (
@@ -379,6 +403,7 @@ fn run_capture(capture: Capture<'_>) -> anyhow::Result<()> {
         setup.principal = grants.principal;
         setup.http = grants.http.or(setup.http);
     }
+    setup.search = search;
     for (kind, body) in &seed {
         setup
             .bus

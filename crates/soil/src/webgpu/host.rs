@@ -28,6 +28,7 @@ use crate::http_host::{
 };
 use crate::principal_host::PrincipalHost;
 use crate::records_host::{Namespace, NamespacedRecordsHost, records as records_api};
+use crate::search_host::{SearchService, api as search_api, mention_api};
 use crate::unibus::{Bus, MemoryBus, bus as bus_api};
 use crate::vfs_host::{VfsHost, vfs as vfs_api};
 
@@ -345,6 +346,9 @@ pub struct WebGpuHost {
     /// the notice frames a wall emits are for surfaces on this machine, and a
     /// popup is one of them.
     bus: Arc<dyn Bus>,
+    /// Host-composed search over the granted sources. `None` denies
+    /// `soil:search` and `soil:search/mentions` alike.
+    search: Option<SearchService>,
 }
 
 /// Where a local `soil-store serve` listens. A desktop shell that runs the
@@ -445,6 +449,35 @@ impl RecordsAccess {
     }
 }
 
+/// A search grant: the VFS root and records root it may compose, the record
+/// books whose entries and graph links are visible, and any local git roots.
+///
+/// The service is host-owned; the guest names a query, never a source.
+#[derive(Clone, Debug)]
+pub struct SearchAccess {
+    pub vfs: PathBuf,
+    pub records: PathBuf,
+    pub books: Vec<String>,
+    pub git_roots: Vec<PathBuf>,
+}
+
+impl SearchAccess {
+    pub fn open(vfs: impl Into<PathBuf>, records: impl Into<PathBuf>, books: Vec<String>) -> Self {
+        Self {
+            vfs: vfs.into(),
+            records: records.into(),
+            books,
+            git_roots: Vec::new(),
+        }
+    }
+
+    /// Grant explicit local Git roots. A Spore cannot discover or add one.
+    pub fn with_git_roots(mut self, roots: Vec<PathBuf>) -> Self {
+        self.git_roots = roots;
+        self
+    }
+}
+
 /// Everything one Spore run is allowed to talk to. A presenter fills in the
 /// parts it owns; anything left as the denying default refuses the guest loudly
 /// instead of quietly doing nothing.
@@ -480,6 +513,9 @@ pub struct HostSetup {
     /// popup is one of them. Cross-process needs a hub, which is what
     /// [`crate::unibus::UnibusBus`] is for.
     pub bus: Arc<dyn Bus>,
+    /// The search grant. `None` denies `soil:search`, which is the honest
+    /// answer for a surface that only draws.
+    pub search: Option<SearchAccess>,
 }
 
 /// The bus a surface publishes its notices to.
@@ -510,6 +546,7 @@ impl HostSetup {
             cursor: None,
             clipboard: None,
             bus: in_process_bus(),
+            search: None,
         }
     }
 }
@@ -558,6 +595,15 @@ impl WebGpuHost {
             cursor: setup.cursor,
             clipboard: setup.clipboard,
             bus: setup.bus,
+            search: setup
+                .search
+                .map(|access| {
+                    Ok::<_, anyhow::Error>(
+                        SearchService::open(&access.vfs, &access.records, access.books)?
+                            .with_git_roots(access.git_roots),
+                    )
+                })
+                .transpose()?,
         })
     }
 }
@@ -872,6 +918,38 @@ impl bus_api::Host for WebGpuHost {
         Ok(bus_api::Receipt {
             request_id: receipt.request_id,
         })
+    }
+}
+
+impl search_api::Host for WebGpuHost {
+    fn search(
+        &mut self,
+        query: search_api::Query,
+    ) -> std::result::Result<search_api::Page, search_api::Error> {
+        let service = self.search.as_mut().ok_or(search_api::Error::Denied)?;
+        search_api::Host::search(service, query)
+    }
+
+    fn state(&mut self) -> std::result::Result<search_api::SearchState, search_api::Error> {
+        let service = self.search.as_mut().ok_or(search_api::Error::Denied)?;
+        search_api::Host::state(service)
+    }
+
+    fn refresh(&mut self) -> std::result::Result<search_api::SearchState, search_api::Error> {
+        let service = self.search.as_mut().ok_or(search_api::Error::Denied)?;
+        search_api::Host::refresh(service)
+    }
+}
+
+impl mention_api::Host for WebGpuHost {
+    fn suggest(
+        &mut self,
+        text: String,
+        kinds: Vec<String>,
+        limit: u32,
+    ) -> std::result::Result<Vec<mention_api::Candidate>, search_api::Error> {
+        let service = self.search.as_mut().ok_or(search_api::Error::Denied)?;
+        mention_api::Host::suggest(service, text, kinds, limit)
     }
 }
 

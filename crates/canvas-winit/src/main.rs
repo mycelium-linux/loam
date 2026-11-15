@@ -726,6 +726,9 @@ impl App {
                         // One bus per process, shared by every window in it:
                         // the wall announces a prompt and a popup reads it.
                         bus: soil::webgpu::in_process_bus(),
+                        // Search is granted by the desktop root once the thread
+                        // surface lands; the window does not guess at one.
+                        search: None,
                     },
                 ))?;
                 eprintln!("canvas-winit: guest returned {status}");

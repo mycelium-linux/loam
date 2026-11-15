@@ -11,10 +11,11 @@ package soil:webgpu-host@0.1.0;
 /// `soil:present` is the only way the guest affects the window; input, cursor
 /// and clipboard are the same bridge. `soil:spore/catalog` lets a launcher list
 /// what is installed and ask the host to open it. `soil:agents` observes and
-/// answers harness sessions. `soil:terminal-screen` is a host-owned PTY.
-/// `soil:unibus` is the in-process notice bus a wall publishes to and a popup
-/// polls. `soil:vfs`, `soil:records`, `soil:principal` and `soil:http` are the
-/// document-shaped grants.
+/// answers harness sessions. `soil:search` is the host-composed search over the
+/// granted sources, including the `@` mention resolver. `soil:terminal-screen`
+/// is a host-owned PTY. `soil:unibus` is the in-process notice bus a wall
+/// publishes to and a popup polls. `soil:vfs`, `soil:records`, `soil:principal`
+/// and `soil:http` are the document-shaped grants.
 world runner {
   include wasi:webgpu/imports@0.3.0-rc.2;
   import soil:present/surface@0.1.0;
@@ -27,6 +28,8 @@ world runner {
   import soil:spore/catalog@0.1.0;
   import soil:agents/observe@0.1.0;
   import soil:agents/control@0.1.0;
+  import soil:search/search@0.6.0;
+  import soil:search/mentions@0.6.0;
   import soil:http/http@0.1.0;
   import soil:terminal-screen/screen@0.1.0;
   import soil:unibus/bus@0.1.0;

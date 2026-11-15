@@ -39,6 +39,8 @@ bindgen!({
         "soil:http/http@0.1.0": crate::http_host::api,
         "soil:records/records@0.1.0": crate::records_host::records,
         "soil:unibus/bus@0.1.0": crate::unibus::bus,
+        "soil:search/search@0.6.0": crate::search_host::api,
+        "soil:search/mentions@0.6.0": crate::search_host::mention_api,
         // A subscription is host state, not a generated shadow type: the
         // backend keeps the position, so two subscriptions cannot disagree.
         "soil:agents/observe.subscription": AgentSubscription,
@@ -55,8 +57,8 @@ pub use fb::FramebufferPresenter;
 pub use host::{
     CatalogEntry, CatalogError, CatalogHost, CatalogLaunched, CatalogSurface, CatalogSurfaceKind,
     HostSetup, HttpAccess, InstallCatalog, LOCAL_STORE_ORIGIN, MARK_LIMIT, NoTerminal,
-    RecordsAccess, TerminalCell, TerminalHost, TerminalSession, TerminalSnapshot, WebGpuHost,
-    in_process_bus, read_mark,
+    RecordsAccess, SearchAccess, TerminalCell, TerminalHost, TerminalSession, TerminalSnapshot,
+    WebGpuHost, in_process_bus, read_mark,
 };
 pub use present::{
     CanvasFrame, CanvasGpuPresenter, ClipboardHost, CursorHost, CursorStyle, DiscardPresenter,

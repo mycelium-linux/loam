@@ -87,6 +87,7 @@ impl WebGpuRuntime {
         .context("link soil:vfs")?;
         crate::principal_host::add_to_linker::<WebGpuHost>(&mut linker)
             .context("link soil:principal")?;
+        crate::search_host::add_to_linker::<WebGpuHost>(&mut linker).context("link soil:search")?;
         crate::unibus::add_to_linker::<WebGpuHost>(&mut linker).context("link soil:unibus")?;
         Ok(Self {
             engine,
