@@ -95,6 +95,34 @@ fn run(args: Vec<String>) -> Result<(), Error> {
             };
             print!("{}", Manual::from_manifest(&manifest, prose).render(width));
         }
+        // The MCP projection: the `tools/list` result a client would receive,
+        // rendered from the manifest rather than authored beside it. Dispatching
+        // a call needs a runner that can execute the component, so this verb
+        // stops at the schema the client reads.
+        "mcp" => {
+            let resource = rest.iter().any(|arg| arg == "--resource");
+            let paths: Vec<&String> = rest.iter().filter(|arg| *arg != "--resource").collect();
+            if paths.len() != 1 {
+                return Err(Error::Invalid(
+                    "usage: soil-spore mcp <dir> [--resource]".into(),
+                ));
+            }
+            let manifest = Manifest::load(Path::new(paths[0]))?;
+            let value = if resource {
+                soil_spore::mcp::man_resource(&manifest)
+            } else {
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": soil_spore::mcp::tools_list(&manifest)?,
+                })
+            };
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&value)
+                    .map_err(|error| Error::Io(error.to_string()))?
+            );
+        }
         "info" => {
             let json = rest.iter().any(|arg| arg == "--json");
             let paths: Vec<&String> = rest.iter().filter(|arg| *arg != "--json").collect();
@@ -195,7 +223,7 @@ fn run(args: Vec<String>) -> Result<(), Error> {
 }
 
 fn usage() -> String {
-    "usage: soil-spore check <dir> [--publish]\n       soil-spore lock <dir>\n       soil-spore digest <dir>\n       soil-spore man <dir|package.spore> [--width N]\n       soil-spore info <dir|package.spore> [--json]\n       soil-spore pack <dir> [-o out.spore]\n       soil-spore verify <package.spore>\n       soil-spore sign <package.spore> [--key ID | --principal LABEL [--socket PATH] [--fingerprint FP]]\n       soil-spore verify-signature <package.spore> [--keyring FILE] [--key ID]\n       soil-spore announce <dir> --endpoint URI [--home DIR] [--out FILE] [--every SECS] [--once] [--unsigned-dev]\n       soil-spore --version\n\nThe node id is read from --home's enrollment (default ~/.mycelium), never typed:\nthat is what makes a restarted node announce as itself.".into()
+    "usage: soil-spore check <dir> [--publish]\n       soil-spore lock <dir>\n       soil-spore digest <dir>\n       soil-spore man <dir|package.spore> [--width N]\n       soil-spore info <dir|package.spore> [--json]\n       soil-spore mcp <dir> [--resource]\n       soil-spore pack <dir> [-o out.spore]\n       soil-spore verify <package.spore>\n       soil-spore sign <package.spore> [--key ID | --principal LABEL [--socket PATH] [--fingerprint FP]]\n       soil-spore verify-signature <package.spore> [--keyring FILE] [--key ID]\n       soil-spore announce <dir> --endpoint URI [--home DIR] [--out FILE] [--every SECS] [--once] [--unsigned-dev]\n       soil-spore --version\n\nThe node id is read from --home's enrollment (default ~/.mycelium), never typed:\nthat is what makes a restarted node announce as itself.".into()
 }
 
 /// Read a Spore from a directory or a packed package.

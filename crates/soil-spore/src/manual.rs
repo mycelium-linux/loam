@@ -41,11 +41,22 @@ impl Manual {
             license: manifest.spore.license.clone(),
             summary: manifest.spore.summary.clone(),
             description: manifest.spore.description.clone(),
-            usage: manifest
-                .docs
-                .as_ref()
-                .map(|docs| docs.usage.clone())
-                .unwrap_or_default(),
+            usage: if manifest.subcommands.is_empty() {
+                manifest
+                    .docs
+                    .as_ref()
+                    .map(|docs| docs.usage.clone())
+                    .unwrap_or_default()
+            } else {
+                // Declared commands beat an authored line: the table is the
+                // source of truth for what the command accepts, and the man
+                // page is one of its projections.
+                manifest
+                    .subcommands
+                    .iter()
+                    .map(|command| command.synopsis(&manifest.spore.name))
+                    .collect()
+            },
             prose,
             launch_default: manifest.launch.default.clone(),
             surfaces: manifest.launch.surfaces.clone(),

@@ -687,9 +687,14 @@ fn a_package_can_ship_its_own_mark() {
         "{MANIFEST}\n[presentation]\nbadge = \"M\"\ncolor = \"#8b9dff\"\nmark = \"assets/icon.svg\"\n"
     );
     let manifest = Manifest::parse(&with_mark).expect("manifest parses");
-    manifest.validate().expect("a mark inside the package is valid");
+    manifest
+        .validate()
+        .expect("a mark inside the package is valid");
     assert_eq!(
-        manifest.presentation.as_ref().and_then(|mark| mark.mark.clone()),
+        manifest
+            .presentation
+            .as_ref()
+            .and_then(|mark| mark.mark.clone()),
         Some("assets/icon.svg".into())
     );
     assert!(

@@ -18,7 +18,7 @@
 //! The lock is the package identity: sorted `sha256 size path` lines plus a
 //! digest over that canonical text. Sign the tar; verify the tar, then the lock.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -29,6 +29,7 @@ use std::path::{Component, Path, PathBuf};
 pub mod identity;
 pub mod lease;
 pub mod manual;
+pub mod mcp;
 pub mod publisher;
 
 pub const SCHEMA: u32 = 1;
@@ -44,8 +45,17 @@ pub const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Longest listing paragraph a manifest may carry.
 pub const MAX_DESCRIPTION_CHARS: usize = 1000;
+
 /// Most synopsis lines a manual may declare.
 pub const MAX_USAGE_LINES: usize = 8;
+
+/// Subcommands one package may declare. A CLI with more than this is a
+/// suite, and a tool list that long is worse than a shell.
+pub const MAX_COMMANDS: usize = 32;
+
+/// Arguments one subcommand may declare.
+pub const MAX_COMMAND_ARGS: usize = 16;
+
 /// Most keywords a listing may carry.
 pub const MAX_KEYWORDS: usize = 12;
 /// Most screenshots a listing may carry.
@@ -147,6 +157,18 @@ pub struct Manifest {
     /// What `man` prints: synopsis lines and an authored body.
     #[serde(default)]
     pub docs: Option<Docs>,
+    /// The commands this package answers to, when it is a CLI.
+    ///
+    /// One declaration, three projections: the synopsis in `man`, `--help` in a
+    /// host that renders it, and the tool schema an MCP client reads. Authoring
+    /// any of those separately is authoring the same fact twice, and the second
+    /// copy is the one that drifts.
+    #[serde(default)]
+    pub subcommands: Vec<Subcommand>,
+    /// Project `subcommands` as MCP tools. Absent means this package is not a
+    /// tool server, which is the default.
+    #[serde(default)]
+    pub mcp: Option<Mcp>,
     /// What a public listing may show. Every rich artifact is a CID: a package
     /// carries the reference, never the bytes.
     #[serde(default)]
@@ -235,11 +257,87 @@ pub struct System {
 pub struct Docs {
     /// Lines a shell would accept, including the Spore name and without a
     /// prompt.
+    ///
+    /// Optional when `[[commands]]` is declared: the synopsis is then generated
+    /// from the commands, and this is the escape hatch for a shape the table
+    /// cannot express.
     #[serde(default)]
     pub usage: Vec<String>,
     /// Markdown body shipped in the package. Small prose, not an asset.
     #[serde(default)]
     pub man: Option<String>,
+}
+
+/// One subcommand, as the package declares it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Subcommand {
+    pub name: String,
+    /// One line: what this subcommand answers that the others do not.
+    pub summary: String,
+    #[serde(default)]
+    pub args: Vec<CommandArg>,
+}
+
+/// One argument a subcommand accepts.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommandArg {
+    /// `--registry` for an option, `PATTERN` for a positional. The leading
+    /// dashes are the whole of the distinction.
+    pub name: String,
+    #[serde(default)]
+    pub summary: String,
+    /// Metavariable shown after the flag. Absent means a boolean switch.
+    #[serde(default)]
+    pub value: Option<String>,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
+    pub default: Option<String>,
+}
+
+impl CommandArg {
+    pub fn is_option(&self) -> bool {
+        self.name.starts_with('-')
+    }
+}
+
+impl Subcommand {
+    /// One synopsis line: `bob builders [--registry URL] [--json]`.
+    ///
+    /// The same string is the man page's SYNOPSIS and the shape an MCP client
+    /// reads as a schema. One writer, so the two cannot disagree.
+    pub fn synopsis(&self, program: &str) -> String {
+        let mut line = format!("{program} {}", self.name);
+        for arg in &self.args {
+            let written = match &arg.value {
+                Some(value) => format!("{} {value}", arg.name),
+                None => arg.name.clone(),
+            };
+            if arg.required {
+                line.push(' ');
+                line.push_str(&written);
+            } else if arg.is_option() {
+                line.push_str(&format!(" [{written}]"));
+            } else {
+                line.push_str(&format!(" [{}]", arg.name));
+            }
+        }
+        line
+    }
+}
+
+/// The MCP projection of this package's commands.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Mcp {
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    /// Server name a client sees. Defaults to `spore.name`.
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// The public listing a Spore is allowed to claim.
@@ -1321,6 +1419,7 @@ impl Manifest {
                 }
             }
         }
+        self.validate_commands()?;
         if let Some(catalog) = &self.catalog {
             if catalog.categories.is_empty() {
                 return Err(Error::Invalid(
@@ -1405,6 +1504,81 @@ impl Manifest {
         Ok(())
     }
 
+    /// `[[subcommands]]` and `[mcp]`, checked together because the MCP table is
+    /// meaningless without commands to project.
+    fn validate_commands(&self) -> Result<()> {
+        if self.commands.len() > MAX_COMMANDS {
+            return Err(Error::Invalid(format!("more than {MAX_COMMANDS} commands")));
+        }
+        let mut names = std::collections::BTreeSet::new();
+        for command in &self.subcommands {
+            let name = command.name.as_str();
+            if name.is_empty()
+                || name.len() > 64
+                || !name
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            {
+                return Err(Error::Invalid(format!(
+                    "command name {name:?} must be lowercase letters, digits and dashes"
+                )));
+            }
+            if command.summary.trim().is_empty() {
+                return Err(Error::Invalid(format!("command {name} needs a summary")));
+            }
+            if !names.insert(name) {
+                return Err(Error::Invalid(format!("two commands named {name}")));
+            }
+            if command.args.len() > MAX_COMMAND_ARGS {
+                return Err(Error::Invalid(format!(
+                    "command {name} declares more than {MAX_COMMAND_ARGS} arguments"
+                )));
+            }
+            let mut args = std::collections::BTreeSet::new();
+            for arg in &command.args {
+                if arg.name.trim().is_empty()
+                    || arg.name.len() > 64
+                    || arg.name.chars().any(char::is_control)
+                {
+                    return Err(Error::Invalid(format!(
+                        "command {name} declares an empty or unusable argument"
+                    )));
+                }
+                if !args.insert(arg.name.as_str()) {
+                    return Err(Error::Invalid(format!(
+                        "command {name} declares {} twice",
+                        arg.name
+                    )));
+                }
+                if arg
+                    .value
+                    .as_deref()
+                    .is_some_and(|value| value.trim().is_empty())
+                {
+                    return Err(Error::Invalid(format!(
+                        "{} {} needs a metavariable, or no value at all",
+                        name, arg.name
+                    )));
+                }
+            }
+        }
+        if let Some(mcp) = &self.mcp {
+            if mcp.enabled && self.subcommands.is_empty() {
+                return Err(Error::Invalid(
+                    "[mcp] projects [[subcommands]], and this package declares none".into(),
+                ));
+            }
+            if mcp
+                .name
+                .as_deref()
+                .is_some_and(|name| name.trim().is_empty() || name.chars().any(char::is_control))
+            {
+                return Err(Error::Invalid("mcp.name must be a plain name".into()));
+            }
+        }
+        Ok(())
+    }
+
     /// Every file the manifest declares explicitly.
     pub fn declared_paths(&self) -> Vec<PathBuf> {
         let mut paths = Vec::new();
@@ -1421,7 +1595,11 @@ impl Manifest {
                 }
             }
         }
-        if let Some(mark) = self.presentation.as_ref().and_then(|value| value.mark.as_ref()) {
+        if let Some(mark) = self
+            .presentation
+            .as_ref()
+            .and_then(|value| value.mark.as_ref())
+        {
             paths.push(mark.clone());
         }
         paths.extend(self.assets.values().map(|asset| asset.path.clone()));
@@ -2179,8 +2357,10 @@ pub fn publish_blockers(manifest: &Manifest) -> Vec<String> {
         .as_ref()
         .map(|docs| docs.usage.len())
         .unwrap_or(0);
-    if usage == 0 {
-        blockers.push("docs.usage is missing; nobody can try it without a synopsis".into());
+    if usage == 0 && manifest.subcommands.is_empty() {
+        blockers.push(
+            "no synopsis: declare [[subcommands]] or docs.usage, or nobody can try it".into(),
+        );
     }
     if manifest
         .docs
