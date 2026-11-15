@@ -10,6 +10,7 @@ use std::{
 
 use wasmtime::component::{HasSelf, Linker};
 
+use crate::clock::now_ms;
 use crate::host::WasiHost;
 
 wasmtime::component::bindgen!({
@@ -90,13 +91,4 @@ fn new_request_id() -> String {
         .as_nanos();
     let sequence = NEXT_REQUEST.fetch_add(1, Ordering::Relaxed);
     format!("{nanos:032x}{sequence:016x}")
-}
-
-pub(crate) fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX)
 }

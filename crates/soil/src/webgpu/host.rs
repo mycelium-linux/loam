@@ -1,11 +1,10 @@
-//! Bounded `wasi:webgpu` host for Soil.
+//! The host state one Spore run is given, and the WIT traits that read it.
 //!
-//! This is intentionally a separate crate from `soil-runtime`: the Canvas
-//! runtime is a core-Wasm host, while WebGPU is a component-model capability.
-//! A Spore that imports `wasi:webgpu` gets exactly this linker and the
-//! capabilities a presenter grants it. Adapter/device creation, validation,
-//! limits and queue submission stay in the host through `wgpu-core`; no native
-//! handle crosses the boundary.
+//! [`HostSetup`] is the grant list. Everything is deny-by-default: a presenter
+//! that does not fill in `vfs` gets `denied`, not an empty workspace, and a
+//! host that forgot an agent adapter draws nothing and says so. The plain
+//! records spore hosts speak (`CatalogHost`, `TerminalHost`, `AgentBackend`)
+//! are converted at this boundary, so an adapter never depends on the ABI.
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -13,117 +12,24 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use ::soil::principal_host::PrincipalHost;
-use ::soil::vfs_host::VfsHost;
-use ::soil::http_host::{
-    self, CredentialProvider, DirectTransport, HttpPolicy, HttpTransport, NoCredentials,
-    Request as HttpRequest,
-};
-use ::soil::records_host::{self, Namespace, NamespacedRecordsHost};
 use wasi_webgpu_wasmtime::reexports::{wgpu_core, wgpu_types};
 use wasi_webgpu_wasmtime::{WasiWebGpuCtx, WasiWebGpuCtxView, WasiWebGpuOptions};
-use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
-use wasmtime::{Config, Engine, Store};
+use wasmtime::component::ResourceTable;
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
-use crate::soil::present::input;
 use soil_agent_host::{AgentBackend, Answer, Binding, Page};
 
-pub mod fb;
-
-/// The denying agent backend, for presenters that own no agent session.
-pub use soil_agent_host::NoAgents;
-
-wasmtime::component::bindgen!({
-    path: "wit",
-    world: "runner",
-    exports: {
-        "run": async,
-    },
-    with: {
-        "wasi:webgpu/webgpu@0.3.0-rc.2.gpu-texture": wasi_webgpu_wasmtime::Texture,
-        // Same WIT package, one binding: the runner answers with the host
-        // crate's own `soil:vfs` and `soil:principal` types rather than a
-        // second generated copy that would need converting field by field.
-        "soil:vfs/vfs@1.0.0": ::soil::vfs_host::vfs,
-        "soil:principal/principal@0.1.0": ::soil::principal_host::api,
-        // A subscription is host state, not a generated shadow type: the
-        // backend keeps the position, so two subscriptions cannot disagree.
-        "soil:agents/observe.subscription": AgentSubscription,
-    },
-    require_store_data_send: true,
-});
-
-/// One composed Canvas frame, tightly packed top-to-bottom RGBA8.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CanvasFrame {
-    pub width: u32,
-    pub height: u32,
-    pub rgba: Vec<u8>,
-}
-
-/// Host-side destination for a guest `soil:present` frame.
-///
-/// Canvas owns the actual window and final composition; this trait only lets
-/// the WebGPU host hand over a completed frame. It is never called from inside
-/// a guest callback.
-pub trait CanvasGpuPresenter: Send {
-    fn size(&self) -> (u32, u32);
-
-    /// Device pixels per layout pixel. A capture host renders at 1:1.
-    fn scale(&self) -> f64 {
-        1.0
-    }
-
-    fn present(&mut self, frame: CanvasFrame) -> Result<()>;
-}
-
-struct DiscardPresenter {
-    size: (u32, u32),
-}
-
-impl CanvasGpuPresenter for DiscardPresenter {
-    fn size(&self) -> (u32, u32) {
-        self.size
-    }
-
-    fn present(&mut self, _frame: CanvasFrame) -> Result<()> {
-        Ok(())
-    }
-}
-
-/// A presenter that retains exactly one frame for tests and CLI output.
-#[derive(Clone, Default)]
-pub struct FrameCapture {
-    frame: Arc<Mutex<Option<CanvasFrame>>>,
-    size: (u32, u32),
-}
-
-impl FrameCapture {
-    pub fn new(width: u32, height: u32) -> Self {
-        Self {
-            frame: Arc::new(Mutex::new(None)),
-            size: (width, height),
-        }
-    }
-
-    pub fn take(&self) -> Option<CanvasFrame> {
-        self.frame.lock().expect("frame capture poisoned").take()
-    }
-}
-
-impl CanvasGpuPresenter for FrameCapture {
-    fn size(&self) -> (u32, u32) {
-        self.size
-    }
-
-    fn present(&mut self, frame: CanvasFrame) -> Result<()> {
-        let mut slot = self.frame.lock().expect("frame capture poisoned");
-        anyhow::ensure!(slot.is_none(), "present budget");
-        *slot = Some(frame);
-        Ok(())
-    }
-}
+use super::AgentSubscription;
+use super::present::{ClipboardHost, CursorHost, CursorStyle, InputEvent, PointerButton};
+use super::soil as wit;
+use crate::http_host::api as http_api;
+use crate::http_host::{
+    self, CredentialProvider, DirectTransport, HttpPolicy, HttpTransport, NoCredentials,
+};
+use crate::principal_host::PrincipalHost;
+use crate::records_host::{Namespace, NamespacedRecordsHost, records as records_api};
+use crate::unibus::{Bus, MemoryBus, bus as bus_api};
+use crate::vfs_host::{VfsHost, vfs as vfs_api};
 
 /// One installed Spore, in the plain shape a presenter supplies. The WIT
 /// records are built at the boundary; hosts do not depend on generated types.
@@ -296,7 +202,7 @@ impl CatalogHost for InstallCatalog {
                 });
             }
         }
-        found.sort_by(|left, right| left.title.to_lowercase().cmp(&right.title.to_lowercase()));
+        found.sort_by_key(|entry| entry.title.to_lowercase());
         Ok(found)
     }
 
@@ -384,7 +290,8 @@ pub trait TerminalHost: Send {
     fn wait(&mut self, after: u64, timeout_ms: u32) -> Result<u64, String>;
 }
 
-struct NoTerminal;
+/// The denying terminal: a host with no PTY says so on the first call.
+pub struct NoTerminal;
 
 impl TerminalHost for NoTerminal {
     fn snapshot(&mut self) -> Result<TerminalSnapshot, String> {
@@ -408,87 +315,13 @@ impl TerminalHost for NoTerminal {
     }
 }
 
-/// The pointer shape a Spore asks for. A presenter maps it to a native cursor;
-/// a headless host drops it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CursorStyle {
-    Default,
-    Text,
-    Pointer,
-    Crosshair,
-    Move,
-    Grab,
-    Grabbing,
-    NoDrop,
-    Wait,
-    Help,
-}
-
-/// The system clipboard, when the presenter has one. A host without a pasteboard
-/// leaves it unset and `soil:present/clipboard` refuses loudly.
-pub trait ClipboardHost: Send {
-    fn set_text(&mut self, text: String) -> Result<(), String>;
-}
-
-/// The window's pointer shape. Presenters that own a window implement it;
-/// a capture or headless host leaves it unset and `set` succeeds doing nothing.
-pub trait CursorHost: Send {
-    fn set_cursor(&mut self, style: CursorStyle);
-}
-
-/// One normalized key waiting for the guest. The WIT type is built at the
-/// boundary; presenters only need this plain shape.
-#[derive(Clone, Debug)]
-pub struct InputKey {
-    pub key: String,
-    pub text: Option<String>,
-    pub pressed: bool,
-    pub shift: bool,
-    pub control: bool,
-    pub alt: bool,
-    pub meta: bool,
-}
-
-/// Presenter-independent pointer button.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PointerButton {
-    Left,
-    Right,
-    Middle,
-}
-
-/// One event waiting for the guest, in the order the presenter produced it.
-/// Keys and pointer actions share a queue, so a click cannot overtake a
-/// keystroke that arrived before it.
-#[derive(Clone, Debug)]
-pub enum InputEvent {
-    Key(InputKey),
-    /// Surface-space position: the units `soil:present/surface.size` reports.
-    Moved {
-        x: f32,
-        y: f32,
-    },
-    Button {
-        x: f32,
-        y: f32,
-        button: PointerButton,
-        pressed: bool,
-    },
-    /// Positive `lines` scrolls towards earlier content.
-    Scrolled {
-        x: f32,
-        y: f32,
-        lines: f32,
-    },
-}
-
 /// Host state for one component instance.
 pub struct WebGpuHost {
     instance: Arc<wgpu_core::global::Global>,
     table: ResourceTable,
     options: WasiWebGpuOptions,
     wasi: WasiCtx,
-    presenter: Box<dyn CanvasGpuPresenter>,
+    presenter: Box<dyn super::present::CanvasGpuPresenter>,
     input: Arc<Mutex<VecDeque<InputEvent>>>,
     interactive: bool,
     catalog: Box<dyn CatalogHost>,
@@ -508,6 +341,10 @@ pub struct WebGpuHost {
     terminal: Box<dyn TerminalHost>,
     cursor: Option<Box<dyn CursorHost>>,
     clipboard: Option<Box<dyn ClipboardHost>>,
+    /// The Unibus this Spore publishes to and polls. In-process by default:
+    /// the notice frames a wall emits are for surfaces on this machine, and a
+    /// popup is one of them.
+    bus: Arc<dyn Bus>,
 }
 
 /// Where a local `soil-store serve` listens. A desktop shell that runs the
@@ -555,6 +392,16 @@ impl HttpAccess {
         )?;
         Ok(Self::new(policy))
     }
+
+    /// Answer one `soil:http/fetch`. The field conversion and error mapping
+    /// live in `http_host`, so this host and the WASI profile cannot disagree
+    /// about what a request may do.
+    fn fetch(
+        &self,
+        request: http_api::Request,
+    ) -> std::result::Result<http_api::Response, http_api::Error> {
+        http_host::fetch(&self.policy, &*self.credentials, &*self.transport, request)
+    }
 }
 
 /// A records root plus the named books a Spore may see inside it.
@@ -577,7 +424,11 @@ impl RecordsAccess {
     ) -> Self {
         Self {
             root: root.into(),
-            namespaces: vec![Namespace::write(name.into(), book.into(), collection.into())],
+            namespaces: vec![Namespace::write(
+                name.into(),
+                book.into(),
+                collection.into(),
+            )],
         }
     }
 
@@ -598,7 +449,7 @@ impl RecordsAccess {
 /// parts it owns; anything left as the denying default refuses the guest loudly
 /// instead of quietly doing nothing.
 pub struct HostSetup {
-    pub presenter: Box<dyn CanvasGpuPresenter>,
+    pub presenter: Box<dyn super::present::CanvasGpuPresenter>,
     pub input: Arc<Mutex<VecDeque<InputEvent>>>,
     /// Tells the guest to keep polling after the first frame.
     pub interactive: bool,
@@ -624,11 +475,26 @@ pub struct HostSetup {
     pub cursor: Option<Box<dyn CursorHost>>,
     /// `None` on hosts without a pasteboard.
     pub clipboard: Option<Box<dyn ClipboardHost>>,
+    /// The Unibus this Spore publishes to and polls. In-process by default:
+    /// the notice frames a wall emits are for surfaces on this machine, and a
+    /// popup is one of them. Cross-process needs a hub, which is what
+    /// [`crate::unibus::UnibusBus`] is for.
+    pub bus: Arc<dyn Bus>,
+}
+
+/// The bus a surface publishes its notices to.
+///
+/// One per host process, shared by every surface in it: a wall announces a
+/// prompt and a popup on the same process reads it. A caller that needs to
+/// inspect or seed the log keeps the concrete [`MemoryBus`]; the host only
+/// needs the trait.
+pub fn in_process_bus() -> Arc<MemoryBus> {
+    Arc::new(MemoryBus::default())
 }
 
 impl HostSetup {
     /// A one-shot capture host: one frame, no input, no catalog, no terminal.
-    pub fn capture(presenter: Box<dyn CanvasGpuPresenter>) -> Self {
+    pub fn capture(presenter: Box<dyn super::present::CanvasGpuPresenter>) -> Self {
         Self {
             presenter,
             input: Arc::new(Mutex::new(VecDeque::new())),
@@ -638,11 +504,12 @@ impl HostSetup {
             records: None,
             vfs: None,
             principal: None,
-            agents: Box::new(NoAgents),
+            agents: Box::new(soil_agent_host::NoAgents),
             store_origin: None,
             terminal: Box::new(NoTerminal),
             cursor: None,
             clipboard: None,
+            bus: in_process_bus(),
         }
     }
 }
@@ -690,16 +557,18 @@ impl WebGpuHost {
             terminal: setup.terminal,
             cursor: setup.cursor,
             clipboard: setup.clipboard,
+            bus: setup.bus,
         })
     }
 }
 
-impl soil::present::input::Host for WebGpuHost {
+impl wit::present::input::Host for WebGpuHost {
     fn interactive(&mut self) -> bool {
         self.interactive
     }
 
-    fn poll(&mut self, timeout_ms: u32) -> Option<input::Event> {
+    fn poll(&mut self, timeout_ms: u32) -> Option<wit::present::input::Event> {
+        use wit::present::input;
         let deadline = Instant::now() + Duration::from_millis(u64::from(timeout_ms));
         loop {
             if let Some(event) = self.input.lock().expect("input queue poisoned").pop_front() {
@@ -751,7 +620,7 @@ impl WasiView for WebGpuHost {
     }
 }
 
-impl soil::present::surface::Host for WebGpuHost {
+impl wit::present::surface::Host for WebGpuHost {
     fn size(&mut self) -> (u32, u32) {
         self.presenter.size()
     }
@@ -763,10 +632,10 @@ impl soil::present::surface::Host for WebGpuHost {
     /// This host links `wasi:webgpu`, so it takes either delivery. A device
     /// host with no adapter would answer `[rgba]` and a GPU-only Spore would
     /// learn that from the one call, rather than by failing to create a device.
-    fn delivery(&mut self) -> Vec<soil::present::types::DeliveryKind> {
+    fn delivery(&mut self) -> Vec<wit::present::types::DeliveryKind> {
         vec![
-            soil::present::types::DeliveryKind::Texture,
-            soil::present::types::DeliveryKind::Rgba,
+            wit::present::types::DeliveryKind::Texture,
+            wit::present::types::DeliveryKind::Rgba,
         ]
     }
 
@@ -775,8 +644,9 @@ impl soil::present::surface::Host for WebGpuHost {
     /// readback.
     fn present_rgba(
         &mut self,
-        frame: soil::present::types::RgbaFrame,
+        frame: wit::present::types::RgbaFrame,
     ) -> std::result::Result<(), String> {
+        use super::present::CanvasFrame;
         let (width, height) = self.presenter.size();
         if frame.width != width || frame.height != height {
             return Err(format!(
@@ -791,7 +661,13 @@ impl soil::present::surface::Host for WebGpuHost {
                 frame.pixels.len()
             ));
         }
-        if frame.pixels.chunks_exact(4).any(|pixel| pixel[3] != 0xFF) {
+        if frame
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|pixel| pixel[3] != 0xFF)
+        {
             return Err("every pixel must be opaque".into());
         }
         self.presenter
@@ -807,6 +683,7 @@ impl soil::present::surface::Host for WebGpuHost {
         &mut self,
         texture: wasmtime::component::Resource<wasi_webgpu_wasmtime::Texture>,
     ) -> std::result::Result<(), String> {
+        use super::present::CanvasFrame;
         let image = wasi_webgpu_wasmtime::read_texture_rgba(&self.instance, &self.table, texture)
             .map_err(|e| e.to_string())?;
         let frame = CanvasFrame {
@@ -818,29 +695,21 @@ impl soil::present::surface::Host for WebGpuHost {
     }
 }
 
-impl ::soil::vfs_host::vfs::Host for WebGpuHost {
+impl vfs_api::Host for WebGpuHost {
     fn ls(
         &mut self,
         parent: String,
         offset: u64,
         limit: u32,
-    ) -> std::result::Result<::soil::vfs_host::vfs::Page, ::soil::vfs_host::vfs::Error>
-    {
+    ) -> std::result::Result<vfs_api::Page, vfs_api::Error> {
         self.vfs
             .as_mut()
-            .ok_or(::soil::vfs_host::vfs::Error::Denied)?
+            .ok_or(vfs_api::Error::Denied)?
             .ls(parent, offset, limit)
     }
 
-    fn stat(
-        &mut self,
-        path: String,
-    ) -> std::result::Result<::soil::vfs_host::vfs::Entry, ::soil::vfs_host::vfs::Error>
-    {
-        self.vfs
-            .as_mut()
-            .ok_or(::soil::vfs_host::vfs::Error::Denied)?
-            .stat(path)
+    fn stat(&mut self, path: String) -> std::result::Result<vfs_api::Entry, vfs_api::Error> {
+        self.vfs.as_mut().ok_or(vfs_api::Error::Denied)?.stat(path)
     }
 
     fn read(
@@ -848,49 +717,46 @@ impl ::soil::vfs_host::vfs::Host for WebGpuHost {
         path: String,
         offset: u64,
         length: u32,
-    ) -> std::result::Result<::soil::vfs_host::vfs::Chunk, ::soil::vfs_host::vfs::Error>
-    {
+    ) -> std::result::Result<vfs_api::Chunk, vfs_api::Error> {
         self.vfs
             .as_mut()
-            .ok_or(::soil::vfs_host::vfs::Error::Denied)?
+            .ok_or(vfs_api::Error::Denied)?
             .read(path, offset, length)
     }
 }
 
-impl ::soil::principal_host::api::Host for WebGpuHost {
+impl crate::principal_host::api::Host for WebGpuHost {
     fn current(
         &mut self,
-    ) -> std::result::Result<
-        ::soil::principal_host::api::Identity,
-        ::soil::principal_host::api::Error,
-    > {
+    ) -> std::result::Result<crate::principal_host::api::Identity, crate::principal_host::api::Error>
+    {
         self.principal
             .as_mut()
-            .ok_or(::soil::principal_host::api::Error::Denied)?
+            .ok_or(crate::principal_host::api::Error::Denied)?
             .current()
     }
 
     fn signing_key(
         &mut self,
     ) -> std::result::Result<
-        Option<::soil::principal_host::api::SigningKeyInfo>,
-        ::soil::principal_host::api::Error,
+        Option<crate::principal_host::api::SigningKeyInfo>,
+        crate::principal_host::api::Error,
     > {
         self.principal
             .as_mut()
-            .ok_or(::soil::principal_host::api::Error::Denied)?
+            .ok_or(crate::principal_host::api::Error::Denied)?
             .signing_key()
     }
 }
 
-impl records_host::records::Host for WebGpuHost {
+impl records_api::Host for WebGpuHost {
     fn get(
         &mut self,
-        key: records_host::records::Key,
-    ) -> std::result::Result<records_host::records::Entry, records_host::records::Error> {
+        key: records_api::Key,
+    ) -> std::result::Result<records_api::Entry, records_api::Error> {
         self.records
             .as_mut()
-            .ok_or(records_host::records::Error::Unsupported)?
+            .ok_or(records_api::Error::Unsupported)?
             .get(key)
     }
 
@@ -899,42 +765,39 @@ impl records_host::records::Host for WebGpuHost {
         collection: String,
         cursor: Option<String>,
         limit: u32,
-    ) -> std::result::Result<records_host::records::Page, records_host::records::Error> {
+    ) -> std::result::Result<records_api::Page, records_api::Error> {
         self.records
             .as_mut()
-            .ok_or(records_host::records::Error::Unsupported)?
+            .ok_or(records_api::Error::Unsupported)?
             .scan(collection, cursor, limit)
     }
 
     fn upsert(
         &mut self,
-        entry: records_host::records::Entry,
-    ) -> std::result::Result<records_host::records::Entry, records_host::records::Error> {
+        entry: records_api::Entry,
+    ) -> std::result::Result<records_api::Entry, records_api::Error> {
         self.records
             .as_mut()
-            .ok_or(records_host::records::Error::Unsupported)?
+            .ok_or(records_api::Error::Unsupported)?
             .upsert(entry)
     }
 
     fn compare_and_swap(
         &mut self,
-        key: records_host::records::Key,
-        expected: Option<records_host::records::Version>,
-        entry: records_host::records::Entry,
-    ) -> std::result::Result<records_host::records::CasResult, records_host::records::Error> {
+        key: records_api::Key,
+        expected: Option<records_api::Version>,
+        entry: records_api::Entry,
+    ) -> std::result::Result<records_api::CasResult, records_api::Error> {
         self.records
             .as_mut()
-            .ok_or(records_host::records::Error::Unsupported)?
+            .ok_or(records_api::Error::Unsupported)?
             .compare_and_swap(key, expected, entry)
     }
 
-    fn delete(
-        &mut self,
-        key: records_host::records::Key,
-    ) -> std::result::Result<(), records_host::records::Error> {
+    fn delete(&mut self, key: records_api::Key) -> std::result::Result<(), records_api::Error> {
         self.records
             .as_mut()
-            .ok_or(records_host::records::Error::Unsupported)?
+            .ok_or(records_api::Error::Unsupported)?
             .delete(key)
     }
 
@@ -942,26 +805,26 @@ impl records_host::records::Host for WebGpuHost {
         &mut self,
         since: Option<String>,
         limit: u32,
-    ) -> std::result::Result<records_host::records::Page, records_host::records::Error> {
+    ) -> std::result::Result<records_api::Page, records_api::Error> {
         self.records
             .as_mut()
-            .ok_or(records_host::records::Error::Unsupported)?
+            .ok_or(records_api::Error::Unsupported)?
             .changes(since, limit)
     }
 
     fn apply(
         &mut self,
-        entries: Vec<records_host::records::Entry>,
-    ) -> std::result::Result<records_host::records::ApplyResult, records_host::records::Error> {
+        entries: Vec<records_api::Entry>,
+    ) -> std::result::Result<records_api::ApplyResult, records_api::Error> {
         self.records
             .as_mut()
-            .ok_or(records_host::records::Error::Unsupported)?
+            .ok_or(records_api::Error::Unsupported)?
             .apply(entries)
     }
 }
 
-impl soil::http::http::Host for WebGpuHost {
-    /// The guest adapter over `soil-host`'s one policy implementation.
+impl http_api::Host for WebGpuHost {
+    /// The guest adapter over the one `soil:http` policy implementation.
     ///
     /// The guest names a URL and an opaque credential handle; the policy owns
     /// the origin allowlist, method/header/body checks and the transport. A
@@ -969,73 +832,57 @@ impl soil::http::http::Host for WebGpuHost {
     /// response.
     fn fetch(
         &mut self,
-        request: soil::http::http::Request,
-    ) -> std::result::Result<soil::http::http::Response, soil::http::http::Error> {
-        let Some(access) = self.http.as_ref() else {
-            return Err(soil::http::http::Error::Unsupported);
-        };
-        let request = HttpRequest {
-            url: request.url,
-            method: match request.method {
-                soil::http::http::Method::Get => http_host::Method::Get,
-                soil::http::http::Method::Head => http_host::Method::Head,
-                soil::http::http::Method::Post => http_host::Method::Post,
-                soil::http::http::Method::Put => http_host::Method::Put,
-                soil::http::http::Method::Patch => http_host::Method::Patch,
-                soil::http::http::Method::Delete => http_host::Method::Delete,
-            },
-            headers: request
-                .headers
-                .into_iter()
-                .map(|header| (header.name, header.value))
-                .collect(),
-            body: request.body,
-            credential: request.credential,
-            max_bytes: request.max_bytes,
-            timeout_ms: request.timeout_ms,
-        };
-        let response = http_host::perform(
-            &access.policy,
-            &*access.credentials,
-            &*access.transport,
-            request,
-        )
-        .map_err(http_error)?;
-        Ok(soil::http::http::Response {
-            status: response.status,
-            final_url: response.final_url,
-            headers: response
-                .headers
-                .into_iter()
-                .map(|(name, value)| soil::http::http::Header { name, value })
-                .collect(),
-            body: response.body,
+        request: http_api::Request,
+    ) -> std::result::Result<http_api::Response, http_api::Error> {
+        self.http
+            .as_ref()
+            .ok_or(http_api::Error::Unsupported)?
+            .fetch(request)
+    }
+}
+
+impl bus_api::Host for WebGpuHost {
+    fn poll(
+        &mut self,
+        kinds: Vec<String>,
+        cursor: Option<String>,
+        limit: u32,
+    ) -> std::result::Result<bus_api::Page, bus_api::Error> {
+        let page = self
+            .bus
+            .poll(&kinds, cursor.as_deref(), limit)
+            .map_err(bus_api::Error::from)?;
+        Ok(page.into())
+    }
+
+    fn publish(
+        &mut self,
+        kind: String,
+        body: Vec<u8>,
+        destination: Option<String>,
+        ttl_ms: u64,
+    ) -> std::result::Result<bus_api::Receipt, bus_api::Error> {
+        let receipt = self
+            .bus
+            .publish(&kind, &body, destination.as_deref(), ttl_ms)
+            .map_err(bus_api::Error::from)?;
+        // A publish is a fact about the surface, and the only way to see one
+        // from a capture host is the log.
+        eprintln!("unibus: published {kind} ({} bytes)", body.len());
+        Ok(bus_api::Receipt {
+            request_id: receipt.request_id,
         })
     }
 }
 
-fn http_error(error: http_host::Error) -> soil::http::http::Error {
-    match error {
-        http_host::Error::Denied => soil::http::http::Error::Denied,
-        http_host::Error::Invalid => soil::http::http::Error::Invalid,
-        http_host::Error::OverBudget => soil::http::http::Error::OverBudget,
-        http_host::Error::Timeout => soil::http::http::Error::Timeout,
-        http_host::Error::Unavailable => soil::http::http::Error::Unavailable,
-        http_host::Error::Tls => soil::http::http::Error::Tls,
-        http_host::Error::Http => soil::http::http::Error::Http,
-        http_host::Error::Io => soil::http::http::Error::Io,
-        http_host::Error::Unsupported => soil::http::http::Error::Unsupported,
-    }
-}
-
-impl soil::spore::catalog::Host for WebGpuHost {
+impl wit::spore::catalog::Host for WebGpuHost {
     fn entries(
         &mut self,
-    ) -> std::result::Result<Vec<soil::spore::catalog::Entry>, soil::spore::catalog::Error> {
+    ) -> std::result::Result<Vec<wit::spore::catalog::Entry>, wit::spore::catalog::Error> {
         let entries = self.catalog.entries().map_err(catalog_error)?;
         Ok(entries
             .into_iter()
-            .map(|entry| soil::spore::catalog::Entry {
+            .map(|entry| wit::spore::catalog::Entry {
                 id: entry.id,
                 name: entry.name,
                 title: entry.title,
@@ -1047,11 +894,11 @@ impl soil::spore::catalog::Host for WebGpuHost {
                 surfaces: entry
                     .surfaces
                     .into_iter()
-                    .map(|surface| soil::spore::catalog::Surface {
+                    .map(|surface| wit::spore::catalog::Surface {
                         name: surface.name,
                         kind: match surface.kind {
-                            CatalogSurfaceKind::Canvas => soil::spore::catalog::SurfaceKind::Canvas,
-                            CatalogSurfaceKind::Web => soil::spore::catalog::SurfaceKind::Web,
+                            CatalogSurfaceKind::Canvas => wit::spore::catalog::SurfaceKind::Canvas,
+                            CatalogSurfaceKind::Web => wit::spore::catalog::SurfaceKind::Web,
                         },
                         entry: surface.entry,
                         requires: surface.requires,
@@ -1065,9 +912,9 @@ impl soil::spore::catalog::Host for WebGpuHost {
         &mut self,
         id: String,
         surface: String,
-    ) -> std::result::Result<soil::spore::catalog::Launched, soil::spore::catalog::Error> {
+    ) -> std::result::Result<wit::spore::catalog::Launched, wit::spore::catalog::Error> {
         let launched = self.catalog.launch(&id, &surface).map_err(catalog_error)?;
-        Ok(soil::spore::catalog::Launched {
+        Ok(wit::spore::catalog::Launched {
             id: launched.id,
             surface: launched.surface,
             target: launched.target,
@@ -1075,21 +922,19 @@ impl soil::spore::catalog::Host for WebGpuHost {
     }
 }
 
-fn catalog_error(error: CatalogError) -> soil::spore::catalog::Error {
+fn catalog_error(error: CatalogError) -> wit::spore::catalog::Error {
+    use wit::spore::catalog::Error;
     match error {
-        CatalogError::Denied => soil::spore::catalog::Error::Denied,
-        CatalogError::NotFound => soil::spore::catalog::Error::NotFound,
-        CatalogError::Invalid => soil::spore::catalog::Error::Invalid,
-        CatalogError::Unsupported => soil::spore::catalog::Error::Unsupported,
-        CatalogError::Io => soil::spore::catalog::Error::Io,
+        CatalogError::Denied => Error::Denied,
+        CatalogError::NotFound => Error::NotFound,
+        CatalogError::Invalid => Error::Invalid,
+        CatalogError::Unsupported => Error::Unsupported,
+        CatalogError::Io => Error::Io,
     }
 }
 
-/// One per `observe.subscribe`.
-pub struct AgentSubscription;
-
-fn agent_error(error: soil_agent_host::Error) -> soil::agents::types::Error {
-    use crate::soil::agents::types::Error;
+fn agent_error(error: soil_agent_host::Error) -> wit::agents::types::Error {
+    use wit::agents::types::Error;
     match error {
         soil_agent_host::Error::Denied => Error::Denied,
         soil_agent_host::Error::NotFound => Error::NotFound,
@@ -1102,8 +947,8 @@ fn agent_error(error: soil_agent_host::Error) -> soil::agents::types::Error {
     }
 }
 
-fn agent_phase(phase: soil_agent_host::Phase) -> soil::agents::types::Phase {
-    use crate::soil::agents::types::Phase;
+fn agent_phase(phase: soil_agent_host::Phase) -> wit::agents::types::Phase {
+    use wit::agents::types::Phase;
     match phase {
         soil_agent_host::Phase::Connecting => Phase::Connecting,
         soil_agent_host::Phase::Idle => Phase::Idle,
@@ -1116,8 +961,8 @@ fn agent_phase(phase: soil_agent_host::Phase) -> soil::agents::types::Phase {
     }
 }
 
-fn agent_activity_kind(kind: soil_agent_host::ActivityKind) -> soil::agents::types::ActivityKind {
-    use crate::soil::agents::types::ActivityKind;
+fn agent_activity_kind(kind: soil_agent_host::ActivityKind) -> wit::agents::types::ActivityKind {
+    use wit::agents::types::ActivityKind;
     match kind {
         soil_agent_host::ActivityKind::You => ActivityKind::You,
         soil_agent_host::ActivityKind::Model => ActivityKind::Model,
@@ -1133,8 +978,8 @@ fn agent_activity_kind(kind: soil_agent_host::ActivityKind) -> soil::agents::typ
     }
 }
 
-fn agent_status(status: soil_agent_host::Status) -> soil::agents::types::Status {
-    use crate::soil::agents::types::Status;
+fn agent_status(status: soil_agent_host::Status) -> wit::agents::types::Status {
+    use wit::agents::types::Status;
     match status {
         soil_agent_host::Status::Running => Status::Running,
         soil_agent_host::Status::Ok => Status::Ok,
@@ -1143,8 +988,8 @@ fn agent_status(status: soil_agent_host::Status) -> soil::agents::types::Status 
     }
 }
 
-fn agent_prompt_kind(kind: soil_agent_host::PromptKind) -> soil::agents::types::PromptKind {
-    use crate::soil::agents::types::PromptKind;
+fn agent_prompt_kind(kind: soil_agent_host::PromptKind) -> wit::agents::types::PromptKind {
+    use wit::agents::types::PromptKind;
     match kind {
         soil_agent_host::PromptKind::Question => PromptKind::Question,
         soil_agent_host::PromptKind::Approval => PromptKind::Approval,
@@ -1152,8 +997,8 @@ fn agent_prompt_kind(kind: soil_agent_host::PromptKind) -> soil::agents::types::
     }
 }
 
-fn agent_role(role: soil_agent_host::Role) -> soil::agents::types::Role {
-    use crate::soil::agents::types::Role;
+fn agent_role(role: soil_agent_host::Role) -> wit::agents::types::Role {
+    use wit::agents::types::Role;
     match role {
         soil_agent_host::Role::User => Role::User,
         soil_agent_host::Role::Assistant => Role::Assistant,
@@ -1161,16 +1006,16 @@ fn agent_role(role: soil_agent_host::Role) -> soil::agents::types::Role {
     }
 }
 
-fn agent_owner(owner: soil_agent_host::Owner) -> soil::agents::types::Owner {
-    soil::agents::types::Owner {
+fn agent_owner(owner: soil_agent_host::Owner) -> wit::agents::types::Owner {
+    wit::agents::types::Owner {
         actor: owner.actor,
         display_name: owner.display_name,
     }
 }
 
-fn agent_scope(scope: soil_agent_host::Scope) -> soil::agents::types::Scope {
-    use crate::soil::agents::types::ScopeKind;
-    soil::agents::types::Scope {
+fn agent_scope(scope: soil_agent_host::Scope) -> wit::agents::types::Scope {
+    use wit::agents::types::ScopeKind;
+    wit::agents::types::Scope {
         kind: match scope.kind {
             soil_agent_host::ScopeKind::Device => ScopeKind::Device,
             soil_agent_host::ScopeKind::Desktop => ScopeKind::Desktop,
@@ -1182,15 +1027,15 @@ fn agent_scope(scope: soil_agent_host::Scope) -> soil::agents::types::Scope {
     }
 }
 
-fn agent_record(agent: soil_agent_host::Agent) -> soil::agents::types::Agent {
-    soil::agents::types::Agent {
+fn agent_record(agent: soil_agent_host::Agent) -> wit::agents::types::Agent {
+    wit::agents::types::Agent {
         id: agent.id,
         harness: agent.harness,
         title: agent.title,
         workspace: agent.workspace,
         model: agent.model,
         phase: agent_phase(agent.phase),
-        goal: agent.goal.map(|goal| soil::agents::types::Goal {
+        goal: agent.goal.map(|goal| wit::agents::types::Goal {
             text: goal.text,
             set_at_ms: goal.set_at_ms,
         }),
@@ -1198,7 +1043,7 @@ fn agent_record(agent: soil_agent_host::Agent) -> soil::agents::types::Agent {
         activity: agent
             .activity
             .into_iter()
-            .map(|row| soil::agents::types::Activity {
+            .map(|row| wit::agents::types::Activity {
                 kind: agent_activity_kind(row.kind),
                 label: row.label,
                 detail: row.detail,
@@ -1210,7 +1055,7 @@ fn agent_record(agent: soil_agent_host::Agent) -> soil::agents::types::Agent {
         prompts: agent
             .prompts
             .into_iter()
-            .map(|prompt| soil::agents::types::Prompt {
+            .map(|prompt| wit::agents::types::Prompt {
                 id: prompt.id,
                 kind: agent_prompt_kind(prompt.kind),
                 title: prompt.title,
@@ -1220,7 +1065,7 @@ fn agent_record(agent: soil_agent_host::Agent) -> soil::agents::types::Agent {
                 options: prompt
                     .choices
                     .into_iter()
-                    .map(|choice| soil::agents::types::Choice {
+                    .map(|choice| wit::agents::types::Choice {
                         id: choice.id,
                         label: choice.label,
                         detail: choice.detail,
@@ -1232,7 +1077,7 @@ fn agent_record(agent: soil_agent_host::Agent) -> soil::agents::types::Agent {
                 deadline_at_ms: prompt.deadline_at_ms,
             })
             .collect(),
-        usage: soil::agents::types::Usage {
+        usage: wit::agents::types::Usage {
             context_tokens: agent.usage.context_tokens,
             context_window: agent.usage.context_window,
             input_tokens: agent.usage.input_tokens,
@@ -1245,19 +1090,19 @@ fn agent_record(agent: soil_agent_host::Agent) -> soil::agents::types::Agent {
     }
 }
 
-fn agent_binding(binding: Binding) -> soil::agents::types::Binding {
-    soil::agents::types::Binding {
+fn agent_binding(binding: Binding) -> wit::agents::types::Binding {
+    wit::agents::types::Binding {
         agent: binding.agent,
         view: binding.view,
     }
 }
 
-fn agent_page(page: Page) -> soil::agents::observe::Page {
-    soil::agents::observe::Page {
+fn agent_page(page: Page) -> wit::agents::observe::Page {
+    wit::agents::observe::Page {
         turns: page
             .turns
             .into_iter()
-            .map(|turn| soil::agents::types::Turn {
+            .map(|turn| wit::agents::types::Turn {
                 role: agent_role(turn.role),
                 text: turn.text,
                 at_ms: turn.at_ms,
@@ -1267,31 +1112,29 @@ fn agent_page(page: Page) -> soil::agents::observe::Page {
     }
 }
 
-impl soil::agents::observe::Host for WebGpuHost {
+impl wit::agents::observe::Host for WebGpuHost {
     fn agents(
         &mut self,
-    ) -> std::result::Result<Vec<soil::agents::types::Agent>, soil::agents::types::Error> {
+    ) -> std::result::Result<Vec<wit::agents::types::Agent>, wit::agents::types::Error> {
         Ok(self.agents.list().into_iter().map(agent_record).collect())
     }
 
     fn get(
         &mut self,
         id: String,
-    ) -> std::result::Result<soil::agents::types::Agent, soil::agents::types::Error> {
+    ) -> std::result::Result<wit::agents::types::Agent, wit::agents::types::Error> {
         self.agents
             .get(&id)
             .map(agent_record)
-            .ok_or(soil::agents::types::Error::NotFound)
+            .ok_or(wit::agents::types::Error::NotFound)
     }
 
-    fn intent(&mut self) -> soil::agents::types::Binding {
-        let binding = self.agents.binding();
-        agent_binding(binding)
+    fn intent(&mut self) -> wit::agents::types::Binding {
+        agent_binding(self.agents.binding())
     }
 
-    fn current_scope(&mut self) -> soil::agents::types::Scope {
-        let scope = self.agents.scope();
-        agent_scope(scope)
+    fn current_scope(&mut self) -> wit::agents::types::Scope {
+        agent_scope(self.agents.scope())
     }
 
     fn transcript(
@@ -1299,7 +1142,7 @@ impl soil::agents::observe::Host for WebGpuHost {
         id: String,
         before: Option<u64>,
         limit: u32,
-    ) -> std::result::Result<soil::agents::observe::Page, soil::agents::types::Error> {
+    ) -> std::result::Result<wit::agents::observe::Page, wit::agents::types::Error> {
         self.agents
             .transcript(&id, before, limit)
             .map(agent_page)
@@ -1310,30 +1153,29 @@ impl soil::agents::observe::Host for WebGpuHost {
         &mut self,
     ) -> std::result::Result<
         wasmtime::component::Resource<AgentSubscription>,
-        soil::agents::types::Error,
+        wit::agents::types::Error,
     > {
         self.table
             .push(AgentSubscription)
-            .map_err(|_| soil::agents::types::Error::Io)
+            .map_err(|_| wit::agents::types::Error::Io)
     }
 }
 
-impl soil::agents::observe::HostSubscription for WebGpuHost {
+impl wit::agents::observe::HostSubscription for WebGpuHost {
     fn next(
         &mut self,
         subscription: wasmtime::component::Resource<AgentSubscription>,
         timeout_ms: u32,
-    ) -> std::result::Result<Option<soil::agents::observe::Change>, soil::agents::types::Error>
-    {
+    ) -> std::result::Result<Option<wit::agents::observe::Change>, wit::agents::types::Error> {
         // A handle the guest already dropped is `stale`, not an empty poll.
         self.table
             .get(&subscription)
-            .map_err(|_| soil::agents::types::Error::Stale)?;
+            .map_err(|_| wit::agents::types::Error::Stale)?;
         Ok(self.agents.next(timeout_ms).map(|change| match change {
             soil_agent_host::Change::Upserted(agent) => {
-                soil::agents::observe::Change::Upserted(agent_record(*agent))
+                wit::agents::observe::Change::Upserted(agent_record(*agent))
             }
-            soil_agent_host::Change::Removed(id) => soil::agents::observe::Change::Removed(id),
+            soil_agent_host::Change::Removed(id) => wit::agents::observe::Change::Removed(id),
         }))
     }
 
@@ -1346,13 +1188,13 @@ impl soil::agents::observe::HostSubscription for WebGpuHost {
     }
 }
 
-impl soil::agents::control::Host for WebGpuHost {
+impl wit::agents::control::Host for WebGpuHost {
     fn respond(
         &mut self,
         id: String,
         prompt_id: String,
-        answer: soil::agents::types::Response,
-    ) -> std::result::Result<(), soil::agents::types::Error> {
+        answer: wit::agents::types::Response,
+    ) -> std::result::Result<(), wit::agents::types::Error> {
         self.agents
             .answer(
                 &id,
@@ -1369,24 +1211,24 @@ impl soil::agents::control::Host for WebGpuHost {
         &mut self,
         id: String,
         text: String,
-    ) -> std::result::Result<(), soil::agents::types::Error> {
+    ) -> std::result::Result<(), wit::agents::types::Error> {
         self.agents.send(&id, &text).map_err(agent_error)
     }
 
-    fn interrupt(&mut self, id: String) -> std::result::Result<(), soil::agents::types::Error> {
+    fn interrupt(&mut self, id: String) -> std::result::Result<(), wit::agents::types::Error> {
         self.agents.interrupt(&id).map_err(agent_error)
     }
 }
 
-impl soil::terminal_screen::screen::Host for WebGpuHost {
+impl wit::terminal_screen::screen::Host for WebGpuHost {
     fn sessions(
         &mut self,
-    ) -> std::result::Result<Vec<soil::terminal_screen::screen::Session>, String> {
+    ) -> std::result::Result<Vec<wit::terminal_screen::screen::Session>, String> {
         Ok(self
             .terminal
             .sessions()?
             .into_iter()
-            .map(|session| soil::terminal_screen::screen::Session {
+            .map(|session| wit::terminal_screen::screen::Session {
                 id: session.id,
                 title: session.title,
                 active: session.active,
@@ -1406,15 +1248,15 @@ impl soil::terminal_screen::screen::Host for WebGpuHost {
         self.terminal.close_session(id)
     }
 
-    fn snapshot(&mut self) -> std::result::Result<soil::terminal_screen::screen::Grid, String> {
+    fn snapshot(&mut self) -> std::result::Result<wit::terminal_screen::screen::Grid, String> {
         let snapshot = self.terminal.snapshot()?;
-        Ok(soil::terminal_screen::screen::Grid {
+        Ok(wit::terminal_screen::screen::Grid {
             cols: snapshot.cols,
             rows: snapshot.rows,
             cells: snapshot
                 .cells
                 .into_iter()
-                .map(|cell| soil::terminal_screen::screen::Cell {
+                .map(|cell| wit::terminal_screen::screen::Cell {
                     text: cell.text,
                     fg: cell.fg,
                     bg: cell.bg,
@@ -1450,7 +1292,7 @@ impl soil::terminal_screen::screen::Host for WebGpuHost {
     }
 }
 
-impl soil::present::clipboard::Host for WebGpuHost {
+impl wit::present::clipboard::Host for WebGpuHost {
     fn set_text(&mut self, text: String) -> std::result::Result<(), String> {
         match self.clipboard.as_mut() {
             Some(clipboard) => clipboard.set_text(text),
@@ -1459,22 +1301,19 @@ impl soil::present::clipboard::Host for WebGpuHost {
     }
 }
 
-impl soil::present::cursor::Host for WebGpuHost {
-    fn set(
-        &mut self,
-        style: soil::present::cursor::CursorStyle,
-    ) -> std::result::Result<(), String> {
+impl wit::present::cursor::Host for WebGpuHost {
+    fn set(&mut self, style: wit::present::cursor::CursorStyle) -> std::result::Result<(), String> {
         let style = match style {
-            soil::present::cursor::CursorStyle::Default => CursorStyle::Default,
-            soil::present::cursor::CursorStyle::Text => CursorStyle::Text,
-            soil::present::cursor::CursorStyle::Pointer => CursorStyle::Pointer,
-            soil::present::cursor::CursorStyle::Crosshair => CursorStyle::Crosshair,
-            soil::present::cursor::CursorStyle::Move => CursorStyle::Move,
-            soil::present::cursor::CursorStyle::Grab => CursorStyle::Grab,
-            soil::present::cursor::CursorStyle::Grabbing => CursorStyle::Grabbing,
-            soil::present::cursor::CursorStyle::NoDrop => CursorStyle::NoDrop,
-            soil::present::cursor::CursorStyle::Wait => CursorStyle::Wait,
-            soil::present::cursor::CursorStyle::Help => CursorStyle::Help,
+            wit::present::cursor::CursorStyle::Default => CursorStyle::Default,
+            wit::present::cursor::CursorStyle::Text => CursorStyle::Text,
+            wit::present::cursor::CursorStyle::Pointer => CursorStyle::Pointer,
+            wit::present::cursor::CursorStyle::Crosshair => CursorStyle::Crosshair,
+            wit::present::cursor::CursorStyle::Move => CursorStyle::Move,
+            wit::present::cursor::CursorStyle::Grab => CursorStyle::Grab,
+            wit::present::cursor::CursorStyle::Grabbing => CursorStyle::Grabbing,
+            wit::present::cursor::CursorStyle::NoDrop => CursorStyle::NoDrop,
+            wit::present::cursor::CursorStyle::Wait => CursorStyle::Wait,
+            wit::present::cursor::CursorStyle::Help => CursorStyle::Help,
         };
         if let Some(cursor) = self.cursor.as_mut() {
             cursor.set_cursor(style);
@@ -1489,346 +1328,6 @@ impl WasiWebGpuCtxView for WebGpuHost {
             instance: &self.instance,
             table: &mut self.table,
             options: &self.options,
-        }
-    }
-}
-
-/// A reusable engine/linker pair. Each invocation gets a fresh store and
-/// resource table, so two guests never share handles or validation state.
-pub struct WebGpuRuntime {
-    engine: Engine,
-    linker: Linker<WebGpuHost>,
-    /// Where compiled components are cached. Compiling a Spore takes tens of
-    /// seconds; deserializing one that has not changed takes milliseconds.
-    component_cache: Option<std::path::PathBuf>,
-    /// The default records grant, when the host was built around a records
-    /// root. A caller can override it per run with `HostSetup::records`.
-    records: Option<RecordsAccess>,
-}
-
-impl WebGpuRuntime {
-    pub fn new() -> Result<Self> {
-        let mut config = Config::new();
-        config.wasm_component_model(true);
-        config.wasm_component_model_async(true);
-        let engine = Engine::new(&config).map_err(anyhow::Error::from)?;
-        let mut linker = Linker::new(&engine);
-        // `wasi:io/poll` is the transport for component-model async, not an
-        // authority grant. The context has no preopens, env, args, or network
-        // policy; the guest only imports poll.
-        wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
-            .map_err(anyhow::Error::from)
-            .context("link wasi:io polling")?;
-        wasi_webgpu_wasmtime::add_to_linker(&mut linker)
-            .map_err(anyhow::Error::from)
-            .context("link wasi:webgpu")?;
-        soil::present::surface::add_to_linker::<_, HasSelf<_>>(&mut linker, |host| host)
-            .map_err(anyhow::Error::from)
-            .context("link soil:present")?;
-        soil::present::input::add_to_linker::<_, HasSelf<_>>(&mut linker, |host| host)
-            .map_err(anyhow::Error::from)
-            .context("link soil:present input")?;
-        soil::present::cursor::add_to_linker::<_, HasSelf<_>>(&mut linker, |host| host)
-            .map_err(anyhow::Error::from)
-            .context("link soil:present cursor")?;
-        soil::present::clipboard::add_to_linker::<_, HasSelf<_>>(&mut linker, |host| host)
-            .map_err(anyhow::Error::from)
-            .context("link soil:present clipboard")?;
-        soil::http::http::add_to_linker::<_, HasSelf<_>>(&mut linker, |host| host)
-            .map_err(anyhow::Error::from)
-            .context("link soil:http")?;
-        soil::spore::catalog::add_to_linker::<_, HasSelf<_>>(&mut linker, |host| host)
-            .map_err(anyhow::Error::from)
-            .context("link soil:spore catalog")?;
-        soil::agents::observe::add_to_linker::<_, HasSelf<_>>(&mut linker, |host| host)
-            .map_err(anyhow::Error::from)
-            .context("link soil:agent observe")?;
-        soil::agents::control::add_to_linker::<_, HasSelf<_>>(&mut linker, |host| host)
-            .map_err(anyhow::Error::from)
-            .context("link soil:agent control")?;
-        soil::terminal_screen::screen::add_to_linker::<_, HasSelf<_>>(&mut linker, |host| host)
-            .map_err(anyhow::Error::from)
-            .context("link soil:terminal-screen")?;
-        records_host::add_to_linker::<WebGpuHost>(&mut linker).context("link soil:records")?;
-        ::soil::vfs_host::vfs::add_to_linker::<WebGpuHost, HasSelf<WebGpuHost>>(
-            &mut linker,
-            |host| host,
-        )
-        .map_err(anyhow::Error::from)
-        .context("link soil:vfs")?;
-        ::soil::principal_host::add_to_linker::<WebGpuHost>(&mut linker)
-            .context("link soil:principal")?;
-        Ok(Self {
-            engine,
-            linker,
-            component_cache: None,
-            records: None,
-        })
-    }
-
-    /// Build a runtime whose guests may read the vitals view from this root.
-    pub fn with_records(mut self, root: impl Into<PathBuf>) -> Self {
-        self.records = Some(RecordsAccess::vitals(root));
-        self
-    }
-
-    /// Keep compiled components in `directory`, named by the module's digest.
-    /// A Spore that has not changed starts from the cache instead of being
-    /// compiled again.
-    pub fn with_component_cache(mut self, directory: impl Into<std::path::PathBuf>) -> Self {
-        self.component_cache = Some(directory.into());
-        self
-    }
-
-    /// Compile a component into the cache without running it. A Spore someone
-    /// will open later costs nothing to start if it was paid for earlier.
-    pub fn prewarm(&self, bytes: &[u8]) -> Result<()> {
-        self.component(bytes).map(|_| ())
-    }
-
-    /// Compile a component, or reuse the cached compilation of the same bytes.
-    fn component(&self, bytes: &[u8]) -> Result<Component> {
-        let cache_path = self.component_cache.as_ref().map(|directory| {
-            use sha2::{Digest, Sha256};
-            let digest = Sha256::digest(bytes);
-            let mut name = String::with_capacity(digest.len() * 2 + 8);
-            for byte in digest {
-                use std::fmt::Write as _;
-                let _ = write!(name, "{byte:02x}");
-            }
-            directory.join(format!("{name}.cwasm"))
-        });
-        if let Some(path) = &cache_path
-            && let Ok(serialized) = std::fs::read(path)
-        {
-            // The file is ours: it is named by the digest of the module it was
-            // compiled from, so a mismatch means a stale cache, not a bad actor.
-            match unsafe { Component::deserialize(&self.engine, &serialized) } {
-                Ok(component) => return Ok(component),
-                Err(error) => {
-                    eprintln!("soil-webgpu: cached component unusable ({error}); compiling");
-                }
-            }
-        }
-        let component = Component::new(&self.engine, bytes)
-            .map_err(anyhow::Error::from)
-            .context("compile WebGPU component")?;
-        if let Some(path) = &cache_path {
-            if let Some(directory) = path.parent() {
-                let _ = std::fs::create_dir_all(directory);
-            }
-            match component.serialize() {
-                Ok(serialized) => {
-                    if let Err(error) = std::fs::write(path, serialized) {
-                        eprintln!("soil-webgpu: could not cache component: {error}");
-                    }
-                }
-                Err(error) => {
-                    eprintln!("soil-webgpu: component cannot be serialized: {error}");
-                }
-            }
-        }
-        Ok(component)
-    }
-
-    pub fn engine(&self) -> &Engine {
-        &self.engine
-    }
-
-    pub fn linker(&self) -> &Linker<WebGpuHost> {
-        &self.linker
-    }
-
-    /// Compile and run one guest component. The guest must export
-    /// `run: async func() -> u32`; all other imports are denied by the linker.
-    pub async fn run_component(&self, bytes: &[u8]) -> Result<u32> {
-        self.run_component_with(
-            bytes,
-            HostSetup::capture(Box::new(DiscardPresenter { size: (480, 640) })),
-        )
-        .await
-    }
-
-    pub async fn run_component_with_presenter(
-        &self,
-        bytes: &[u8],
-        presenter: Box<dyn CanvasGpuPresenter>,
-    ) -> Result<u32> {
-        self.run_component_with(bytes, HostSetup::capture(presenter))
-            .await
-    }
-
-    /// Run one guest against a fully specified host.
-    pub async fn run_component_with(&self, bytes: &[u8], mut setup: HostSetup) -> Result<u32> {
-        if setup.records.is_none() {
-            setup.records = self.records.clone();
-        }
-        let component = self.component(bytes)?;
-        let mut store = Store::new(&self.engine, WebGpuHost::new(setup)?);
-        let instance = Runner::instantiate_async(&mut store, &component, &self.linker)
-            .await
-            .map_err(anyhow::Error::from)
-            .context("instantiate WebGPU component")?;
-        instance
-            .func_run()
-            .call_async(&mut store, ())
-            .await
-            .map_err(anyhow::Error::from)
-            .context("run WebGPU component")
-            .map(|(status,)| status)
-    }
-}
-
-/// Synchronous convenience wrapper for CLI/integration tests. The actual host
-/// calls remain async internally so `wasi:webgpu` request/map futures work.
-pub fn run_component_blocking(bytes: &[u8]) -> Result<u32> {
-    let runtime = WebGpuRuntime::new()?;
-    pollster::block_on(runtime.run_component(bytes))
-}
-
-/// Run with a capture sink and return both guest status and the first frame.
-pub fn run_component_capture(
-    bytes: &[u8],
-    width: u32,
-    height: u32,
-) -> Result<(u32, Option<CanvasFrame>)> {
-    run_component_capture_with(bytes, width, height, None, None, None)
-}
-
-/// Capture one frame with a host that can answer `soil:spore/catalog` and
-/// `soil:http` and `soil:agent`. A capture host is interactive=false, so the
-/// guest renders one frame and exits: this is how a Spore's first screen is
-/// inspected in CI.
-pub fn run_component_capture_with(
-    bytes: &[u8],
-    width: u32,
-    height: u32,
-    catalog: Option<Box<dyn CatalogHost>>,
-    http: Option<HttpAccess>,
-    agents: Option<Box<dyn AgentBackend>>,
-) -> Result<(u32, Option<CanvasFrame>)> {
-    let runtime = WebGpuRuntime::new()?;
-    let capture = FrameCapture::new(width, height);
-    let mut setup = HostSetup::capture(Box::new(capture.clone()));
-    if let Some(catalog) = catalog {
-        setup.catalog = catalog;
-    }
-    if let Some(agents) = agents {
-        setup.agents = agents;
-    }
-    setup.http = http;
-    let status = pollster::block_on(runtime.run_component_with(bytes, setup))?;
-    Ok((status, capture.take()))
-}
-
-/// What a capture run is allowed to reach.
-///
-/// Everything a Spore can be granted is named here, once, so a caller that
-/// forgets a grant gets the denying default rather than a host that quietly
-/// answers as somebody else.
-#[derive(Default)]
-pub struct Grants {
-    /// One workspace the Spore may list and read through `soil:vfs`.
-    pub vfs: Option<PathBuf>,
-    /// The books the Spore may read or write through `soil:records`.
-    pub records: Option<RecordsAccess>,
-    /// Who the Spore is acting as, through `soil:principal`.
-    pub principal: Option<PrincipalHost>,
-    pub http: Option<HttpAccess>,
-    pub catalog: Option<Box<dyn CatalogHost>>,
-}
-
-impl Grants {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Attest `actor` as a human principal. Local development only: a host
-    /// that verifies a real identity builds its own provider.
-    pub fn actor(self, actor: impl Into<String>) -> Self {
-        let principal = PrincipalHost::new(::soil::principal_host::StaticPrincipalProvider::new(
-            ::soil::principal_host::Principal {
-                actor: actor.into(),
-                kind: ::soil::principal_host::PrincipalKind::Human,
-                display_name: None,
-                device: Some(gethostname()),
-                teams: Vec::new(),
-                roles: Vec::new(),
-                generation: 1,
-            },
-        ));
-        Self {
-            principal: Some(principal),
-            ..self
-        }
-    }
-}
-
-fn gethostname() -> String {
-    std::env::var("HOSTNAME")
-        .or_else(|_| std::env::var("HOST"))
-        .unwrap_or_else(|_| "localhost".into())
-}
-
-/// Capture one frame with whatever [`Grants`] the caller assembled.
-pub fn run_component_capture_with_grants(
-    bytes: &[u8],
-    width: u32,
-    height: u32,
-    grants: Grants,
-) -> Result<(u32, Option<CanvasFrame>)> {
-    let runtime = WebGpuRuntime::new()?;
-    let capture = FrameCapture::new(width, height);
-    let mut setup = HostSetup::capture(Box::new(capture.clone()));
-    setup.vfs = grants.vfs;
-    setup.records = grants.records;
-    setup.principal = grants.principal;
-    setup.http = grants.http;
-    if let Some(catalog) = grants.catalog {
-        setup.catalog = catalog;
-    }
-    let status = pollster::block_on(runtime.run_component_with(bytes, setup))?;
-    Ok((status, capture.take()))
-}
-
-/// Capture one frame with a read-only `vitals.view` records grant.
-pub fn run_component_capture_with_records(
-    bytes: &[u8],
-    width: u32,
-    height: u32,
-    records_root: impl Into<PathBuf>,
-) -> Result<(u32, Option<CanvasFrame>)> {
-    let runtime = WebGpuRuntime::new()?.with_records(records_root);
-    let capture = FrameCapture::new(width, height);
-    let setup = HostSetup::capture(Box::new(capture.clone()));
-    let status = pollster::block_on(runtime.run_component_with(bytes, setup))?;
-    Ok((status, capture.take()))
-}
-
-#[cfg(test)]
-mod tests {
-    const WEBGPU_WIT: &str = include_str!("../wit/deps/wasi-webgpu-0.3.0-rc.2/package.wit");
-    const RUNNER_WIT: &str = include_str!("../wit/runner.wit");
-
-    #[test]
-    fn pins_the_upstream_wasi_webgpu_contract() {
-        assert!(WEBGPU_WIT.starts_with("package wasi:webgpu@0.3.0-rc.2;"));
-        assert!(RUNNER_WIT.contains("include wasi:webgpu/imports@0.3.0-rc.2;"));
-        assert!(RUNNER_WIT.contains("export run: async func() -> u32;"));
-    }
-
-    #[test]
-    fn the_runner_offers_agents_but_not_their_authority() {
-        // The point of the surface is that it can watch and answer. Spawning a
-        // harness, choosing a model, or reading a credential is not here, and
-        // dropping this assertion is how one of them would quietly arrive.
-        assert!(RUNNER_WIT.contains("import soil:agents/observe@0.1.0;"));
-        assert!(RUNNER_WIT.contains("import soil:agents/control@0.1.0;"));
-        for forbidden in ["spawn", "config", "credential", "secrets"] {
-            assert!(
-                !RUNNER_WIT.contains(forbidden),
-                "the agent surface grew `{forbidden}` authority"
-            );
         }
     }
 }

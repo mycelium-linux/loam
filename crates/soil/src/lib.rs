@@ -38,9 +38,12 @@
 //! that grants `soil:http` wants `http`. `wasi` is the runner profile — the
 //! WASI p2 imports, the credential and bus sessions, the gateway and
 //! [`WasiHost`] that links them — and it is the one feature that pulls the
-//! others in, because those modules are written against it. `cli` adds the
-//! `soil-*` commands.
+//! others in, because those modules are written against it. `webgpu` is the
+//! other runner: the component-model host a GPUI Spore runs in, which is not
+//! the WASI profile and does not want its process, socket or credential
+//! authority. `cli` adds the `soil-*` commands.
 
+mod clock;
 #[cfg(feature = "wasi")]
 pub mod context;
 #[cfg(feature = "wasi")]
@@ -61,10 +64,15 @@ pub mod records_host;
 mod service;
 #[cfg(feature = "wasi")]
 pub mod time;
-#[cfg(feature = "wasi")]
+#[cfg(any(feature = "unibus", feature = "wasi"))]
 pub mod unibus;
 #[cfg(feature = "vfs")]
 pub mod vfs_host;
+// The WebGPU runner: a wasmtime store that grants `wasi:webgpu` and the
+// presentation bridge, and the capture helpers a window or a panel presents
+// through. It is the one GPU-capable host; `canvas-winit` is a window over it.
+#[cfg(feature = "webgpu")]
+pub mod webgpu;
 
 #[cfg(feature = "wasi")]
 pub use context::HttpContext;
@@ -87,7 +95,7 @@ pub use policy::{HttpPolicy, NetworkPolicy, WasiHostPolicy};
 pub use records_host::RecordsBookHost;
 #[cfg(feature = "wasi")]
 pub use service::HttpService;
-#[cfg(feature = "wasi")]
+#[cfg(any(feature = "unibus", feature = "wasi"))]
 pub use unibus::{
     Bus, BusError, BusReceipt, Frame, MAX_BUS_BODY, MAX_POLL_LIMIT, MemoryBus, Page, UnibusBus,
 };

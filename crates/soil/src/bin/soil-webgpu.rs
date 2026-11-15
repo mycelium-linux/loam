@@ -5,17 +5,26 @@
 //!   soil-webgpu --frame FILE.bgr [--size WxH] [--agents demo] <component.wasm>
 //!   soil-webgpu --frame FILE.bgr --root VAULT --records DIR \
 //!     --book BOOK --collection NAME --actor WHO <component.wasm>
+//!   soil-webgpu --frame FILE.bgr --bus-seed FILE <component.wasm>
 //!
 //! `--root`, `--records`, `--book`, `--collection` and `--actor` are the grants
 //! a document-shaped Spore asks for: one workspace to read, a book to write
 //! pending entities into, and the identity the host attests for them.
+//!
+//! `--bus-seed` publishes `kind<TAB>body` lines on the in-process bus before the
+//! guest runs. A popup surface is driven by what a wall announced, and a
+//! one-shot capture has no wall: this is how a test says "someone is asking".
 
 use std::{env, fs, path::Path, path::PathBuf, process::ExitCode, sync::Arc, time::Duration};
 
 #[cfg(unix)]
 use soil::http_host::GeodeCredentials;
 use soil::http_host::HttpPolicy;
-use soil_webgpu::{HttpAccess, run_component_capture_with_records};
+use soil::webgpu::{
+    CanvasFrame, CatalogHost, FrameCapture, FramebufferPresenter, Grants, HostSetup, HttpAccess,
+    InstallCatalog, RecordsAccess, WebGpuRuntime,
+};
+use soil_agent_host::AgentBackend;
 
 fn main() -> ExitCode {
     let mut frame_path = None;
@@ -35,6 +44,7 @@ fn main() -> ExitCode {
     let mut agents = None;
     let mut view = None;
     let mut agent = None;
+    let mut seed: Vec<(String, String)> = Vec::new();
     let mut component = None;
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -149,9 +159,33 @@ fn main() -> ExitCode {
                 }
                 agents = Some(value);
             }
+            "--bus-seed" => {
+                let Some(path) = args.next() else {
+                    eprintln!("--bus-seed needs a file of `kind<TAB>body` lines");
+                    return ExitCode::FAILURE;
+                };
+                let text = match fs::read_to_string(&path) {
+                    Ok(text) => text,
+                    Err(error) => {
+                        eprintln!("--bus-seed: {path}: {error}");
+                        return ExitCode::FAILURE;
+                    }
+                };
+                for line in text.lines().filter(|line| !line.trim().is_empty()) {
+                    match line.split_once('\t') {
+                        Some((kind, body)) => {
+                            seed.push((kind.to_string(), body.to_string()));
+                        }
+                        None => {
+                            eprintln!("--bus-seed: {path}: line is not kind<TAB>body");
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
+            }
             "--view" => {
                 let Some(value) = args.next() else {
-                    eprintln!("--view requires board|roster|stage|focus");
+                    eprintln!("--view requires board|roster|stage|focus|popup");
                     return ExitCode::FAILURE;
                 };
                 view = Some(value);
@@ -179,18 +213,14 @@ fn main() -> ExitCode {
             }
             _ => {
                 if component.replace(arg).is_some() {
-                    eprintln!(
-                        "usage: soil-webgpu [--frame FILE.bgr] [--size WxH] [--records-dir DIR] [--spores-root DIR]... [--allow-origin URL]... [--store-origin URL] [--agents demo] [--view NAME] [--agent ID] [--geode-socket PATH --geode-purpose PURPOSE] <component.wasm>"
-                    );
+                    eprintln!("{USAGE}");
                     return ExitCode::FAILURE;
                 }
             }
         }
     }
     let Some(path) = component else {
-        eprintln!(
-            "usage: soil-webgpu [--frame FILE.bgr] [--size WxH] [--records-dir DIR] [--spores-root DIR]... [--allow-origin URL]... [--store-origin URL] [--agents demo] [--view NAME] [--agent ID] [--geode-socket PATH --geode-purpose PURPOSE] <component.wasm>"
-        );
+        eprintln!("{USAGE}");
         return ExitCode::FAILURE;
     };
     let bytes = match fs::read(&path) {
@@ -212,88 +242,59 @@ fn main() -> ExitCode {
             );
             return ExitCode::FAILURE;
         }
+        let http = match build_http(origins, store_origin, geode_socket, geode_purpose) {
+            Ok(http) => http,
+            Err(error) => {
+                eprintln!("webgpu: {error}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let catalog: Option<Box<dyn CatalogHost>> = if spores_roots.is_empty() {
+            None
+        } else {
+            Some(Box::new(InstallCatalog::with_roots(spores_roots)))
+        };
+        let cast: Option<Box<dyn AgentBackend>> = agents.map(|_| {
+            Box::new(soil_agent_host::FixtureAgents::new().bind(agent.clone(), view.clone()))
+                as Box<dyn AgentBackend>
+        });
         let document_grants = vfs_root.is_some() || actor.is_some() || records_root.is_some();
-        let result = if document_grants {
-            let mut grants = soil_webgpu::Grants::new();
-            grants.vfs = vfs_root.clone();
-            if let Some(root) = records_root.clone() {
+        let grants = if document_grants {
+            let mut grants = Grants::new();
+            grants.vfs = vfs_root;
+            if let Some(root) = records_root {
                 let Some(collection) = collection.clone() else {
                     eprintln!("--records requires --collection: the guest names a collection");
                     return ExitCode::FAILURE;
                 };
-                grants.records = Some(soil_webgpu::RecordsAccess::book(
+                grants.records = Some(RecordsAccess::book(
                     &root,
                     collection.clone(),
-                    book.clone().unwrap_or_else(|| collection.clone()),
+                    book.unwrap_or_else(|| collection.clone()),
                     collection,
                 ));
             }
-            if let Some(actor) = actor.clone() {
+            if let Some(actor) = actor {
                 grants = grants.actor(actor);
             }
-            soil_webgpu::run_component_capture_with_grants(&bytes, size.0, size.1, grants)
-        } else if let Some(root) = records_dir.as_deref() {
-            run_component_capture_with_records(&bytes, size.0, size.1, root)
+            Some(grants)
         } else {
-            let catalog = if spores_roots.is_empty() {
-                None
-            } else {
-                Some(Box::new(soil_webgpu::InstallCatalog::with_roots(
-                    spores_roots.clone(),
-                )) as Box<dyn soil_webgpu::CatalogHost>)
-            };
-            let http = match build_http(origins, store_origin, geode_socket, geode_purpose) {
-                Ok(http) => http,
-                Err(error) => {
-                    eprintln!("webgpu: {error}");
-                    return ExitCode::FAILURE;
-                }
-            };
-            let cast = agents.map(|_| {
-                Box::new(soil_agent_host::FixtureAgents::new().bind(agent.clone(), view.clone()))
-                    as Box<dyn soil_agent_host::AgentBackend>
-            });
-            match fb_path.as_deref() {
-                Some(device) => run_on_framebuffer(&bytes, size, device, catalog, http, cast),
-                None => soil_webgpu::run_component_capture_with(
-                    &bytes, size.0, size.1, catalog, http, cast,
-                ),
-            }
+            None
         };
-        match result {
-            Ok((status, frame)) => {
-                if status != 0 {
-                    eprintln!("webgpu: guest status {status}");
-                    return ExitCode::FAILURE;
-                }
-                if let Some(device) = fb_path.as_deref() {
-                    println!(
-                        "webgpu: ok fb={device} width={} height={} format=rgb565",
-                        size.0, size.1
-                    );
-                    return ExitCode::SUCCESS;
-                }
-                let Some(frame) = frame else {
-                    eprintln!("webgpu: guest did not present a Canvas frame");
-                    return ExitCode::FAILURE;
-                };
-                match write_bgr(frame_path.as_deref().expect("frame path"), &frame) {
-                    Ok(()) => {
-                        println!(
-                            "webgpu: ok frame={} width={} height={} format=bgr24",
-                            frame_path.as_deref().unwrap_or_default(),
-                            frame.width,
-                            frame.height
-                        );
-                        Ok(())
-                    }
-                    Err(error) => Err(error),
-                }
-            }
-            Err(error) => Err(error),
-        }
+        run_capture(Capture {
+            bytes: &bytes,
+            size,
+            frame: frame_path.as_deref(),
+            fb: fb_path.as_deref(),
+            catalog,
+            http,
+            agents: cast,
+            records_dir,
+            grants,
+            seed,
+        })
     } else {
-        soil_webgpu::run_component_blocking(&bytes).map(|status| {
+        soil::webgpu::run_component_blocking(&bytes).map(|status| {
             if status == 0 {
                 println!("webgpu: ok");
             } else {
@@ -307,6 +308,108 @@ fn main() -> ExitCode {
             eprintln!("webgpu: {error:#}");
             ExitCode::FAILURE
         }
+    }
+}
+
+const USAGE: &str = "usage: soil-webgpu [--frame FILE.bgr] [--fb DEVICE] [--size WxH] [--records-dir DIR] [--spores-root DIR]... [--allow-origin URL]... [--store-origin URL] [--agents demo] [--view NAME] [--agent ID] [--bus-seed FILE] [--geode-socket PATH --geode-purpose PURPOSE] <component.wasm>";
+
+/// Everything one capture run was asked for.
+struct Capture<'a> {
+    bytes: &'a [u8],
+    size: (u32, u32),
+    frame: Option<&'a str>,
+    fb: Option<&'a str>,
+    catalog: Option<Box<dyn CatalogHost>>,
+    http: Option<HttpAccess>,
+    agents: Option<Box<dyn AgentBackend>>,
+    records_dir: Option<PathBuf>,
+    grants: Option<Grants>,
+    seed: Vec<(String, String)>,
+}
+
+/// One frame, one guest, one store.
+///
+/// The presenter differs by destination (a file, a panel), everything else is
+/// the same run. Building the setup here rather than in a library helper is
+/// what lets `--bus-seed` publish on the very bus the guest will poll.
+fn run_capture(capture: Capture<'_>) -> anyhow::Result<()> {
+    let Capture {
+        bytes,
+        size,
+        frame: frame_path,
+        fb,
+        catalog,
+        http,
+        agents,
+        records_dir,
+        grants,
+        seed,
+    } = capture;
+    let (presenter, sink): (
+        Box<dyn soil::webgpu::CanvasGpuPresenter>,
+        Option<FrameCapture>,
+    ) = match fb {
+        Some(device) => (
+            Box::new(FramebufferPresenter::open(device, size.0, size.1)?),
+            None,
+        ),
+        None => {
+            let capture = FrameCapture::new(size.0, size.1);
+            (Box::new(capture.clone()), Some(capture))
+        }
+    };
+    let runtime = match component_cache() {
+        Some(cache) => WebGpuRuntime::new()?.with_component_cache(cache),
+        None => WebGpuRuntime::new()?,
+    };
+    let mut setup = HostSetup::capture(presenter);
+    if let Some(catalog) = catalog {
+        setup.catalog = catalog;
+    }
+    setup.http = http;
+    if let Some(agents) = agents {
+        setup.agents = agents;
+    }
+    if let Some(root) = records_dir {
+        setup.records = Some(RecordsAccess::vitals(root));
+    }
+    if let Some(grants) = grants {
+        setup.vfs = grants.vfs;
+        setup.records = grants.records.or(setup.records);
+        setup.principal = grants.principal;
+        setup.http = grants.http.or(setup.http);
+    }
+    for (kind, body) in &seed {
+        setup
+            .bus
+            .publish(kind, body.as_bytes(), None, 60 * 60 * 1000)
+            .map_err(|error| anyhow::anyhow!("bus seed {kind}: {error}"))?;
+    }
+    let status = pollster::block_on(runtime.run_component_with(bytes, setup))?;
+    if status != 0 {
+        anyhow::bail!("guest status {status}");
+    }
+    match (fb, sink) {
+        (Some(device), _) => {
+            println!(
+                "webgpu: ok fb={device} width={} height={} format=rgb565",
+                size.0, size.1
+            );
+            Ok(())
+        }
+        (None, Some(capture)) => {
+            let frame = capture
+                .take()
+                .ok_or_else(|| anyhow::anyhow!("guest did not present a Canvas frame"))?;
+            let path = frame_path.ok_or_else(|| anyhow::anyhow!("--frame path"))?;
+            write_bgr(path, &frame)?;
+            println!(
+                "webgpu: ok frame={path} width={} height={} format=bgr24",
+                frame.width, frame.height
+            );
+            Ok(())
+        }
+        (None, None) => Ok(()),
     }
 }
 
@@ -347,30 +450,17 @@ fn build_http(
     Ok(Some(access))
 }
 
-/// Present one Spore frame directly on a framebuffer device.
-fn run_on_framebuffer(
-    bytes: &[u8],
-    size: (u32, u32),
-    device: &str,
-    catalog: Option<Box<dyn soil_webgpu::CatalogHost>>,
-    http: Option<HttpAccess>,
-    agents: Option<Box<dyn soil_agent_host::AgentBackend>>,
-) -> anyhow::Result<(u32, Option<soil_webgpu::CanvasFrame>)> {
-    let presenter = soil_webgpu::fb::FramebufferPresenter::open(device, size.0, size.1)?;
-    let runtime = soil_webgpu::WebGpuRuntime::new()?;
-    let mut setup = soil_webgpu::HostSetup::capture(Box::new(presenter));
-    if let Some(catalog) = catalog {
-        setup.catalog = catalog;
+/// Where compiled Spores are cached across capture runs. `SOIL_COMPONENT_CACHE`
+/// overrides it; without a home directory every frame pays Cranelift again.
+fn component_cache() -> Option<PathBuf> {
+    if let Some(path) = env::var_os("SOIL_COMPONENT_CACHE") {
+        return Some(PathBuf::from(path));
     }
-    if let Some(agents) = agents {
-        setup.agents = agents;
-    }
-    setup.http = http;
-    let status = pollster::block_on(runtime.run_component_with(bytes, setup))?;
-    Ok((status, None))
+    let home = env::var_os("HOME").or_else(|| env::var_os("USERPROFILE"))?;
+    Some(PathBuf::from(home).join("Library/Caches/soil/components"))
 }
 
-fn write_bgr(path: &str, frame: &soil_webgpu::CanvasFrame) -> anyhow::Result<()> {
+fn write_bgr(path: &str, frame: &CanvasFrame) -> anyhow::Result<()> {
     let path = Path::new(path);
     let mut bgr = Vec::with_capacity(frame.width as usize * frame.height as usize * 3);
     for pixel in frame.rgba.as_chunks::<4>().0 {

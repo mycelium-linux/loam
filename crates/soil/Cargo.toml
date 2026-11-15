@@ -59,6 +59,25 @@ wasi = [
 # The embedding models `soil:index` reaches for, and the remote alternative.
 model2vec = ["vfs", "dep:model2vec-rs"]
 remote = ["vfs"]
+# The component-model runner a GPUI / WebGPU Spore runs in: `wasi:webgpu`, the
+# `soil:present` bridge, and the capability hosts a presenter may grant. Off by
+# default so a WASI-profile host does not carry the GPU stack. It is not `wasi`:
+# this runner grants no process, socket or credential authority of its own.
+webgpu = [
+    "http",
+    "records",
+    "principal",
+    "vfs",
+    "unibus",
+    "dep:pollster",
+    "dep:sha2",
+    "dep:soil-agent-host",
+    "dep:soil-spore",
+    "dep:wasi-webgpu-wasmtime",
+    "dep:wasmtime-wasi",
+    "wasmtime/async",
+    "wasmtime/component-model-async",
+]
 # The `soil-*` commands that ship beside the library.
 cli = [
     "vfs",
@@ -89,11 +108,14 @@ ipnet = { version = "2", optional = true }
 model2vec-rs = { version = "0.4", default-features = false, features = ["fancy-regex", "hf-hub"], optional = true }
 mycelium-peer-protocol = { git = "https://github.com/ajmwagar/mycelium.git", rev = "83a8cf8a818c29db84845eba8128477f38ab39ca", optional = true }
 percent-encoding = { version = "2", optional = true }
+pollster = { version = "0.4", optional = true }
 regex = { version = "1", optional = true }
 rusqlite = { version = "0.41", features = ["bundled"], optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = "1"
 sha2 = { version = "0.10", optional = true }
+soil-agent-host = { path = "../soil-agent-host", optional = true }
+soil-spore = { path = "../soil-spore", optional = true }
 tempfile = { version = "3", optional = true }
 tiny_http = { version = "0.12", optional = true }
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"], optional = true }
@@ -102,6 +124,7 @@ unibus = { git = "https://github.com/mycelium-linux/unibus.git", rev = "8bf8f79"
 unibus-sdk = { git = "https://github.com/mycelium-linux/unibus.git", rev = "8bf8f79", optional = true }
 url = { version = "2", optional = true }
 ureq = { version = "2", features = ["json"] }
+wasi-webgpu-wasmtime = { git = "https://github.com/mycelium-linux/wasi-gfx-runtime", rev = "9624cae", optional = true }
 wasmtime = { version = "50", default-features = false, features = [
     "anyhow",
     "component-model",
@@ -142,6 +165,26 @@ required-features = ["cli"]
 name = "soil-vfs-web"
 path = "src/bin/soil-vfs-web.rs"
 required-features = ["cli"]
+
+[[bin]]
+name = "soil-webgpu"
+path = "src/bin/soil-webgpu.rs"
+required-features = ["webgpu"]
+
+[[test]]
+name = "webgpu_hello_compute"
+path = "tests/webgpu_hello_compute.rs"
+required-features = ["webgpu"]
+
+[[test]]
+name = "webgpu_wgpu_compute"
+path = "tests/webgpu_wgpu_compute.rs"
+required-features = ["webgpu"]
+
+[[test]]
+name = "webgpu_wgpu_test"
+path = "tests/webgpu_wgpu_test.rs"
+required-features = ["webgpu"]
 
 [[bin]]
 name = "soil-wasi-http"

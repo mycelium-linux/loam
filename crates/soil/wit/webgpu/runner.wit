@@ -1,0 +1,35 @@
+package soil:webgpu-host@0.1.0;
+
+/// The world a GPUI / WebGPU Spore runs in.
+///
+/// The runner adds `wasi:webgpu` and the presentation bridge, and imports the
+/// `soil:*` capabilities a presenter may grant. Every one of them is `denied`
+/// unless the presenter supplied an implementation, so linking the world is
+/// not the grant: the host setup is.
+///
+/// `soil:present` is the only way the guest affects the window; input, cursor
+/// and clipboard are the same bridge. `soil:spore/catalog` lets a launcher list
+/// what is installed and ask the host to open it. `soil:agents` observes and
+/// answers harness sessions. `soil:terminal-screen` is a host-owned PTY.
+/// `soil:unibus` is the in-process notice bus a wall publishes to and a popup
+/// polls. `soil:vfs`, `soil:records`, `soil:principal` and `soil:http` are the
+/// document-shaped grants.
+world runner {
+  include wasi:webgpu/imports@0.3.0-rc.2;
+  import soil:present/surface@0.1.0;
+  import soil:present/input@0.1.0;
+  import soil:present/cursor@0.1.0;
+  import soil:present/clipboard@0.1.0;
+  import soil:vfs/vfs@1.0.0;
+  import soil:records/records@0.1.0;
+  import soil:principal/principal@0.1.0;
+  import soil:spore/catalog@0.1.0;
+  import soil:agents/observe@0.1.0;
+  import soil:agents/control@0.1.0;
+  import soil:http/http@0.1.0;
+  import soil:terminal-screen/screen@0.1.0;
+  import soil:unibus/bus@0.1.0;
+
+  /// Run one bounded Spore and return a host-visible status code.
+  export run: async func() -> u32;
+}

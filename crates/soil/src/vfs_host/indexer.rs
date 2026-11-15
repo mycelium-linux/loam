@@ -4,16 +4,13 @@
 //! cache. It is a cache: the VFS namespace and `records` remain the sources of
 //! truth. Deleting this database must never lose user data.
 
-use std::{
-    collections::BTreeMap,
-    path::Path,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{collections::BTreeMap, path::Path};
 
 use anyhow::Context;
 use fungos_vfs::{FileEntry, Hydration, Vfs};
 use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::clock::now_ms;
 use crate::vfs_host::soil::index::index;
 
 pub(crate) const MAX_INDEX_TEXT: usize = 64 * 1024;
@@ -1000,13 +997,6 @@ fn parent_of(path: &str) -> String {
     path.rsplit_once('/')
         .map(|(parent, _)| parent.to_string())
         .unwrap_or_default()
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

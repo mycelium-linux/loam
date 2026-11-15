@@ -13,9 +13,9 @@ use std::fs::{File, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 
-use crate::{CanvasFrame, CanvasGpuPresenter};
+use super::{CanvasFrame, CanvasGpuPresenter};
 
 pub struct FramebufferPresenter {
     file: File,
@@ -90,11 +90,7 @@ impl CanvasGpuPresenter for FramebufferPresenter {
             for x in 0..self.width {
                 let source_x = (x as u64 * frame.width as u64 / self.width as u64) as u32;
                 let at = ((source_y * frame.width + source_x) * 4) as usize;
-                let (r, g, b) = (
-                    frame.rgba[at],
-                    frame.rgba[at + 1],
-                    frame.rgba[at + 2],
-                );
+                let (r, g, b) = (frame.rgba[at], frame.rgba[at + 1], frame.rgba[at + 2]);
                 let pixel = ((r as u16 >> 3) << 11) | ((g as u16 >> 2) << 5) | (b as u16 >> 3);
                 let at = row + x as usize * 2;
                 buffer[at] = (pixel & 0xff) as u8;

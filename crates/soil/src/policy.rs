@@ -202,12 +202,17 @@ mod tests {
         assert!(policy.allows_uri(&"http://127.0.0.1:8080/".parse().unwrap()));
     }
 
+    // The socket policy is only compiled into the WASI profile: `NetworkPolicy`
+    // bounds `wasi:sockets` there, and a presenter that links no sockets has no
+    // `SocketAddrUse` to test against.
+    #[cfg(feature = "wasi")]
     #[test]
     fn network_policy_denies_by_default() {
         let policy = NetworkPolicy::default();
         assert!(!policy.allows("127.0.0.1:80".parse().unwrap(), SocketAddrUse::TcpConnect));
     }
 
+    #[cfg(feature = "wasi")]
     #[test]
     fn network_policy_is_use_specific() {
         let mut policy = NetworkPolicy::default();

@@ -43,6 +43,7 @@ use std::time::{Duration, Instant};
 use anyhow::Context as _;
 use wasmtime::component::{HasSelf, Linker};
 
+#[cfg(feature = "wasi")]
 use crate::host::WasiHost;
 
 wasmtime::component::bindgen!({
@@ -267,7 +268,7 @@ impl Bus for MemoryBus {
         let frame = Frame {
             kind: kind.to_string(),
             producer: "local".to_string(),
-            issued_at_ms: crate::context::now_ms(),
+            issued_at_ms: crate::clock::now_ms(),
             body: body.to_vec(),
         };
         state.frames.push(frame);
@@ -725,6 +726,42 @@ impl Bus for UnibusBus {
     }
 }
 
+// The two host surfaces that answer `soil:unibus` share one set of boundary
+// conversions: a WIT record is built from the host record, never by hand twice
+// in two impls that can drift apart.
+impl From<Frame> for api::Frame {
+    fn from(frame: Frame) -> Self {
+        Self {
+            kind: frame.kind,
+            producer: frame.producer,
+            issued_at_ms: frame.issued_at_ms,
+            body: frame.body,
+        }
+    }
+}
+
+impl From<Page> for api::Page {
+    fn from(page: Page) -> Self {
+        Self {
+            frames: page.frames.into_iter().map(api::Frame::from).collect(),
+            next: page.next,
+        }
+    }
+}
+
+impl From<BusError> for api::Error {
+    fn from(error: BusError) -> Self {
+        match error {
+            BusError::Denied => api::Error::Denied,
+            BusError::Invalid => api::Error::Invalid,
+            BusError::OverBudget => api::Error::OverBudget,
+            BusError::Stale => api::Error::Stale,
+            BusError::Unavailable => api::Error::Unavailable,
+        }
+    }
+}
+
+#[cfg(feature = "wasi")]
 impl api::Host for WasiHost {
     fn publish(
         &mut self,
@@ -736,7 +773,7 @@ impl api::Host for WasiHost {
         let bus = self.bus().ok_or(api::Error::Unavailable)?;
         let receipt = bus
             .publish(&kind, &body, destination.as_deref(), ttl_ms)
-            .map_err(map_error)?;
+            .map_err(api::Error::from)?;
         Ok(api::Receipt {
             request_id: receipt.request_id,
         })
@@ -751,20 +788,8 @@ impl api::Host for WasiHost {
         let bus = self.bus().ok_or(api::Error::Unavailable)?;
         let page = bus
             .poll(&kinds, cursor.as_deref(), limit)
-            .map_err(map_error)?;
-        Ok(api::Page {
-            frames: page
-                .frames
-                .into_iter()
-                .map(|frame| api::Frame {
-                    kind: frame.kind,
-                    producer: frame.producer,
-                    issued_at_ms: frame.issued_at_ms,
-                    body: frame.body,
-                })
-                .collect(),
-            next: page.next,
-        })
+            .map_err(api::Error::from)?;
+        Ok(page.into())
     }
 }
 
@@ -774,16 +799,6 @@ where
 {
     api::add_to_linker::<T, HasSelf<T>>(linker, |state| state)?;
     Ok(())
-}
-
-fn map_error(error: BusError) -> api::Error {
-    match error {
-        BusError::Denied => api::Error::Denied,
-        BusError::Invalid => api::Error::Invalid,
-        BusError::OverBudget => api::Error::OverBudget,
-        BusError::Stale => api::Error::Stale,
-        BusError::Unavailable => api::Error::Unavailable,
-    }
 }
 
 #[cfg(test)]

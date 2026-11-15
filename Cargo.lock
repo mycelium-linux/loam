@@ -678,7 +678,6 @@ dependencies = [
  "soil",
  "soil-spore",
  "soil-vt",
- "soil-webgpu",
  "url",
  "winit",
 ]
@@ -6895,11 +6894,14 @@ dependencies = [
  "model2vec-rs",
  "mycelium-peer-protocol",
  "percent-encoding",
+ "pollster",
  "regex",
  "rusqlite",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "soil-agent-host",
+ "soil-spore",
  "tempfile",
  "tiny_http",
  "tokio",
@@ -6908,6 +6910,7 @@ dependencies = [
  "unibus-sdk",
  "ureq 2.12.1",
  "url",
+ "wasi-webgpu-wasmtime",
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-http",
@@ -7607,23 +7610,6 @@ dependencies = [
  "soil-spore",
  "tempfile",
  "tungstenite",
-]
-
-[[package]]
-name = "soil-webgpu"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "pollster",
- "sha2 0.10.9",
- "soil",
- "soil-agent-host",
- "soil-spore",
- "ureq 2.12.1",
- "wasi-webgpu-wasmtime",
- "wasmtime",
- "wasmtime-wasi",
- "wat",
 ]
 
 [[package]]
