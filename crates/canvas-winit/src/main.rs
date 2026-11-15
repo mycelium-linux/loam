@@ -625,6 +625,12 @@ struct Surface {
     frames: usize,
     frames_seen: usize,
     started: bool,
+    /// Print a frame-rate line once a second: what the guest presents, and what
+    /// the window spends drawing it.
+    stats: bool,
+    painted: u64,
+    painted_ms: f64,
+    stats_at: std::time::Instant,
 }
 
 impl Surface {
@@ -637,6 +643,7 @@ impl Surface {
         input: Arc<Mutex<VecDeque<InputEvent>>>,
         capture: Option<PathBuf>,
         frames: usize,
+        stats: bool,
     ) -> Result<Self> {
         let attributes = Window::default_attributes()
             .with_title(title)
@@ -680,6 +687,10 @@ impl Surface {
             frames,
             frames_seen: 0,
             started: false,
+            stats,
+            painted: 0,
+            painted_ms: 0.0,
+            stats_at: std::time::Instant::now(),
         };
         let physical = LogicalSize::new(spec.size.0 as f64, spec.size.1 as f64)
             .to_physical::<u32>(open.window.scale_factor());
@@ -693,12 +704,18 @@ impl Surface {
     }
 
     fn push(&self, event: InputEvent) {
-        self.input
-            .lock()
-            .expect("input queue poisoned")
-            .push_back(event);
-        // The guest polls with a timeout; nothing else would wake it sooner.
-        self.window.request_redraw();
+        let mut queue = self.input.lock().expect("input queue poisoned");
+        // Pointer motion is the one event that arrives faster than the guest can
+        // draw. Queuing every position makes a hover trail behind the pointer;
+        // the guest only ever needs the newest one.
+        if matches!(event, InputEvent::Moved { .. }) {
+            queue.retain(|queued| !matches!(queued, InputEvent::Moved { .. }));
+        }
+        queue.push_back(event);
+        drop(queue);
+        // No redraw request here. The guest wakes within a tick, draws, and its
+        // presenter asks for the redraw; asking on every pointer move repainted
+        // the last frame at mouse rate for nothing.
     }
 
     /// Open this surface's Spore. One thread and one store per window: two
@@ -986,6 +1003,25 @@ impl Surface {
     }
 
     fn paint(&mut self) {
+        let started = std::time::Instant::now();
+        self.paint_inner();
+        self.painted += 1;
+        self.painted_ms += started.elapsed().as_secs_f64() * 1000.0;
+        if self.stats && self.stats_at.elapsed() >= std::time::Duration::from_secs(1) {
+            let seconds = self.stats_at.elapsed().as_secs_f64();
+            eprintln!(
+                "canvas-winit: {}: {:.1} fps presented, {:.1} ms paint",
+                self.label(),
+                self.painted as f64 / seconds,
+                self.painted_ms / self.painted.max(1) as f64
+            );
+            self.painted = 0;
+            self.painted_ms = 0.0;
+            self.stats_at = std::time::Instant::now();
+        }
+    }
+
+    fn paint_inner(&mut self) {
         let Some(frame) = self.frame.as_ref() else {
             return;
         };
@@ -1080,6 +1116,7 @@ struct App {
     modifiers: ModifiersState,
     /// Input scripted on the command line, delivered to the first surface.
     seed: Option<Arc<Mutex<VecDeque<InputEvent>>>>,
+    stats: bool,
     /// Where the first surface writes frames, and how many it writes before
     /// the run ends. One capture belongs to one window; two would race for the
     /// same path.
@@ -1118,6 +1155,7 @@ impl ApplicationHandler for App {
                 input,
                 capture,
                 frames,
+                self.stats,
             ) {
                 Ok(surface) => surface,
                 Err(error) => {
@@ -1761,6 +1799,7 @@ fn main() -> Result<()> {
     let mut agents = None;
     let mut acp_cmd = None;
     let mut edgerunner = None;
+    let mut stats = false;
     let mut command = None;
     let mut pointer = None;
     let mut click = None;
@@ -1822,6 +1861,7 @@ fn main() -> Result<()> {
                 )?)
             }
             "--prewarm" => prewarm = true,
+            "--stats" => stats = true,
             "--splash" => {
                 splash = match args.next().context("--splash needs logo or flow")?.as_str() {
                     "logo" => Splash::Logo,
@@ -2117,6 +2157,7 @@ fn main() -> Result<()> {
         splash,
         modifiers: ModifiersState::default(),
         seed: Some(input),
+        stats,
         capture,
         frames,
     };
