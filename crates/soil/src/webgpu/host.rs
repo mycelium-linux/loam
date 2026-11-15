@@ -596,7 +596,10 @@ impl WebGpuHost {
             instance: Arc::new(instance),
             table: ResourceTable::new(),
             options: WasiWebGpuOptions::default(),
-            wasi: WasiCtxBuilder::new().build(),
+            // A Spore's stderr is the only place its own error text can go: a
+            // trap carries a backtrace, not the message. Inherit it so a failing
+            // guest says why.
+            wasi: WasiCtxBuilder::new().inherit_stderr().build(),
             presenter: setup.presenter,
             input: setup.input,
             interactive: setup.interactive,
