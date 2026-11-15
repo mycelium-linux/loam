@@ -43,9 +43,9 @@
 //! the WASI profile and does not want its process, socket or credential
 //! authority. `cli` adds the `soil-*` commands.
 
-mod clock;
 #[cfg(feature = "acp")]
 pub mod acp;
+mod clock;
 #[cfg(feature = "wasi")]
 pub mod context;
 #[cfg(feature = "wasi")]
@@ -62,6 +62,11 @@ mod policy;
 pub mod principal_host;
 #[cfg(feature = "records")]
 pub mod records_host;
+// Host-composed search over the granted local sources: the VFS index, records,
+// git, the graph and the tracker. It is a host capability, not a second store,
+// so it lives beside the hosts it composes.
+#[cfg(feature = "search")]
+pub mod search_host;
 #[cfg(feature = "wasi")]
 mod service;
 #[cfg(feature = "wasi")]
@@ -95,6 +100,8 @@ pub use http_host::HttpHost;
 pub use policy::{HttpPolicy, NetworkPolicy, WasiHostPolicy};
 #[cfg(feature = "records")]
 pub use records_host::RecordsBookHost;
+#[cfg(feature = "search")]
+pub use search_host::SearchService;
 #[cfg(feature = "wasi")]
 pub use service::HttpService;
 #[cfg(any(feature = "unibus", feature = "wasi"))]

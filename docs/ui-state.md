@@ -62,7 +62,7 @@ Canvas.
 the retained scene, so a `tend` reload appears without a browser refresh. That is
 the fastest way to see a full dashboard, because a native surface may be placed
 at the compositor's frame size while its viewer window is narrower.
-`soil-search-host` serves `launcher.html` the same way. Neither is a second UI
+The `soil-search-web` binary (in `crates/soil`) serves `launcher.html` the same way. Neither is a second UI
 contract: both render what the host already retained.
 
 ## 3. Three ways to write a UI

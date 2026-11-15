@@ -9,14 +9,11 @@
 //! frame after a summon must not wait on an index scan, so answering it costs one
 //! file read, not a query.
 
-use std::{
-    path::PathBuf,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{api, kind_name, store};
+use super::{api, kind_name, store};
 
 /// Rows kept on disk. Past this the tail is history nobody would scroll to.
 const MAX_ENTRIES: usize = 256;
@@ -144,12 +141,7 @@ pub fn recency(uses: u32, last_used_ms: u64, now_ms: u64) -> f64 {
     (1.0 + f64::from(uses)).ln() / (1.0 + age_days)
 }
 
-pub fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_millis() as u64)
-        .unwrap_or_default()
-}
+pub(crate) use crate::clock::now_ms;
 
 pub fn usage_from_hit(hit: &api::Hit, last_used_ms: u64) -> Usage {
     Usage {
@@ -167,7 +159,7 @@ pub fn usage_from_hit(hit: &api::Hit, last_used_ms: u64) -> Usage {
 /// the order the cache handed over.
 pub fn hit_from_usage(usage: &Usage, rank: usize) -> api::Hit {
     api::Hit {
-        kind: crate::kind_from_name(&usage.kind).unwrap_or(api::Kind::File),
+        kind: super::kind_from_name(&usage.kind).unwrap_or(api::Kind::File),
         id: usage.id.clone(),
         title: usage.title.clone(),
         subtitle: usage.subtitle.clone(),

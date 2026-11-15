@@ -1,6 +1,6 @@
 # Share dialog component
 
-`crates/soil-search-host/web/soil-share-dialog.js` is a presentation-only custom
+`crates/soil/web/soil-share-dialog.js` is a presentation-only custom
 element for sharing any resource.
 
 ```text

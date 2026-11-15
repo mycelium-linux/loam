@@ -17,11 +17,11 @@ use anyhow::Context;
 use fungos_records::{Record, Store};
 use wasmtime::component::{HasSelf, Linker};
 
-wasmtime::component::bindgen!({ path: "wit/graph.wit", world: "graph-host" });
+wasmtime::component::bindgen!({ path: "wit/search/graph.wit", world: "graph-host" });
 
 use self::soil::graph::graph as graph_api;
 
-use crate::search_api;
+use super::search_api;
 
 pub const LINK_SCHEMA: &str = "fungos.graph/link";
 pub const REFERENCE_SCHEMA: &str = "fungos.graph/reference";

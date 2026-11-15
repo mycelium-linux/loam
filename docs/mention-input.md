@@ -1,6 +1,6 @@
 # Mention input component
 
-`crates/soil-search-host/web/soil-mention-input.js` is a small custom element over
+`crates/soil/web/soil-mention-input.js` is a small custom element over
 `/api/suggest`.
 
 It is intentionally presentation-only:

@@ -161,7 +161,7 @@ GET /api/suggest?q=ada&kinds=person,account&limit=10
 
 ## Host behavior
 
-`crates/soil-search-host` currently composes:
+`crates/soil/src/search_host` currently composes:
 
 - `VfsHost` search over the derived SQLite/FTS5 index
 - `fungos-records` substring search over an explicit allowlist of books

@@ -17,9 +17,9 @@ use std::{
 use anyhow::{Context, Result};
 use fungos_records::Store;
 use serde_json::{Value, json};
-use soil_search_host::api::Host as _;
-use soil_search_host::mention_api::Host as _;
-use soil_search_host::{LauncherConfig, SearchService, api, applications};
+use soil::search_host::api::Host as _;
+use soil::search_host::mention_api::Host as _;
+use soil::search_host::{LauncherConfig, SearchService, api, applications};
 use soil::vfs_host::VfsHost;
 
 const DEFAULT_LISTEN: &str = "127.0.0.1:8790";
@@ -133,7 +133,7 @@ fn main() -> Result<()> {
     if let Some(path) = &args.principals_snapshot {
         let bytes = std::fs::read(path)
             .with_context(|| format!("read principal snapshot {}", path.display()))?;
-        let principals: Vec<soil_search_host::PrincipalCandidate> =
+        let principals: Vec<soil::search_host::PrincipalCandidate> =
             serde_json::from_slice(&bytes).context("parse principal snapshot")?;
         service = service.with_principals(principals);
     }
@@ -533,7 +533,7 @@ fn record_use(stream: &mut TcpStream, app: &App, body: &[u8]) -> Result<()> {
     }
 }
 
-fn mention_json(candidate: soil_search_host::mention_api::Candidate) -> Value {
+fn mention_json(candidate: soil::search_host::mention_api::Candidate) -> Value {
     json!({
         "kind": candidate.kind,
         "token": candidate.token,
@@ -547,7 +547,7 @@ fn mention_json(candidate: soil_search_host::mention_api::Candidate) -> Value {
 }
 
 fn kind_name(kind: api::Kind) -> &'static str {
-    soil_search_host::kind_name(kind)
+    soil::search_host::kind_name(kind)
 }
 
 fn parse_kinds(value: String) -> Vec<api::Kind> {
@@ -555,7 +555,7 @@ fn parse_kinds(value: String) -> Vec<api::Kind> {
 }
 
 fn kind_from_name(name: &str) -> Option<api::Kind> {
-    soil_search_host::kind_from_name(name)
+    soil::search_host::kind_from_name(name)
 }
 
 fn parse_mode(value: String) -> Option<api::Mode> {
@@ -977,7 +977,7 @@ fn parse_args() -> Result<Option<Args>> {
     Ok(Some(args))
 }
 
-const LAUNCHER_HTML: &str = include_str!("../launcher.html");
+const LAUNCHER_HTML: &str = include_str!("../search_host/launcher.html");
 
 const INDEX_HTML: &str = r#"<!doctype html>
 <html lang="en">

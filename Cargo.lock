@@ -6894,6 +6894,7 @@ dependencies = [
  "model2vec-rs",
  "mycelium-peer-protocol",
  "percent-encoding",
+ "plist",
  "pollster",
  "regex",
  "rusqlite",
@@ -6901,6 +6902,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "soil-agent-host",
+ "soil-marbles",
  "soil-spore",
  "tempfile",
  "tiny_http",
@@ -7452,23 +7454,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "wit-bindgen",
-]
-
-[[package]]
-name = "soil-search-host"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "fungos-records 0.1.0 (git+https://github.com/mycelium-linux/records.git?rev=388d6dffbf8c68b48a581abe5bc618f35278241a)",
- "fungos-vfs",
- "plist",
- "serde",
- "serde_json",
- "soil",
- "soil-marbles",
- "soil-spore",
- "tempfile",
- "wasmtime",
 ]
 
 [[package]]

@@ -17,6 +17,7 @@ mod tgrep;
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
+use crate::vfs_host::{EmbeddingProvider, VfsHost, index};
 use anyhow::Context;
 use discovery::{
     ApplicationEntry, ApplicationIndex, PeerIndex, ServiceIndex, SporeEntry, SporeIndex,
@@ -26,18 +27,17 @@ use git::GitIndex;
 use graph::GraphIndex;
 use mru::{MruCache, hit_from_usage, now_ms, usage_from_hit};
 use soil_marbles::MarblesIndex;
-use ::soil::vfs_host::{EmbeddingProvider, VfsHost, index};
 use tgrep::TgrepSource;
 use wasmtime::component::{HasSelf, Linker};
 
-wasmtime::component::bindgen!({ path: "wit/search.wit", world: "search-host" });
+wasmtime::component::bindgen!({ path: "wit/search/search.wit", world: "search-host" });
 
+pub use self::soil::search::mentions as mention_api;
+use self::soil::search::search as search_api;
 pub use launcher::{LauncherConfig, Profile};
 pub use mru::{Usage, recency};
-pub use crate::soil::search::mentions as mention_api;
-use crate::soil::search::search as search_api;
 
-pub use crate::soil::search::search as api;
+pub use self::soil::search::search as api;
 
 /// The wire name of a kind. One table, because the HTTP surface, the usage cache
 /// and anything else that names a kind would drift apart in a second one.
@@ -188,7 +188,7 @@ impl SearchService {
     /// dynamically scanned counterpart of `with_applications_snapshot`.
     pub fn with_installed_applications(
         mut self,
-        apps: &[crate::applications::InstalledApp],
+        apps: &[self::applications::InstalledApp],
     ) -> Self {
         self.applications = Some(ApplicationIndex::from_installed(apps));
         self.generation = self.generation.saturating_add(1);
@@ -553,7 +553,7 @@ impl SearchService {
             offset: 0,
             limit: MAX_PAGE,
         };
-        use ::soil::vfs_host::index::Host as _;
+        use crate::vfs_host::index::Host as _;
         let page = vfs.search(index_query).map_err(index_error)?;
         Ok(page
             .hits
@@ -792,7 +792,7 @@ impl SearchService {
         let Some(vfs) = self.vfs.as_mut() else {
             return Ok(Vec::new());
         };
-        use ::soil::vfs_host::index::Host as _;
+        use crate::vfs_host::index::Host as _;
         let page = vfs
             .search(index::Query {
                 text: text.to_string(),
@@ -1176,9 +1176,9 @@ where
 
 #[cfg(test)]
 mod tests {
+    use super::soil::search::mentions::Host as _;
+    use super::soil::search::search::Host as _;
     use super::*;
-    use crate::soil::search::mentions::Host as _;
-    use crate::soil::search::search::Host as _;
     use fungos_vfs::{Expect, Vfs};
 
     /// A store inside the root's own state directory: it dies with the tempdir,
@@ -1740,7 +1740,7 @@ surfaces = ["canvas"]
             .put_record(
                 book,
                 "link-soil-repo",
-                crate::graph::LINK_SCHEMA,
+                super::graph::LINK_SCHEMA,
                 1,
                 serde_json::json!({
                     "from": "soil",
@@ -1755,7 +1755,7 @@ surfaces = ["canvas"]
             .put_record(
                 book,
                 "ref-soil-crate",
-                crate::graph::REFERENCE_SCHEMA,
+                super::graph::REFERENCE_SCHEMA,
                 1,
                 serde_json::json!({
                     "node": "soil",

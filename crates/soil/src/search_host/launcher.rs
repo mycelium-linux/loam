@@ -9,7 +9,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{kind_from_name, store};
+use super::{kind_from_name, store};
 
 const FORMAT_VERSION: u32 = 1;
 const MAX_PINS: usize = 64;

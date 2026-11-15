@@ -193,8 +193,8 @@ long before it runs out of source. Build once and share:
 ```sh
 export CARGO_TARGET_DIR="$HOME/Library/Caches/soil/cargo-target"
 export CARGO_INCREMENTAL=0
-cargo install --path crates/soil-search-host --bin soil-search-web \
-  --root "$HOME/.local"
+cargo install --path crates/soil --no-default-features --features search \
+  --bin soil-search-web --root "$HOME/.local"
 ```
 
 Agents and Spores then run `soil-search-web` from `~/.local/bin` against whatever

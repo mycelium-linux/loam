@@ -507,7 +507,7 @@ impl ApplicationIndex {
 
     /// An inventory discovered from this machine's bundles. The same index as the
     /// snapshot path, so a hit looks the same whichever way the host learned it.
-    pub fn from_installed(apps: &[crate::applications::InstalledApp]) -> Self {
+    pub fn from_installed(apps: &[super::applications::InstalledApp]) -> Self {
         Self {
             path: None,
             entries: apps

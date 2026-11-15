@@ -48,13 +48,14 @@ hole in the row. Same rule as every other surface in this system.
 
 ## Consequences for the host
 
-`crates/soil-search-host` is an implementation of `soil:search`, not a launcher:
+`crates/soil/src/search_host` is an implementation of `soil:search`, not a launcher:
 sources → hits → page. Anything that draws — the `launcher.html` page, any
 per-launcher JSON — is UI living in the index and should move to a Spore, with
 the page served as `application/json` on one route.
 
-Two things to fix there, in order:
+One thing left there:
 
-- it bindgens `crates/soil-search-host/wit/search.wit`, a **second copy** of the
-  contract, instead of the canonical `wit/soil-search.wit`;
 - its UI (`launcher.html`, `launcher.rs`) sits inside the index.
+
+The contract is no longer a second copy: `crates/soil/wit/search/search.wit` is
+a symlink to the canonical `wit/soil-search.wit`.
