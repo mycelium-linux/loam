@@ -353,6 +353,11 @@ pub struct WebGpuHost {
     /// What this surface was opened for, when the presenter named it. The
     /// roster's own binding is the fallback.
     binding: Option<Binding>,
+    /// Frame accounting for `SOIL_WEBGPU_STATS=1`: how often the Spore presents,
+    /// and how long the host spends lifting each frame off the GPU.
+    frames: u64,
+    readback_ms: f64,
+    stats_at: Instant,
     /// Where this host is in the session-notice stream, and what it does when
     /// one arrives. A notice makes an adapter re-list once instead of polling
     /// the harness on every tick; a task notice becomes a session.
@@ -611,6 +616,9 @@ impl WebGpuHost {
             principal: setup.principal,
             agents: setup.agents,
             binding: setup.binding,
+            frames: 0,
+            readback_ms: 0.0,
+            stats_at: Instant::now(),
             dispatch: match setup.dispatch {
                 DispatchRole::Own(sessions) => Dispatch::new(setup.bus.clone(), sessions),
                 DispatchRole::Watch => Dispatch::watcher(setup.bus.clone()),
@@ -754,8 +762,24 @@ impl wit::present::surface::Host for WebGpuHost {
         texture: wasmtime::component::Resource<wasi_webgpu_wasmtime::Texture>,
     ) -> std::result::Result<(), String> {
         use super::present::CanvasFrame;
+        let started = Instant::now();
         let image = wasi_webgpu_wasmtime::read_texture_rgba(&self.instance, &self.table, texture)
             .map_err(|e| e.to_string())?;
+        self.frames += 1;
+        self.readback_ms += started.elapsed().as_secs_f64() * 1000.0;
+        if std::env::var_os("SOIL_WEBGPU_STATS").is_some()
+            && self.stats_at.elapsed() >= Duration::from_secs(1)
+        {
+            let seconds = self.stats_at.elapsed().as_secs_f64();
+            eprintln!(
+                "webgpu: {:.1} fps presented, {:.1} ms host readback",
+                self.frames as f64 / seconds,
+                self.readback_ms / self.frames.max(1) as f64
+            );
+            self.frames = 0;
+            self.readback_ms = 0.0;
+            self.stats_at = Instant::now();
+        }
         let frame = CanvasFrame {
             width: image.width,
             height: image.height,
