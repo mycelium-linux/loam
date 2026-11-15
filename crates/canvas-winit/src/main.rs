@@ -24,7 +24,7 @@ use ::soil::http_host::GeodeCredentials;
 use ::soil::http_host::{
     DirectTransport, HttpPolicy, HttpTransport, TransportError, TransportRequest, TransportResponse,
 };
-use soil_webgpu::{
+use soil::webgpu::{
     CanvasFrame, CanvasGpuPresenter, CatalogEntry, CatalogError, CatalogHost, CatalogLaunched,
     CatalogSurface, CatalogSurfaceKind, ClipboardHost, CursorHost, CursorStyle, HostSetup,
     HttpAccess, InputEvent, InputKey, NoAgents, PointerButton, RecordsAccess, WebGpuRuntime,
@@ -258,7 +258,7 @@ impl CatalogHost for SporeCatalog {
                             })
                             .collect()
                     },
-                    mark: soil_webgpu::read_mark(&installed.root, manifest),
+                    mark: soil::webgpu::read_mark(&installed.root, manifest),
                 }
             })
             .collect())
@@ -713,7 +713,7 @@ impl App {
                         records,
                         vfs: vfs_root,
                         principal: actor.map(|actor| {
-                            ::soil_webgpu::Grants::new().actor(actor).principal
+                            ::soil::webgpu::Grants::new().actor(actor).principal
                         }).flatten(),
                         // The storefront origin is already in the HTTP policy
                         // `build_http` constructs; this presenter has no agent
@@ -723,6 +723,9 @@ impl App {
                         terminal: Box::new(Terminals::new(80, 24, command)),
                         cursor: Some(Box::new(WindowCursor(window))),
                         clipboard: Some(Box::new(SystemClipboard)),
+                        // One bus per process, shared by every window in it:
+                        // the wall announces a prompt and a popup reads it.
+                        bus: soil::webgpu::in_process_bus(),
                     },
                 ))?;
                 eprintln!("canvas-winit: guest returned {status}");
@@ -1476,7 +1479,7 @@ fn build_http(launch: &LaunchConfig) -> Result<Option<HttpAccess>> {
     // The storefront is the one origin every presenter grants. A Spore that
     // needs another origin says so at launch; the launcher does not guess.
     let mut origins = launch.origins.clone();
-    origins.push(soil_webgpu::LOCAL_STORE_ORIGIN.to_string());
+    origins.push(soil::webgpu::LOCAL_STORE_ORIGIN.to_string());
     if launch.hue_bridge.is_some() {
         origins.push("http://hue.local".to_string());
     }

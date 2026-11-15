@@ -9,7 +9,7 @@ use std::{
 };
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
-use soil_webgpu::{TerminalCell, TerminalHost, TerminalSession, TerminalSnapshot};
+use soil::webgpu::{TerminalCell, TerminalHost, TerminalSession, TerminalSnapshot};
 
 struct State {
     host: soil_vt::Host,
