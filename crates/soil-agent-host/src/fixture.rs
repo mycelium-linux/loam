@@ -283,13 +283,13 @@ impl FixtureAgents {
                 choices: vec![
                     crate::Choice {
                         id: "summary".into(),
-                        label: "Keep the summary".into(),
+                        label: "This thread".into(),
                         detail: Some("the editor stays one column".into()),
                         danger: false,
                     },
                     crate::Choice {
                         id: "inbox".into(),
-                        label: "Put the inbox there".into(),
+                        label: "Every thread".into(),
                         detail: Some("needs the thread store first".into()),
                         danger: false,
                     },
