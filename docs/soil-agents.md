@@ -77,7 +77,7 @@ An adapter is a host concern, for three reasons:
    frames move; the WIT does not.
 
 `crates/soil-agent-host` holds the seam: a plain `Agent` record, an
-`AgentBackend` trait, and backends. `crates/soil-webgpu` maps those records to
+`AgentBackend` trait, and backends. `crates/soil/src/webgpu` maps those records to
 the generated WIT types, because hosts do not depend on generated types
 (`CatalogHost` and `TerminalHost` follow the same rule).
 

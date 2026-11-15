@@ -13,8 +13,8 @@ standard WebGPU texture to a host-owned Canvas frame.
 The contract is **not** a Soil package. It is the upstream
 [`wasi:webgpu`](https://github.com/WebAssembly/wasi-webgpu) WIT:
 
-- [`wit/deps/wasi-webgpu-0.3.0-rc.2/package.wit`](../crates/soil-webgpu/wit/deps/wasi-webgpu-0.3.0-rc.2/package.wit)
-- pinned by `crates/soil-webgpu` and asserted by a unit test.
+- [`wit/deps/wasi-webgpu-0.3.0-rc.2/package.wit`](../crates/soil/wit/webgpu/deps/wasi-webgpu-0.3.0-rc.2/package.wit)
+- pinned by the `webgpu` feature of `crates/soil` and asserted by a unit test.
 
 The guest imports `wasi:webgpu/imports@0.3.0-rc.2`. There is no `soil:gpu`
 draw-list contract and no second GPU ACL. Linking the package is the grant;
@@ -22,7 +22,7 @@ without it the component cannot instantiate.
 
 Canvas presentation is a separate, presentation-only package:
 
-- [`soil:present@0.1.0`](../crates/soil-webgpu/wit/deps/soil-present/package.wit)
+- [`soil:present@0.1.0`](../crates/soil/wit/webgpu/deps/soil-present/package.wit)
 
 It accepts a `wasi:webgpu` `gpu-texture` by borrow and returns nothing but a
 success/error. Its `input` interface carries normalized key, pointer, and scroll
@@ -38,7 +38,7 @@ name a filesystem path.
 
 ## Host
 
-[`crates/soil-webgpu`](../crates/soil-webgpu) is the host:
+[`crates/soil`](../crates/soil) is the host, behind the `webgpu` feature (`soil::webgpu`):
 
 - a forked `wasi-webgpu-wasmtime` (`mycelium-linux/wasi-gfx-runtime` revision
   `9624cae`) binds the WIT and adds host texture readback;
@@ -80,7 +80,7 @@ surface would bypass Canvas ownership.
 ## Native presenter
 
 [`crates/canvas-winit`](../crates/canvas-winit) is the real desktop presenter:
-winit owns the window, `soil-webgpu` owns the component, and `soil:present` is
+winit owns the window, `soil::webgpu` owns the component, and `soil:present` is
 the only surface contract. Pointer, key, scroll, cursor, catalog, PTY, HTTP, and
 records grants are wired there. `--capture` uses the same host path for
 screenshots, and `--size WxH` exercises the layouts a phone or flip presents.
@@ -119,34 +119,34 @@ the window, target extent, final presentation decision and timing.
 ## Proof
 
 The fixture is a real component built from
-[`fixtures/hello-compute`](../crates/soil-webgpu/fixtures/hello-compute):
+[`fixtures/hello-compute`](../crates/soil/tests/fixtures/hello-compute):
 
 ```sh
-cargo build --manifest-path crates/soil-webgpu/fixtures/hello-compute/Cargo.toml \
+cargo build --manifest-path crates/soil/tests/fixtures/hello-compute/Cargo.toml \
   --target wasm32-wasip2 --release
-cp crates/soil-webgpu/fixtures/hello-compute/target/wasm32-wasip2/release/soil_webgpu_hello_compute.wasm \
-  crates/soil-webgpu/fixtures/hello-compute.wasm
+cp crates/soil/tests/fixtures/hello-compute/target/wasm32-wasip2/release/soil_webgpu_hello_compute.wasm \
+  crates/soil/tests/fixtures/hello-compute.wasm
 ```
 
 Run the GPU-gated test:
 
 ```sh
-cargo test -p soil-webgpu --test hello_compute -- --ignored --nocapture
+cargo test -p soil --features webgpu --test webgpu_hello_compute -- --ignored --nocapture
 ```
 
 The guest returns `0` only when the Collatz compute results are `[0, 1, 7, 2]`.
 Run any component with the CLI:
 
 ```sh
-cargo run -p soil-webgpu -- crates/soil-webgpu/fixtures/hello-compute.wasm
-cargo run -p soil-webgpu -- crates/soil-webgpu/fixtures/wgpu-compute.wasm
+cargo run -p soil --features webgpu --bin soil-webgpu -- crates/soil/tests/fixtures/hello-compute.wasm
+cargo run -p soil --features webgpu --bin soil-webgpu -- crates/soil/tests/fixtures/wgpu-compute.wasm
 # both print: webgpu: ok
 ```
 
 A renderer that reads `vitals.view` names the records root explicitly:
 
 ```sh
-cargo run -p soil-webgpu --bin soil-webgpu -- \
+cargo run -p soil --features webgpu --bin soil-webgpu -- \
   --records-dir .soil-dev/records \
   --frame /tmp/vitals.bgr --size 1280x900 spores/vitals-view/module.wasm
 ```
@@ -154,17 +154,31 @@ cargo run -p soil-webgpu --bin soil-webgpu -- \
 The wgpu fixtures need a GPU adapter and are tested with:
 
 ```sh
-cargo test -p soil-webgpu --test wgpu_compute -- --ignored --nocapture
-cargo test -p soil-webgpu --test wgpu_test -- --ignored --nocapture
+cargo test -p soil --features webgpu --test webgpu_wgpu_compute -- --ignored --nocapture
+cargo test -p soil --features webgpu --test webgpu_wgpu_test -- --ignored --nocapture
 ```
 
 Run the Canvas fixture and write the same BGR24 frame format used by
 `soil-canvas`:
 
 ```sh
-cargo run -p soil-webgpu -- --frame /tmp/triangle.bgr --size 480x640 \
-  crates/soil-webgpu/fixtures/wgpu-test.wasm
+cargo run -p soil --features webgpu --bin soil-webgpu -- --frame /tmp/triangle.bgr --size 480x640 \
+  crates/soil/tests/fixtures/wgpu-test.wasm
 # webgpu: ok frame=/tmp/triangle.bgr width=480 height=640 format=bgr24
+```
+
+A popup is driven by what a wall announced, and a one-shot capture has no wall:
+`--bus-seed FILE` publishes `kind<TAB>body` lines on the in-process bus before
+the guest runs. `--view` and `--agent` set the launch intent the Spore reads
+through `soil:agents/observe.intent`, so the capture can open on the popup
+instead of the grid:
+
+```sh
+printf 'agent.prompt.v1\t{"agent":"op-7f3a","kind":"approval","text":"Push this branch to origin?"}\n' \
+  > /tmp/seed.txt
+cargo run -p soil --features webgpu --bin soil-webgpu -- \
+  --frame /tmp/popup.bgr --size 420x300 --view popup --agent op-7f3a \
+  --agents demo --bus-seed /tmp/seed.txt colony.wasm
 ```
 
 The test asserts that the centre of the host-selected 480x640 frame is red,

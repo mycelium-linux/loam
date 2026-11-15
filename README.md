@@ -69,7 +69,7 @@ Principles:
 | [`soil:device@0.1.0`](wit/soil-device.wit) | `soil:device` | semantic battery/estimate/lid contracts; runtime uses core-Wasm lowering |
 | [`soil:ble@1.0.0`](wit/soil-ble.wit) | `soil:ble.observe`, `soil:ble.connect`, `soil:ble.write` | WIT + host + COLMI ring Spore |
 | [`soil:canvas@1.0.0`](wit/soil-canvas.wit) | `soil:canvas` | WIT + input normalizer + S22 runtime + Android JNI |
-| [`wasi:webgpu@0.3.0-rc.2`](crates/soil-webgpu/wit/deps/wasi-webgpu-0.3.0-rc.2/package.wit) | link `wasi:webgpu` | upstream WIT + host + compute fixture |
+| [`wasi:webgpu@0.3.0-rc.2`](crates/soil/wit/webgpu/deps/wasi-webgpu-0.3.0-rc.2/package.wit) | link `wasi:webgpu` | upstream WIT + host + compute fixture |
 | [`wasi:audio@0.1.0`](wit/wasi-audio.wit) | link `wasi:audio` | draft WIT + cpal host + tone fixture |
 
 `cargo test -p soil-abi` parses every canonical package and asserts its reviewed
@@ -94,7 +94,7 @@ Canvas is the cross-platform owner; Spores never submit UI trees.
 core runner, Canvas/battery/lid/estimate capabilities), and
 [`crates/soil-android`](crates/soil-android) is the JNI bridge used by the Canvas
 Android app. The portable
-WebGPU host is [`crates/soil-webgpu`](crates/soil-webgpu): raw
+WebGPU host is the `webgpu` feature of [`crates/soil`](crates/soil): raw
 `wasi:webgpu` components and real wgpu 29 programs both request a GPU
 adapter/device, run WGSL compute and render passes, read results back through
 `wgpu-core`, and hand a standard WebGPU texture to a host-owned Canvas frame

@@ -7,7 +7,7 @@ sink, and the host services a Spore asks for — nothing else.
 layout, and no hit testing. It opens a window, runs one component in a wasmtime
 store, blits whatever texture the Spore presents into that window, and forwards
 the events the window receives. The same Spore runs unchanged under
-`soil-webgpu` (one-shot capture), under Canvas's external-surface path, or under
+the `soil-webgpu` command (one-shot capture), under Canvas's external-surface path, or under
 the future web bridge; only the host's implementation of `soil:present` moves.
 
 ## What a Spore may ask for

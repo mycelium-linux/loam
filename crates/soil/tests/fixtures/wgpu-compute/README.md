@@ -13,10 +13,10 @@ against it.
 Regenerate:
 
 ```sh
-cargo build --manifest-path crates/soil-webgpu/fixtures/wgpu-compute/Cargo.toml \
+cargo build --manifest-path crates/soil/tests/fixtures/wgpu-compute/Cargo.toml \
   --target wasm32-wasip2 --release
-cp crates/soil-webgpu/fixtures/wgpu-compute/target/wasm32-wasip2/release/soil_wgpu_compute.wasm \
-  crates/soil-webgpu/fixtures/wgpu-compute.wasm
+cp crates/soil/tests/fixtures/wgpu-compute/target/wasm32-wasip2/release/soil_wgpu_compute.wasm \
+  crates/soil/tests/fixtures/wgpu-compute.wasm
 ```
 
 The guest backend is pinned to

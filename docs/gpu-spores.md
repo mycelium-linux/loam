@@ -57,7 +57,7 @@ away with the wasmtime fork.**
 
 Why: `wgpu` is the API every candidate framework uses (gpui-fast 30, egui-wgpu
 30, iced 27), and a `wgpu::Texture` cannot cross into a `wgpu-core` `Global`.
-The current host (`crates/soil-webgpu`) reaches `wgpu-core` 29 through the
+The current host (`crates/soil`, `webgpu` feature) reaches `wgpu-core` 29 through the
 `wasi-gfx-runtime` fork, which is exactly the mismatch. Implementing
 `wasi:webgpu` over our own `wgpu` 30 device with a resource table keeps one
 queue, one device-loss story and zero-copy handoff for every framework.

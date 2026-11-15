@@ -3,9 +3,10 @@ package soil:webgpu-host@0.1.0;
 /// The world a GPUI / WebGPU Spore runs in.
 ///
 /// The runner adds `wasi:webgpu` and the presentation bridge, and imports the
-/// `soil:*` capabilities a presenter may grant. Every one of them is `denied`
-/// unless the presenter supplied an implementation, so linking the world is
-/// not the grant: the host setup is.
+/// `soil:*` capabilities a presenter may grant. A presenter fills in the grant
+/// list; a capability it did not supply answers `denied` rather than inventing
+/// success. `soil:present` and `soil:unibus` always have an implementation: a
+/// surface with no frame destination or no notice bus is not a surface.
 ///
 /// `soil:present` is the only way the guest affects the window; input, cursor
 /// and clipboard are the same bridge. `soil:spore/catalog` lets a launcher list

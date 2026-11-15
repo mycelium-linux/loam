@@ -7,10 +7,10 @@ then hands the texture to `soil:present/surface.present`.
 Regenerate:
 
 ```sh
-cargo build --manifest-path crates/soil-webgpu/fixtures/wgpu-test/Cargo.toml \
+cargo build --manifest-path crates/soil/tests/fixtures/wgpu-test/Cargo.toml \
   --target wasm32-wasip2 --release
-cp crates/soil-webgpu/fixtures/wgpu-test/target/wasm32-wasip2/release/soil_wgpu_test.wasm \
-  crates/soil-webgpu/fixtures/wgpu-test.wasm
+cp crates/soil/tests/fixtures/wgpu-test/target/wasm32-wasip2/release/soil_wgpu_test.wasm \
+  crates/soil/tests/fixtures/wgpu-test.wasm
 ```
 
 The guest backend is the `mycelium-linux/wgpu-wasi-webgpu` fork, branch `wgpu-30`

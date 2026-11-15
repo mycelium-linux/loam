@@ -8,10 +8,10 @@ results are `[0, 1, 7, 2]`.
 Regenerate:
 
 ```sh
-cargo build --manifest-path crates/soil-webgpu/fixtures/hello-compute/Cargo.toml \
+cargo build --manifest-path crates/soil/tests/fixtures/hello-compute/Cargo.toml \
   --target wasm32-wasip2 --release
-cp crates/soil-webgpu/fixtures/hello-compute/target/wasm32-wasip2/release/soil_webgpu_hello_compute.wasm \
-  crates/soil-webgpu/fixtures/hello-compute.wasm
+cp crates/soil/tests/fixtures/hello-compute/target/wasm32-wasip2/release/soil_webgpu_hello_compute.wasm \
+  crates/soil/tests/fixtures/hello-compute.wasm
 ```
 
 `wgpu-compute.wasm` is the real wgpu 30 drop-in fixture. It uses

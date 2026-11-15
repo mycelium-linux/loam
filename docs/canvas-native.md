@@ -35,7 +35,7 @@ soil host adapter (producer)
 canvas_core::external_surface  ──►  Canvas native (iced + wgpu) composites
 ```
 
-Step 1 is portable and one copy: take the `CanvasFrame` that `soil-webgpu`
+Step 1 is portable and one copy: take the `CanvasFrame` that the `soil` runner
 already produces (the `wgpu-test` fixture proves it), write it into a shared
 mapping, `Register` once, `Present` per frame. Step 2 wraps the guest texture's
 Metal allocation as `IoSurface` for zero-copy; it needs `wgpu` hal access, so it
@@ -53,7 +53,7 @@ surface's input transport and is delivered to the Spore as `soil:input`.
    memory) registers and presents; assert the inbox exposes the presented slot
    with the right pixels.
 3. **Spore frame** — replace the checkerboard with the `wgpu-test.wasm` frame
-   from `soil-webgpu`; assert the red triangle centre pixel survives the trip.
+   from the `soil` runner; assert the red triangle centre pixel survives the trip.
 4. **Windowed smoke** — run Canvas native, `canvasctl surface add-external`,
    record the visible surface. This is the “windowed but still a Spore” check,
    and it needs a display.
