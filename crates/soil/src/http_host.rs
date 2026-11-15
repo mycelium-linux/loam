@@ -605,15 +605,15 @@ pub fn perform(
         return Err(Error::OverBudget);
     }
     let mut auth = None;
-    if path_secret.is_none() {
-        if let Some(handle) = &request.credential {
-            let header = credentials.resolve(handle).map_err(|_| Error::Denied)?;
-            let header = header.ok_or(Error::Denied)?;
-            if header.0.contains(['\r', '\n']) || header.1.contains(['\r', '\n']) {
-                return Err(Error::Denied);
-            }
-            auth = Some(header);
+    if path_secret.is_none()
+        && let Some(handle) = &request.credential
+    {
+        let header = credentials.resolve(handle).map_err(|_| Error::Denied)?;
+        let header = header.ok_or(Error::Denied)?;
+        if header.0.contains(['\r', '\n']) || header.1.contains(['\r', '\n']) {
+            return Err(Error::Denied);
         }
+        auth = Some(header);
     }
 
     let mut headers = request.headers.clone();
