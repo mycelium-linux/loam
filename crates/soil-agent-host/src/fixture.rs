@@ -84,29 +84,30 @@ impl FixtureAgents {
             ],
             vec![Prompt {
                 id: "p1".into(),
-                kind: PromptKind::Approval,
-                title: "Push this branch to origin?".into(),
+                kind: PromptKind::Choice,
+                title: "Which view should a window open on?".into(),
                 body: Some(
-                    "The lane works and the suite is green. The branch is local only, \
-                     and the finish contract asks before it publishes."
+                    "The thread pane is the editor; the grid is the wall. A window
+                     that opens on the thread gets a person reading, one that opens
+                     on the grid gets them scanning. Both are one press apart."
                         .into(),
                 ),
                 details: Some(
-                    "git push -u origin feat/serve-hooks\n\n 3 files changed, 41 insertions(+), 6 deletions(-)"
+                    "default_view: \"thread\" | \"grid\"\n\n 2 call sites: Colony::new, --surface"
                         .into(),
                 ),
-                origin: Some("bash".into()),
+                origin: Some("design".into()),
                 choices: vec![
                     Choice {
-                        id: "approve".into(),
-                        label: "Push".into(),
-                        detail: Some("origin/feat/serve-hooks".into()),
-                        danger: true,
+                        id: "thread".into(),
+                        label: "Thread first".into(),
+                        detail: Some("reading is the common case".into()),
+                        danger: false,
                     },
                     Choice {
-                        id: "deny".into(),
-                        label: "Keep it local".into(),
-                        detail: None,
+                        id: "grid".into(),
+                        label: "Grid first".into(),
+                        detail: Some("the wall is the product".into()),
                         danger: false,
                     },
                 ],
@@ -266,29 +267,30 @@ impl FixtureAgents {
             ],
             vec![Prompt {
                 id: "p2".into(),
-                kind: PromptKind::Question,
-                title: "Delete the dead `old_view()` path, or leave it for the next branch?".into(),
+                kind: PromptKind::Choice,
+                title: "Where should the thread rail live: this thread, or every thread?".into(),
                 body: Some(
-                    "Nothing calls it, and the Lua host never loads it. Removing it is a \
-                     two-line diff; leaving it means the next branch inherits a second \
-                     layout path."
+                    "The rail currently summarises the open thread. The Delta pane
+                     puts the inbox there instead — projects and threads. One of the
+                     two has to give: a 1000px window does not hold both."
                         .into(),
                 ),
-                details: Some("src/views.rs\n  fn old_view() -> AnyElement   // 0 callers".into()),
-                origin: Some("finish_status".into()),
-                // The question names two paths; the popup can only answer what
-                // it is given, so the two paths travel as choices.
+                details: Some(
+                    "rail: 300px · thread summary (6 actions)\n  vs. threads list (37 rows, unread)"
+                        .into(),
+                ),
+                origin: Some("design".into()),
                 choices: vec![
                     crate::Choice {
-                        id: "delete".into(),
-                        label: "Delete it".into(),
-                        detail: Some("two-line diff".into()),
-                        danger: true,
+                        id: "summary".into(),
+                        label: "Keep the summary".into(),
+                        detail: Some("the editor stays one column".into()),
+                        danger: false,
                     },
                     crate::Choice {
-                        id: "leave".into(),
-                        label: "Leave it".into(),
-                        detail: None,
+                        id: "inbox".into(),
+                        label: "Put the inbox there".into(),
+                        detail: Some("needs the thread store first".into()),
                         danger: false,
                     },
                 ],
