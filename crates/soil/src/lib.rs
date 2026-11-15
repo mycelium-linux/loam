@@ -54,6 +54,8 @@ pub mod http_host;
 #[cfg(any(feature = "http", feature = "wasi"))]
 mod policy;
 #[cfg(feature = "principal")]
+pub mod local_identity;
+#[cfg(feature = "principal")]
 pub mod principal_host;
 #[cfg(feature = "records")]
 pub mod records_host;

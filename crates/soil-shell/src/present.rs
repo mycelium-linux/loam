@@ -233,22 +233,21 @@ pub fn web_grant(
 /// share. Without it, identity headers are read from a loopback peer, which is
 /// the local-development case and nothing more.
 pub fn access(request: &Request) -> Result<soil_web_bridge::serve::Access> {
-    let mut trust = soil_web_bridge::Trust::new();
-    if let Some(name) = &request.actor_secret_env {
-        let secret = std::env::var(name)
-            .with_context(|| format!("{name} is not set, so actors cannot be verified"))?;
-        if secret.is_empty() {
-            bail!("{name} is empty, so actors cannot be verified");
-        }
-        trust = trust.actor_secret(secret.into_bytes());
-    } else {
-        trust = trust.trust_loopback(true);
+    let Some(name) = &request.actor_secret_env else {
+        // No gateway: this is a desktop, and a desktop has one user. The bridge
+        // answers an unsigned loopback request as them, which is the same
+        // principal the window runs as. A remote peer still gets nothing.
+        return Ok(soil_web_bridge::serve::Access::desktop());
+    };
+    let secret = std::env::var(name)
+        .with_context(|| format!("{name} is not set, so actors cannot be verified"))?;
+    if secret.is_empty() {
+        bail!("{name} is empty, so actors cannot be verified");
     }
     Ok(soil_web_bridge::serve::Access {
-        trust,
-        // Books follow identity whenever identity is established, and when a
-        // caller asked for it outright.
-        per_principal: request.per_principal || request.actor_secret_env.is_some(),
+        trust: soil_web_bridge::Trust::new().actor_secret(secret.into_bytes()),
+        // Books follow identity whenever identity is established.
+        per_principal: request.per_principal || true,
     })
 }
 
@@ -278,9 +277,12 @@ pub fn grants(request: &Request, manifest: &Manifest) -> Result<soil_webgpu::Gra
             &collection,
         ));
     }
-    if let Some(actor) = &request.actor {
-        grants = grants.actor(actor.clone());
-    }
+    grants.principal = match &request.actor {
+        Some(actor) => soil_webgpu::Grants::new().actor(actor.clone()).principal,
+        // A local run is the person at this machine: there is one desktop user,
+        // and asking them to type their own name would only invite a lie.
+        None => ::soil::principal_host::PrincipalHost::local(),
+    };
     Ok(grants)
 }
 

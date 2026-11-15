@@ -337,6 +337,14 @@ impl PrincipalHost {
         }
     }
 
+    /// The person at this machine.
+    ///
+    /// A desktop session has one user, so the host does not ask who is looking:
+    /// the process already runs as them. `None` where the platform cannot say.
+    pub fn local() -> Option<Self> {
+        crate::local_identity::local().map(Self::new)
+    }
+
     pub fn from_shared(provider: Arc<dyn PrincipalProvider>) -> Self {
         Self {
             provider,

@@ -24,7 +24,7 @@ default = [
 # picks the subset it actually grants.
 vfs = ["dep:blake3", "dep:fungos-vfs", "dep:regex", "dep:rusqlite"]
 records = ["dep:fungos-records"]
-principal = ["dep:serde", "dep:mycelium-peer-protocol"]
+principal = ["dep:libc", "dep:serde", "dep:mycelium-peer-protocol"]
 # A principal verified by Mycelium identity rather than an OIDC claim set.
 mycelium = ["principal", "dep:mycelium-peer-protocol"]
 http = [

@@ -101,6 +101,10 @@ pub struct Trust {
     /// Accept `x-fpl-user-email` from a loopback peer. Local development, where
     /// the ingress is not in the path and there is nothing to forge across.
     pub trust_loopback_headers: bool,
+    /// Answer a loopback request with no identity as the person at this machine.
+    /// A desktop session has one user, so a tab on the same machine is them —
+    /// the same reasoning that lets the window run without a login.
+    pub local_fallback: bool,
 }
 
 impl Trust {
@@ -117,6 +121,12 @@ impl Trust {
     /// Take the identity headers at face value from a loopback peer.
     pub fn trust_loopback(mut self, trust: bool) -> Self {
         self.trust_loopback_headers = trust;
+        self
+    }
+
+    /// Answer an anonymous loopback request as the local user.
+    pub fn local_fallback(mut self, fallback: bool) -> Self {
+        self.local_fallback = fallback;
         self
     }
 
@@ -147,7 +157,7 @@ impl Trust {
             }));
         }
         let Some(email) = headers.get(USER_EMAIL).filter(|email| !email.is_empty()) else {
-            return Ok(None);
+            return Ok(local(loopback, self.local_fallback));
         };
         if !loopback {
             // A header is a claim. Only a peer we can name may make it.
@@ -170,6 +180,24 @@ impl Trust {
     pub fn required(&self) -> bool {
         self.actor_secret.is_some()
     }
+}
+
+/// The person at this machine, when this bridge may fall back to them.
+///
+/// A desktop session has one user, so an unsigned request from loopback is
+/// that user — the same reasoning that lets the window run without a login.
+/// It is deliberately not a grant: a book still has to be keyed to the
+/// principal, and a bridge that expects a signed actor never gets here.
+fn local(loopback: bool, fallback: bool) -> Option<Identity> {
+    if !(loopback && fallback) {
+        return None;
+    }
+    let principal = soil::local_identity::local()?;
+    Some(Identity {
+        actor: principal.display_name.unwrap_or(principal.actor),
+        scopes: principal.teams,
+        method: "local".to_owned(),
+    })
 }
 
 /// The claims Palisade signs.

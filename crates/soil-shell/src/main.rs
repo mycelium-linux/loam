@@ -37,7 +37,9 @@ fn usage() -> &'static str {
        cat PATH\n\
        history PATH\n\
        rm PATH...\n\
-       search QUERY"
+       search QUERY\
+     \
+     whoami                      the principal this machine runs as"
 }
 
 fn run() -> Result<()> {
@@ -60,6 +62,7 @@ fn run() -> Result<()> {
         "cat" => cat(&root, args),
         "history" => history(&root, args),
         "search" => search(&root, args),
+        "whoami" => whoami(),
         "help" | "--help" | "-h" => {
             println!("{}", usage());
             Ok(())
@@ -208,6 +211,28 @@ fn search(root: &Path, args: Vec<String>) -> Result<()> {
             hit.score,
             hit.snippet.unwrap_or_default()
         );
+    }
+    Ok(())
+}
+
+/// The principal a local run answers as.
+///
+/// Printed rather than guessed at: a desktop has one user, so every Spore this
+/// machine runs is them, and a host that cannot say who that is has a platform
+/// problem worth seeing before it becomes a wrong comment author.
+fn whoami() -> Result<()> {
+    let Some(principal) = soil::local_identity::local() else {
+        bail!("this platform has no local identity to report");
+    };
+    println!("{}", principal.actor);
+    if let Some(name) = &principal.display_name {
+        println!("name    {name}");
+    }
+    if let Some(device) = &principal.device {
+        println!("device  {device}");
+    }
+    if !principal.teams.is_empty() {
+        println!("groups  {}", principal.teams.join(", "));
     }
     Ok(())
 }

@@ -35,6 +35,20 @@ pub struct Access {
     pub per_principal: bool,
 }
 
+impl Access {
+    /// A desktop bridge: loopback, one user, books per principal.
+    ///
+    /// This is what a window and a tab on the same machine should agree on —
+    /// the person sitting here — so a local Spore does not need a login to know
+    /// who is commenting.
+    pub fn desktop() -> Self {
+        Self {
+            trust: crate::Trust::new().trust_loopback(true).local_fallback(true),
+            per_principal: true,
+        }
+    }
+}
+
 /// What a bridge was asked to serve.
 #[derive(Debug, Clone)]
 pub struct Options {

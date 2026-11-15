@@ -712,9 +712,15 @@ impl App {
                         http,
                         records,
                         vfs: vfs_root,
-                        principal: actor.map(|actor| {
-                            ::soil_webgpu::Grants::new().actor(actor).principal
-                        }).flatten(),
+                        // A desktop has one user: the window is theirs unless
+                        // the operator named someone else, so the principal is
+                        // read from the process rather than passed in.
+                        principal: match &actor {
+                            Some(actor) => {
+                                ::soil_webgpu::Grants::new().actor(actor.clone()).principal
+                            }
+                            None => ::soil::principal_host::PrincipalHost::local(),
+                        },
                         // The storefront origin is already in the HTTP policy
                         // `build_http` constructs; this presenter has no agent
                         // cast of its own and needs no single-origin shorthand.
