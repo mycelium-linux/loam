@@ -44,6 +44,8 @@
 //! authority. `cli` adds the `soil-*` commands.
 
 mod clock;
+#[cfg(feature = "acp")]
+pub mod acp;
 #[cfg(feature = "wasi")]
 pub mod context;
 #[cfg(feature = "wasi")]

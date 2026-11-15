@@ -40,6 +40,10 @@ http = [
     "dep:wasmtime-wasi",
 ]
 unibus = ["dep:unibus", "dep:unibus-sdk"]
+# The ACP client: one `AgentBackend` for every harness that speaks the
+# protocol (Operator first, Pi and delta-acp behind it). No GPU and no WASI
+# profile: a presenter that wants agents but no window can still link it.
+acp = ["dep:soil-agent-host"]
 creds = ["dep:base64", "dep:ed25519-dalek", "dep:hmac", "dep:sha2", "dep:tempfile"]
 # The WASI p2 profile around the capabilities: `wasi:http` in and out,
 # clocks, filesystem, sockets, the credential and bus sessions, and the policy
