@@ -83,3 +83,13 @@ world runner {
   import http;
   export run: func(args: list<string>) -> result<_, string>;
 }
+
+/// The ABI a CLI Spore actually declares: `run` returns what should be printed.
+///
+/// `runner` above returns unit and exists for a smoke test with no output; a
+/// Spore that answers a question has something to say, and making it write to
+/// a stdout this world never imported would be a capability it did not ask for.
+world cli {
+  import http;
+  export run: func(args: list<string>) -> result<string, string>;
+}

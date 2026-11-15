@@ -15,6 +15,12 @@ use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 wasmtime::component::bindgen!({ path: "wit/http", world: "runner" });
 
+/// The CLI-Spore ABI, in its own module so the two worlds' generated types do
+/// not collide. Same linker, same policy, same transport.
+pub mod cli_abi {
+    wasmtime::component::bindgen!({ path: "wit/http", world: "cli" });
+}
+
 use self::soil::http::http;
 
 // The generated interface, re-exported so a host that links `soil:http` from
@@ -697,6 +703,20 @@ impl HttpRuntime {
             .call_run(&mut store, args)?
             .map_err(|error| anyhow::anyhow!("guest: {error}"))?;
         Ok(())
+    }
+
+    /// Run a CLI Spore and return what it wants printed.
+    ///
+    /// A Spore cannot write to a terminal it was not granted, so the answer is
+    /// the return value and the host decides where it goes. That is the same
+    /// boundary as every other capability, applied to output.
+    pub fn run_cli(&self, bytes: &[u8], host: HttpHost, args: &[String]) -> Result<String> {
+        let component = wasmtime::component::Component::new(&self.engine, bytes)?;
+        let mut store = Store::new(&self.engine, host);
+        let bindings = cli_abi::Cli::instantiate(&mut store, &component, &self.linker)?;
+        bindings
+            .call_run(&mut store, args)?
+            .map_err(|error| anyhow::anyhow!("guest: {error}"))
     }
 }
 
