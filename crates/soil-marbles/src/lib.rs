@@ -13,6 +13,11 @@ use serde_json::Value;
 
 const MAX_OUTPUT: usize = 4 * 1024 * 1024;
 
+/// `list --all` returns every issue with its description: six thousand issues
+/// is twelve megabytes of JSON, which is a normal project rather than a
+/// runaway. The default cap is for the calls that are supposed to be small.
+const MAX_FULL_LIST: usize = 64 * 1024 * 1024;
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Issue {
     pub id: String,
@@ -86,6 +91,15 @@ impl MarblesClient {
         self.run_json(&["ready"])
     }
 
+    /// Every issue, including closed ones.
+    ///
+    /// `list` stops at what is still open, which is the wrong filter for a
+    /// board: a column of finished work is a fact about the project, and a
+    /// board that cannot show it has no way to answer "what shipped".
+    pub fn list_all(&self) -> Result<Vec<Issue>> {
+        self.run_json_capped(&["list", "--all"], MAX_FULL_LIST)
+    }
+
     pub fn show(&self, id: &str) -> Result<Issue> {
         let mut issues: Vec<Issue> = self.run_json(&["show", id])?;
         issues
@@ -124,16 +138,30 @@ impl MarblesClient {
     where
         T: for<'de> Deserialize<'de>,
     {
+        self.run_json_capped(args, MAX_OUTPUT)
+    }
+
+    fn run_json_capped<T>(&self, args: &[&str], max: usize) -> Result<T>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
         let args = args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
-        self.run_json_owned(&args)
+        self.run_json_owned_capped(&args, max)
     }
 
     fn run_json_owned<T>(&self, args: &[String]) -> Result<T>
     where
         T: for<'de> Deserialize<'de>,
     {
+        self.run_json_owned_capped(args, MAX_OUTPUT)
+    }
+
+    fn run_json_owned_capped<T>(&self, args: &[String], max: usize) -> Result<T>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
         let output = self.command(args).output().context("run mb")?;
-        if !output.status.success() || output.stdout.len() > MAX_OUTPUT {
+        if !output.status.success() || output.stdout.len() > max {
             anyhow::bail!(
                 "mb {} failed",
                 args.first().map(String::as_str).unwrap_or("call")
