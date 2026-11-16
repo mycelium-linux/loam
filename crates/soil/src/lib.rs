@@ -81,6 +81,8 @@ mod service;
 pub mod time;
 #[cfg(any(feature = "unibus", feature = "wasi"))]
 pub mod unibus;
+#[cfg(feature = "work")]
+pub mod work;
 #[cfg(feature = "vfs")]
 pub mod vfs_host;
 // The WebGPU runner: a wasmtime store that grants `wasi:webgpu` and the

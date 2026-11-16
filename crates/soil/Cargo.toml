@@ -70,6 +70,9 @@ remote = ["vfs"]
 # Host-composed search over the granted sources (VFS index, records, git, graph,
 # tracker). It composes the capability hosts, so it needs their features.
 search = ["vfs", "records", "dep:plist", "dep:serde", "dep:soil-marbles", "dep:soil-spore"]
+# The work board: tracked items by status. Marbles is called through its CLI
+# contract, so this feature adds a reader, not a database.
+work = ["dep:soil-marbles"]
 # The component-model runner a GPUI / WebGPU Spore runs in: `wasi:webgpu`, the
 # `soil:present` bridge, and the capability hosts a presenter may grant. Off by
 # default so a WASI-profile host does not carry the GPU stack. It is not `wasi`:
@@ -166,6 +169,11 @@ required-features = ["cli"]
 name = "soil-http"
 path = "src/bin/soil-http.rs"
 required-features = ["cli"]
+
+[[bin]]
+name = "soil-work"
+path = "src/bin/soil-work.rs"
+required-features = ["work"]
 
 [[bin]]
 name = "soil-records-ingest"
