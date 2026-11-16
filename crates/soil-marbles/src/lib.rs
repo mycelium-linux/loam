@@ -162,6 +162,16 @@ impl MarblesClient {
         self.run_json(&["claim", id])
     }
 
+    /// Claim the item on behalf of `actor`.
+    ///
+    /// Handing work to somebody else is the same operation as taking it: the
+    /// actor that holds the claim is the actor the tracker will report it to.
+    /// `update --assignee` is the newer spelling; this one is what the CLI in
+    /// service supports today, and it is the same state change.
+    pub fn claim_as(&self, id: &str, actor: &str) -> Result<Value> {
+        self.run_json_owned(&claim_args(id, Some(actor)))
+    }
+
     pub fn close(&self, id: &str, reason: &str) -> Result<Issue> {
         let mut args = vec!["close".to_string(), id.to_string()];
         if !reason.is_empty() {
@@ -372,6 +382,15 @@ fn review_args(id: &str, pr: Option<&str>, commit: Option<&str>) -> Vec<String> 
     args
 }
 
+fn claim_args(id: &str, actor: Option<&str>) -> Vec<String> {
+    let mut args = vec!["claim".to_string(), id.to_string()];
+    if let Some(actor) = actor.filter(|actor| !actor.is_empty()) {
+        args.push("--as".to_string());
+        args.push(actor.to_string());
+    }
+    args
+}
+
 fn touch_args(id: &str, actor: Option<&str>) -> Vec<String> {
     let mut args = vec!["touch".to_string(), id.to_string()];
     if let Some(actor) = actor.filter(|actor| !actor.is_empty()) {
@@ -558,6 +577,15 @@ esac
             close_args("ACME-42", Delivery::Nothing { reason: "no delivery expected" }),
             vec!["close", "ACME-42", "--ack", "no delivery expected"]
         );
+    }
+
+    #[test]
+    fn handing_work_to_someone_else_is_a_claim_as_them() {
+        assert_eq!(
+            claim_args("ACME-42", Some("pm-rakazo")),
+            vec!["claim", "ACME-42", "--as", "pm-rakazo"]
+        );
+        assert_eq!(claim_args("ACME-42", None), vec!["claim", "ACME-42"]);
     }
 
     #[test]
