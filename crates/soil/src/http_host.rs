@@ -5,10 +5,9 @@
 //! deadline and credential material. No socket, DNS API, proxy setting or
 //! secret crosses the component boundary.
 
-use std::{collections::BTreeSet, io::Read, path::PathBuf, sync::Arc, time::Duration};
+use std::{collections::BTreeSet, io::Read, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use url::Url;
 use wasmtime::component::{Component, Linker, ResourceTable};
@@ -199,81 +198,42 @@ impl CredentialProvider for BearerCredential {
     }
 }
 
-/// Resolve a Geode reference through the owner-only `geoded` socket and expose
-/// it as a URL path segment. The secret is leased for the duration of one fetch
-/// and never returns to the Spore.
-#[cfg(unix)]
-pub struct GeodeCredentials {
-    socket: PathBuf,
-    purpose: String,
-}
-
-#[cfg(unix)]
-impl GeodeCredentials {
-    pub fn new(socket: impl Into<PathBuf>, purpose: impl Into<String>) -> Self {
-        Self {
-            socket: socket.into(),
-            purpose: purpose.into(),
-        }
-    }
-
-    fn lease(&self, reference: &str) -> Result<String> {
-        use std::io::Write as _;
-        use std::os::unix::net::UnixStream;
-
-        let request = serde_json::json!({
-            "op": "lease",
-            "reference": reference,
-            "purpose": self.purpose,
-            "ttl_ms": 5_000,
-        });
-        let mut stream = UnixStream::connect(&self.socket)
-            .with_context(|| format!("connect Geode socket {}", self.socket.display()))?;
-        stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .context("set Geode read timeout")?;
-        stream
-            .write_all(format!("{}\n", request).as_bytes())
-            .context("write Geode lease")?;
-        let mut response = String::new();
-        stream
-            .read_to_string(&mut response)
-            .context("read Geode lease")?;
-        let response: serde_json::Value =
-            serde_json::from_str(&response).context("decode Geode lease")?;
-        if response.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
-            anyhow::bail!(
-                "Geode lease denied: {}",
-                response
-                    .get("error")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("unknown error")
-            );
-        }
-        let encoded = response
-            .get("secret_b64")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| anyhow::anyhow!("Geode lease omitted secret_b64"))?;
-        let bytes = BASE64.decode(encoded).context("decode Geode secret")?;
-        let secret = String::from_utf8(bytes).context("Geode secret is not UTF-8")?;
-        if secret.is_empty() {
-            anyhow::bail!("Geode returned an empty credential");
-        }
-        Ok(secret)
-    }
-}
-
-#[cfg(unix)]
-impl CredentialProvider for GeodeCredentials {
-    fn resolve(&self, _handle: &str) -> Result<Option<(String, String)>> {
-        Ok(None)
+/// Geode as the HTTP host's credential resolver: the guest names a handle, the
+/// host owns the reference, the purpose and whether the bytes become a header or
+/// a path segment. One lease client serves both directions — `creds::GeodeCredentials`
+/// is the implementation, and this impl is the view the HTTP host sees. A guest
+/// can no longer spell a `geode://` reference of its own.
+#[cfg(all(unix, feature = "creds", feature = "wasi"))]
+impl CredentialProvider for crate::creds::GeodeCredentials {
+    fn resolve(&self, handle: &str) -> Result<Option<(String, String)>> {
+        let Some((spec, bytes)) = self
+            .host_lease(handle)
+            .map_err(|error| anyhow::anyhow!("geode lease for {handle}: {error:?}"))?
+        else {
+            return Ok(None);
+        };
+        let Some(header) = spec.header else {
+            // A path credential presented as a header credential: refuse rather
+            // than put a path secret in a header.
+            return Ok(None);
+        };
+        let value = String::from_utf8(bytes).context("geode secret is not UTF-8")?;
+        Ok(Some((header, value)))
     }
 
     fn resolve_path(&self, handle: &str) -> Result<Option<String>> {
-        if !handle.starts_with("geode://") {
+        let Some((spec, bytes)) = self
+            .host_lease(handle)
+            .map_err(|error| anyhow::anyhow!("geode lease for {handle}: {error:?}"))?
+        else {
+            return Ok(None);
+        };
+        if spec.header.is_some() {
             return Ok(None);
         }
-        self.lease(handle).map(Some)
+        Ok(Some(
+            String::from_utf8(bytes).context("geode secret is not UTF-8")?,
+        ))
     }
 }
 
@@ -1005,14 +965,26 @@ mod tests {
                 .unwrap();
         });
 
-        let credentials = GeodeCredentials::new(&socket, "hue.control");
-        assert_eq!(
-            credentials
-                .resolve_path("geode://home/hue/bridge")
-                .unwrap()
-                .as_deref(),
-            Some("secret")
+        // One lease client, host-configured handle: the guest names "bridge",
+        // and the reference plus purpose stay on the host side.
+        let credentials = crate::creds::GeodeCredentials::new(
+            &socket,
+            "geode://",
+            "default.purpose",
+            Duration::from_secs(5),
+        )
+        .with_host_handle(
+            "bridge",
+            crate::creds::HostHandle {
+                reference: "geode://home/hue/bridge".into(),
+                purpose: "hue.control".into(),
+                header: None,
+            },
         );
+        assert_eq!(credentials.resolve_path("bridge").unwrap().as_deref(), Some("secret"));
+        // A handle the host does not grant resolves to nothing, rather than to a
+        // reference the guest spelled.
+        assert_eq!(credentials.resolve_path("geode://home/hue/bridge").unwrap(), None);
         server.join().unwrap();
     }
 

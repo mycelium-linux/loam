@@ -864,6 +864,20 @@ pub struct GeodeCredentials {
     ttl_ms: u64,
     leased: Mutex<BTreeMap<String, Entry>>,
     counter: AtomicU64,
+    /// Handles the host is willing to lease for an outbound request. The guest
+    /// names a handle; the reference, purpose and header stay host configuration,
+    /// so a Spore still cannot address a reference it was not given.
+    host_handles: BTreeMap<String, HostHandle>,
+}
+
+/// One host-configured outbound credential.
+#[derive(Clone, Debug)]
+pub struct HostHandle {
+    /// Absolute reference (`geode://realm/account/slot`).
+    pub reference: String,
+    pub purpose: String,
+    /// `Some(header_name)` injects a header; `None` substitutes a path segment.
+    pub header: Option<String>,
 }
 
 impl GeodeCredentials {
@@ -884,17 +898,46 @@ impl GeodeCredentials {
             ttl_ms: ttl.as_millis().min(u128::from(u64::MAX)) as u64,
             leased: Mutex::new(BTreeMap::new()),
             counter: AtomicU64::new(0),
+            host_handles: BTreeMap::new(),
         }
+    }
+
+    /// Allow a guest to name `handle` for an outbound request.
+    ///
+    /// The host decides the reference, the purpose and whether the bytes become
+    /// a header or a path segment. Nothing here is reachable by spelling a
+    /// `geode://` reference in a request.
+    pub fn with_host_handle(mut self, handle: impl Into<String>, handle_spec: HostHandle) -> Self {
+        self.host_handles.insert(handle.into(), handle_spec);
+        self
+    }
+
+    /// Lease one host-configured handle for a single outbound use.
+    ///
+    /// `None` means the host does not grant that handle — the caller must not
+    /// fall back to treating the name as a reference.
+    pub fn host_lease(
+        &self,
+        handle: &str,
+    ) -> std::result::Result<Option<(HostHandle, Vec<u8>)>, CredentialError> {
+        let Some(spec) = self.host_handles.get(handle).cloned() else {
+            return Ok(None);
+        };
+        // The handle's own purpose wins: least privilege is per handle, not per
+        // client.
+        let (bytes, _) = self.lease(&spec.reference, &spec.purpose)?;
+        Ok(Some((spec, bytes)))
     }
 
     fn lease(
         &self,
         reference: &str,
+        purpose: &str,
     ) -> std::result::Result<(Vec<u8>, Option<u64>), CredentialError> {
         let request = serde_json::json!({
             "op": "lease",
-            "reference": format!("{}{reference}", self.prefix),
-            "purpose": self.purpose,
+            "reference": reference,
+            "purpose": purpose,
             "ttl_ms": self.ttl_ms,
         });
         let mut stream =
@@ -956,7 +999,10 @@ impl CredentialProvider for GeodeCredentials {
         if name.is_empty() {
             return Err(CredentialError::Invalid);
         }
-        let (secret, expires_at) = self.lease(name)?;
+        // The prefix never leaves the host: a guest names a slot inside it, not
+        // a reference of its own.
+        let (secret, expires_at) =
+            self.lease(&format!("{}{name}", self.prefix), &self.purpose)?;
         let id = format!("{name}#{}", self.counter.fetch_add(1, Ordering::Relaxed));
         let entry = Entry {
             purpose: self.purpose.clone(),
