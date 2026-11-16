@@ -29,18 +29,29 @@ jobs:
       - name: Path dependencies stay inside the checkout
         run: scripts/check-path-deps.sh
 
+      # libghostty-vt is compiled by Zig, and Ghostty builds only against an
+      # exact minor version. `scripts/bootstrap-toolchain.sh` owns that pin and
+      # installs the toolchain where `.cargo/config.toml` points `ZIG`, so keying
+      # the cache on the script means bumping the version invalidates it without
+      # a second copy of the number in this file.
+      - uses: actions/cache@v4
+        with:
+          path: .toolchain
+          key: zig-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/bootstrap-toolchain.sh') }}
+      - name: Zig toolchain
+        run: scripts/bootstrap-toolchain.sh
+
       # The lint gate is the dead-code gate. `dead_code`, `unused_imports`, and
       # the rest of the unused family are warnings, `-D warnings` makes them
       # failures, and the fix is a delete rather than a reword.
       #
       # The gate names crates instead of taking the whole workspace because the
-      # workspace does not build from a bare checkout yet: canvas-winit and
-      # ghostty-vt-sys need a pinned Zig this runner does not have, and mush and
-      # soil-notify-host embed a prebuilt Spore wasm. A gate that cannot run is
-      # worse than no gate, so a crate joins this list in the change that makes
-      # it buildable here.
+      # workspace does not build from a bare checkout yet: mush and
+      # soil-notify-host embed a prebuilt Spore wasm, and canvas-winit still
+      # carries lints of its own. A gate that cannot run is worse than no gate,
+      # so a crate joins this list in the change that makes it green here.
       - name: Clippy
-        run: cargo clippy -p soil -p soil-agent-host --all-targets --locked -- -D warnings
+        run: cargo clippy -p soil -p soil-agent-host -p soil-vt --all-targets --locked -- -D warnings
 
       # `soil`'s own suite joins this step once it is green: three
       # `records_host` tests (upsert_get_scan_and_delete and two neighbours)
