@@ -3,7 +3,15 @@
 # local build accidents, not reproducible dependency sources.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-cargo metadata --format-version 1 --no-deps | python3 -c '
+
+# Cargo gives up before it prints anything to parse when the missing manifest is
+# the escaping one, so a failed resolve is the finding, not a broken script.
+meta="$(cargo metadata --format-version 1 --no-deps)" || {
+  echo "cargo cannot resolve this workspace; a path dependency probably escapes the checkout" >&2
+  exit 1
+}
+
+printf '%s' "$meta" | python3 -c '
 import json, pathlib, sys
 root = pathlib.Path(sys.argv[1]).resolve()
 meta = json.load(sys.stdin)
