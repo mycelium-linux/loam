@@ -94,6 +94,14 @@ The window title is the Spore's `[spore] title` from its manifest, or its name
 title-cased, or the module's file name — an app called "Term" shows "Term", not
 `canvas-winit — terminal.wasm`.
 
+## Installed and dev profiles
+
+The launcher searches `~/.local/share/fungos/spores`, then the bundle's own
+support directory. `--spores-overlay DIR` (repeatable) searches a root *before*
+those, so a development build shadows one package while the rest of the machine
+stays visible; `--spores DIR` replaces the list entirely. See
+[two profiles](dev-profile.md) for the workflow built on that.
+
 ## Packaging
 
 The `.app` is a plain bundle: `Contents/MacOS/canvas-winit`,

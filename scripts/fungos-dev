@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+# A development profile for Spores and the launcher.
+#
+# The installed profile is what the desktop app runs: the launcher module inside
+# fungOS.app and the packages under the stable root. This keeps a second profile
+# beside it with its own launcher module and its own packages, and runs
+# canvas-winit with that root searched first. A broken dev build then shadows the
+# one app you are working on instead of replacing everything you use, and
+# `promote` is how a build graduates.
+set -euo pipefail
+
+dev_root="${FUNGOS_DEV_ROOT:-$HOME/.local/share/fungos/dev}"
+stable_root="${FUNGOS_STABLE_ROOT:-$HOME/.local/share/fungos/spores}"
+dev_spores="$dev_root/spores"
+dev_module="$dev_root/launcher.wasm"
+
+die() { printf 'fungos-dev: %s\n' "$*" >&2; exit 1; }
+
+usage() {
+    cat <<'USAGE'
+usage: fungos-dev <command>
+
+  run [-- args...]      run the dev launcher with the dev packages shadowing
+                        the installed ones
+  build-launcher DIR    build DIR (release, wasm32-wasip2) and install its
+                        module as the dev launcher
+  install DIR           build DIR if it is a crate, then install its package
+                        into the dev root only
+  promote ID [--replace]
+                        copy a dev package into the installed root
+  status                what each profile holds, and what is shadowed
+  roots                 the catalogue roots in the order they are searched
+
+Environment:
+  FUNGOS_DEV_ROOT       dev profile root (default ~/.local/share/fungos/dev)
+  FUNGOS_STABLE_ROOT    installed Spores (default ~/.local/share/fungos/spores)
+  FUNGOS_CANVAS_WINIT   the canvas-winit binary to run
+USAGE
+}
+
+canvas_winit() {
+    if [ -n "${FUNGOS_CANVAS_WINIT:-}" ]; then printf '%s\n' "$FUNGOS_CANVAS_WINIT"; return 0; fi
+    # The profile's own binary first: it is the one that knows about the overlay.
+    local candidate
+    for candidate in \
+        "$dev_root/bin/canvas-winit" \
+        "$(command -v canvas-winit 2>/dev/null || true)" \
+        "$HOME/Applications/fungOS.app/Contents/MacOS/canvas-winit" \
+        "/Applications/fungOS.app/Contents/MacOS/canvas-winit"
+    do
+        [ -n "$candidate" ] && [ -x "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
+    done
+    die "no canvas-winit found; set FUNGOS_CANVAS_WINIT"
+}
+
+# The first id a package declares. The manifest is the package's identity, so a
+# dev install is addressed the same way the catalogue addresses it.
+package_id() {
+    sed -n 's/^id[[:space:]]*=[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' "$1/spore.toml" | head -1
+}
+
+built_module() {
+    local dir="$1"
+    find "$dir/target/wasm32-wasip2/release" -maxdepth 1 -name '*.wasm' 2>/dev/null | head -1
+}
+
+cmd_run() {
+    local bin
+    bin=$(canvas_winit)
+    [ -f "$dev_module" ] || die "no dev launcher at $dev_module; run: fungos-dev build-launcher DIR"
+    # Installed packages stay reachable: the overlay only shadows ids it carries.
+    exec "$bin" "$dev_module" --spores-overlay "$dev_spores" "$@"
+}
+
+cmd_build_launcher() {
+    local dir="${1:-}"
+    [ -n "$dir" ] || die "usage: fungos-dev build-launcher DIR"
+    [ -f "$dir/Cargo.toml" ] || die "$dir has no Cargo.toml"
+    ( cd "$dir" && cargo build --release --target wasm32-wasip2 )
+    local wasm
+    wasm=$(built_module "$dir")
+    [ -n "$wasm" ] || die "no wasm32-wasip2 module under $dir/target"
+    mkdir -p "$dev_root"
+    cp -f "$wasm" "$dev_module"
+    printf 'dev launcher: %s (%s bytes)\n' "$dev_module" "$(wc -c <"$dev_module" | tr -d ' ')"
+}
+
+cmd_install() {
+    local dir="${1:-}"
+    [ -n "$dir" ] || die "usage: fungos-dev install DIR"
+    [ -f "$dir/spore.toml" ] || die "$dir has no spore.toml"
+    if [ -f "$dir/Cargo.toml" ]; then
+        ( cd "$dir" && cargo build --release --target wasm32-wasip2 )
+        local wasm
+        wasm=$(built_module "$dir")
+        [ -n "$wasm" ] && cp -f "$wasm" "$dir/module.wasm"
+    fi
+    local id
+    id=$(package_id "$dir")
+    [ -n "$id" ] || die "no id in $dir/spore.toml"
+    mkdir -p "$dev_spores"
+    rm -rf "$dev_spores/$id"
+    cp -R "$dir" "$dev_spores/$id"
+    # A build tree is not part of a package.
+    rm -rf "$dev_spores/$id/target" "$dev_spores/$id/.git"
+    if command -v soil-spore >/dev/null 2>&1; then
+        soil-spore lock "$dev_spores/$id" >/dev/null || true
+    fi
+    printf 'installed %s into %s\n' "$id" "$dev_spores"
+}
+
+cmd_promote() {
+    local id="${1:-}"
+    [ -n "$id" ] || die "usage: fungos-dev promote ID [--replace]"
+    [ -d "$dev_spores/$id" ] || die "not in the dev root: $id"
+    if [ -e "$stable_root/$id" ] && [ "${2:-}" != "--replace" ]; then
+        die "$stable_root/$id exists; pass --replace to overwrite it"
+    fi
+    mkdir -p "$stable_root"
+    rm -rf "$stable_root/$id"
+    cp -R "$dev_spores/$id" "$stable_root/$id"
+    printf 'promoted %s to %s\n' "$id" "$stable_root"
+}
+
+cmd_status() {
+    printf 'dev:      %s\n' "$dev_root"
+    printf 'dev mod:  %s%s\n' "$dev_module" "$([ -f "$dev_module" ] && printf ' (%s bytes)' "$(wc -c <"$dev_module" | tr -d ' ')")"
+    printf 'installed: %s\n' "$stable_root"
+    local dir id
+    for dir in "$dev_spores" "$stable_root"; do
+        [ -d "$dir" ] || continue
+        printf '\n%s\n' "$dir"
+        for id in "$dir"/*/; do
+            [ -f "${id}spore.toml" ] || continue
+            printf '  %s\n' "$(basename "$id")"
+        done
+    done
+    if [ -d "$dev_spores" ] && [ -d "$stable_root" ]; then
+        local shadowed=""
+        for id in "$dev_spores"/*/; do
+            [ -f "${id}spore.toml" ] || continue
+            [ -e "$stable_root/$(basename "$id")" ] && shadowed="$shadowed $(basename "$id")"
+        done
+        [ -n "$shadowed" ] && printf '\nshadowing installed:%s\n' "$shadowed"
+    fi
+}
+
+cmd_roots() {
+    printf '%s\n' "$dev_spores"
+    printf '%s\n' "$stable_root"
+    printf '%s\n' "$HOME/Library/Application Support/fungOS/spores"
+}
+
+command="${1:-}"
+[ $# -gt 0 ] && shift
+case "$command" in
+    run) cmd_run "$@" ;;
+    build-launcher) cmd_build_launcher "$@" ;;
+    install) cmd_install "$@" ;;
+    promote) cmd_promote "$@" ;;
+    status) cmd_status ;;
+    roots) cmd_roots ;;
+    ""|help|--help|-h) usage ;;
+    *) usage; exit 1 ;;
+esac
