@@ -1228,6 +1228,40 @@ impl ApplicationHandler for App {
     }
 }
 
+/// Where the catalogue looks, most specific first.
+///
+/// A development profile has to shadow a package the machine really installed
+/// without replacing the list around it: `--spores` answers "only this tree",
+/// which is right for a test and wrong for daily work, because every package the
+/// dev tree does not carry disappears. An overlay root is searched before the two
+/// stable roots, so a dev build of one app wins and the rest of the machine stays
+/// visible.
+fn spore_roots(
+    explicit: Option<PathBuf>,
+    overlay: &[PathBuf],
+    home: &std::path::Path,
+    env_overlay: Option<std::ffi::OsString>,
+    env_roots: Option<std::ffi::OsString>,
+) -> Vec<PathBuf> {
+    if let Some(path) = explicit {
+        return vec![path];
+    }
+    // Every place a Spore can live: the dev overlay first, then what the store
+    // installed, then what the shell ships, then any root the environment adds.
+    // Joining them is what makes the launcher describe the machine instead of
+    // the app.
+    let mut roots = overlay.to_vec();
+    if let Some(extra) = env_overlay {
+        roots.extend(std::env::split_paths(&extra));
+    }
+    roots.push(home.join(".local/share/fungos/spores"));
+    roots.push(home.join("Library/Application Support/fungOS/spores"));
+    if let Some(extra) = env_roots {
+        roots.extend(std::env::split_paths(&extra));
+    }
+    roots
+}
+
 /// Compile the Spores this machine has, in the background, so opening one from
 /// the launcher does not pay for it. The module already running is skipped; a
 /// Spore whose cache is warm costs a file read and a deserialize to check.
@@ -1624,6 +1658,10 @@ pub struct Options {
     pub prewarm: bool,
     /// Catalog root for `soil:spore`.
     pub spores: Option<PathBuf>,
+    /// Roots searched before the default catalogue roots, most specific
+    /// first. A development profile shadows one package without hiding the
+    /// rest of the machine.
+    pub spores_overlay: Vec<PathBuf>,
     /// Initial logical window extent.
     pub logical_size: (f64, f64),
     /// Origins `soil:http` may reach.
@@ -1662,6 +1700,7 @@ impl Default for Options {
             splash: Splash::Flow,
             prewarm: false,
             spores: None,
+            spores_overlay: Vec::new(),
             logical_size: LOGICAL_SIZE,
             origins: Vec::new(),
             geode_socket: None,
@@ -1697,6 +1736,7 @@ pub fn parse(args: &[String]) -> Result<Options> {
     let mut splash = Splash::Flow;
     let mut prewarm = false;
     let mut spores = None;
+    let mut spores_overlay: Vec<PathBuf> = Vec::new();
     let mut logical_size = LOGICAL_SIZE;
     let mut origins = Vec::new();
     let mut geode_socket = None;
@@ -1753,6 +1793,12 @@ pub fn parse(args: &[String]) -> Result<Options> {
                     args.next().context("--spores needs a directory")?,
                 ));
             }
+            "--spores-overlay" => {
+                spores_overlay.push(PathBuf::from(
+                    args.next()
+                        .context("--spores-overlay needs a directory")?,
+                ));
+            }
             "--size" => {
                 let value = args.next().context("--size needs WxH")?;
                 let (width, height) = value.split_once('x').context("--size needs WxH")?;
@@ -1807,7 +1853,7 @@ pub fn parse(args: &[String]) -> Result<Options> {
             }
             value if module.is_none() => module = Some(PathBuf::from(value)),
             _ => anyhow::bail!(
-                "usage: canvas-winit <module.wasm> [--capture FILE.rgba] [--frames N] [--key KEY] [--keys TEXT] [--command LINE] [--pointer X,Y] [--click X,Y] [--drag X1,Y1,X2,Y2] [--after MS] [--spores DIR] [--size WxH] [--allow-origin URL]... [--geode-socket PATH --geode-purpose PURPOSE] [--hue-bridge URL] [--records-root DIR]"
+                "usage: canvas-winit <module.wasm> [--capture FILE.rgba] [--frames N] [--key KEY] [--keys TEXT] [--command LINE] [--pointer X,Y] [--click X,Y] [--drag X1,Y1,X2,Y2] [--after MS] [--spores DIR] [--spores-overlay DIR]... [--size WxH] [--allow-origin URL]... [--geode-socket PATH --geode-purpose PURPOSE] [--hue-bridge URL] [--records-root DIR]"
             ),
         }
     }
@@ -1825,6 +1871,7 @@ pub fn parse(args: &[String]) -> Result<Options> {
         splash,
         prewarm,
         spores,
+        spores_overlay,
         logical_size,
         origins,
         geode_socket,
@@ -1854,6 +1901,7 @@ pub fn run(options: Options) -> Result<()> {
         splash,
         prewarm,
         spores,
+        spores_overlay,
         logical_size,
         origins,
         geode_socket,
@@ -1888,7 +1936,7 @@ pub fn run(options: Options) -> Result<()> {
             };
             if !candidate.is_file() {
                 anyhow::bail!(
-                    "usage: canvas-winit <module.wasm> [--capture FILE.rgba] [--frames N] [--key KEY] [--keys TEXT] [--command LINE] [--pointer X,Y] [--click X,Y] [--drag X1,Y1,X2,Y2] [--after MS] [--spores DIR] [--size WxH] [--allow-origin URL]... [--geode-socket PATH --geode-purpose PURPOSE] [--hue-bridge URL] [--vfs-root DIR] [--records-root DIR] [--records-book NAME --records-collection NAME] [--actor WHO]"
+                    "usage: canvas-winit <module.wasm> [--capture FILE.rgba] [--frames N] [--key KEY] [--keys TEXT] [--command LINE] [--pointer X,Y] [--click X,Y] [--drag X1,Y1,X2,Y2] [--after MS] [--spores DIR] [--spores-overlay DIR]... [--size WxH] [--allow-origin URL]... [--geode-socket PATH --geode-purpose PURPOSE] [--hue-bridge URL] [--vfs-root DIR] [--records-root DIR] [--records-book NAME --records-collection NAME] [--actor WHO]"
                 );
             }
             candidate
@@ -2055,22 +2103,15 @@ pub fn run(options: Options) -> Result<()> {
         vfs_root,
         actor,
         launch,
-        spores: spores.map(|path| vec![path]).unwrap_or_else(|| {
-            let home = std::env::var_os("HOME")
+        spores: spore_roots(
+            spores,
+            &spores_overlay,
+            &std::env::var_os("HOME")
                 .map(PathBuf::from)
-                .unwrap_or_default();
-            // Every place a Spore can live: what the store installed, what the
-            // shell ships, and any root the environment adds. Joining them is
-            // what makes the launcher describe the machine instead of the app.
-            let mut roots = vec![
-                home.join(".local/share/fungos/spores"),
-                home.join("Library/Application Support/fungOS/spores"),
-            ];
-            if let Some(extra) = std::env::var_os("SOIL_SPORES_ROOTS") {
-                roots.extend(std::env::split_paths(&extra));
-            }
-            roots
-        }),
+                .unwrap_or_default(),
+            std::env::var_os("SOIL_SPORES_OVERLAY"),
+            std::env::var_os("SOIL_SPORES_ROOTS"),
+        ),
         started: false,
     };
     let event_loop = EventLoop::new()?;
@@ -2267,5 +2308,47 @@ mod native_launch_tests {
         assert!(said.contains("nothing was written"), "{said}");
         assert!(said.contains("quiet-launch.log"), "{said}");
         let _ = std::fs::remove_dir_all(&directory);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+
+    fn home() -> PathBuf {
+        PathBuf::from("/home/operator")
+    }
+
+    #[test]
+    fn a_dev_overlay_is_searched_before_the_installed_roots() {
+        let roots = spore_roots(None, &[PathBuf::from("/dev/spores")], &home(), None, None);
+        assert_eq!(roots[0], PathBuf::from("/dev/spores"));
+        assert!(roots[1].ends_with(".local/share/fungos/spores"));
+        assert!(roots[2].ends_with("Library/Application Support/fungOS/spores"));
+    }
+
+    #[test]
+    fn the_environment_can_add_an_overlay_too() {
+        let roots = spore_roots(None, &[], &home(), Some(OsString::from("/env/dev")), None);
+        assert_eq!(roots[0], PathBuf::from("/env/dev"));
+    }
+
+    #[test]
+    fn an_explicit_root_replaces_the_list() {
+        let roots = spore_roots(
+            Some(PathBuf::from("/only")),
+            &[PathBuf::from("/dev")],
+            &home(),
+            Some(OsString::from("/env/dev")),
+            Some(OsString::from("/env/roots")),
+        );
+        assert_eq!(roots, vec![PathBuf::from("/only")]);
+    }
+
+    #[test]
+    fn roots_from_the_environment_stay_lowest_precedence() {
+        let roots = spore_roots(None, &[], &home(), None, Some(OsString::from("/last")));
+        assert_eq!(roots.last().unwrap(), &PathBuf::from("/last"));
     }
 }
