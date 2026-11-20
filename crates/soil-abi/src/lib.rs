@@ -115,7 +115,24 @@ pub const CONTRACTS: &[Contract] = &[
         file: "wit/soil-inference.wit",
         source: include_str!("../../../wit/soil-inference.wit"),
         package: "soil:inference@0.3.0",
-        interfaces: &[("inference", &["models", "complete", "embed", "open-stream", "state"])],
+        interfaces: &[(
+            "inference",
+            &[
+                "models",
+                "complete",
+                "embed",
+                "voice-embed",
+                "transcribe",
+                "open-stream",
+                "state",
+            ],
+        )],
+    },
+    Contract {
+        file: "wit/soil-codec.wit",
+        source: include_str!("../../../wit/soil-codec.wit"),
+        package: "soil:codec@0.1.0",
+        interfaces: &[("codec", &["decode", "encode", "reset"])],
     },
     Contract {
         file: "wit/soil-spore.wit",
