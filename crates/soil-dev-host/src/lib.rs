@@ -17,7 +17,7 @@ use ::soil::http_host::{self, HttpHost, HttpPolicy};
 use ::soil::records_host::{self, Namespace, NamespacedRecordsHost, records};
 use ::soil::{
     MemoryBus, WasiHost, WasiHostBuilder, WasiHostPolicy,
-    unibus::{Bus, bus},
+    unibus::{Bus, UnibusBus, bus},
 };
 use anyhow::{Context, Result, bail};
 use soil_ble_host::ble as ble_host;
@@ -72,7 +72,6 @@ struct DevHost {
     records: NamespacedRecordsHost,
     http: HttpHost,
     wasi: WasiHost,
-    bus: Arc<MemoryBus>,
     start: Instant,
     /// Dev-only stable epoch. Records written by consecutive dev-host runs must
     /// be comparable; a bare `Instant` resets every process.
@@ -508,6 +507,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
     let mut ble_device = std::env::var("SOIL_BLE_DEVICE").ok();
 
     let mut origins: Vec<String> = Vec::new();
+    let mut unibus_config: Option<String> = None;
     let mut args = args.into_iter();
     let mut guest_path = None;
     let mut guest_args = Vec::new();
@@ -522,6 +522,9 @@ pub fn run(args: Vec<String>) -> Result<()> {
             "--focus" => focus_mode = Some(args.next().context("--focus needs a mode")?),
             "--bus-fixture" => {
                 bus_fixture = Some(args.next().context("--bus-fixture needs a path")?)
+            }
+            "--unibus-config" => {
+                unibus_config = Some(args.next().context("--unibus-config needs a path")?)
             }
             "--ble-device" => {
                 ble_device = Some(args.next().context("--ble-device needs a platform id")?)
@@ -595,10 +598,15 @@ pub fn run(args: Vec<String>) -> Result<()> {
     } else {
         eprintln!("http: allowing {}", allowed.join(", "));
     }
-    let bus = Arc::new(MemoryBus::default());
-    if let Some(path) = &bus_fixture {
-        load_bus_fixture(&bus, path)?;
-    }
+    let bus: Arc<dyn Bus> = if let Some(path) = &unibus_config {
+        Arc::new(UnibusBus::from_config_file(Path::new(path))?)
+    } else {
+        let memory = Arc::new(MemoryBus::default());
+        if let Some(path) = &bus_fixture {
+            load_bus_fixture(&memory, path)?;
+        }
+        memory
+    };
     let wasi = WasiHostBuilder::new(WasiHostPolicy::default())
         .inherit_stdio(true)
         .bus(bus.clone())
@@ -634,7 +642,6 @@ pub fn run(args: Vec<String>) -> Result<()> {
         records,
         http: HttpHost::new(policy),
         wasi,
-        bus,
         start: Instant::now(),
         time_origin_ms,
     };
@@ -709,13 +716,6 @@ pub fn run(args: Vec<String>) -> Result<()> {
         }
         Ok(_) => {}
         Err(error) => eprintln!("notify: {error:?}"),
-    }
-    for frame in store.data().bus.frames() {
-        println!(
-            "bus {} {}",
-            frame.kind,
-            String::from_utf8_lossy(&frame.body)
-        );
     }
     Ok(())
 }
