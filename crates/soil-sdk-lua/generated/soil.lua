@@ -398,6 +398,26 @@ function M.soil.canvas.surface.present(args)
   return dispatch("soil:canvas@1.0.0/surface", "present", args)
 end
 M.soil.canvas = M.soil.canvas.surface
+M.soil.codec = M.soil.codec or {}
+M.soil.codec.codec = M.soil.codec.codec or {}
+M.soil.codec.codec.types = M.soil.codec.codec.types or {}
+M.soil.codec.codec.types.Error = { DENIED = "denied", INVALID = "invalid", UNSUPPORTED = "unsupported", OVER_BUDGET = "over-budget", IO = "io" }
+--- Decode one encoded packet for a session into interleaved PCM16.
+-- WIT: decode -> result<list<u8>, error>
+function M.soil.codec.codec.decode(args)
+  return dispatch("soil:codec@0.1.0/codec", "decode", args)
+end
+--- Encode one interleaved PCM16 frame for a session.
+-- WIT: encode -> result<list<u8>, error>
+function M.soil.codec.codec.encode(args)
+  return dispatch("soil:codec@0.1.0/codec", "encode", args)
+end
+--- Drop all codec state for a session.
+-- WIT: reset -> result<_, error>
+function M.soil.codec.codec.reset(args)
+  return dispatch("soil:codec@0.1.0/codec", "reset", args)
+end
+M.soil.codec = M.soil.codec.codec
 M.soil.creds = M.soil.creds or {}
 M.soil.creds.creds = M.soil.creds.creds or {}
 M.soil.creds.creds.types = M.soil.creds.creds.types or {}
@@ -602,7 +622,7 @@ M.soil.inference = M.soil.inference or {}
 M.soil.inference.inference = M.soil.inference.inference or {}
 M.soil.inference.inference.types = M.soil.inference.inference.types or {}
 M.soil.inference.inference.types.Attachment = { fields = { { name = "name", type = "string" }, { name = "mime-type", type = "string" }, { name = "data", type = "list<u8>" }, { name = "extracted-text", type = "option<string>" } } }
-M.soil.inference.inference.types.Capability = { CHAT = "chat", TOOLS = "tools", VISION = "vision", EMBEDDINGS = "embeddings", RERANK = "rerank" }
+M.soil.inference.inference.types.Capability = { CHAT = "chat", TOOLS = "tools", VISION = "vision", EMBEDDINGS = "embeddings", RERANK = "rerank", TRANSCRIPTION = "transcription", SPEECH = "speech" }
 M.soil.inference.inference.types.Chunk = { fields = { { name = "data", type = "list<u8>" }, { name = "done", type = "bool" } } }
 M.soil.inference.inference.types.CompletionStream = { resource = true }
 M.soil.inference.inference.types.EmbedRequest = { fields = { { name = "model", type = "string" }, { name = "inputs", type = "list<string>" }, { name = "dimensions", type = "option<u32>" }, { name = "prompt-cache-key", type = "option<string>" } } }
@@ -615,11 +635,15 @@ M.soil.inference.inference.types.Model = { fields = { { name = "id", type = "str
 M.soil.inference.inference.types.Request = { fields = { { name = "model", type = "string" }, { name = "messages", type = "list<message>" }, { name = "tools", type = "list<tool>" }, { name = "max-output-tokens", type = "option<u32>" }, { name = "temperature", type = "option<f32>" }, { name = "prompt-cache-key", type = "option<string>" } } }
 M.soil.inference.inference.types.Response = { fields = { { name = "model", type = "string" }, { name = "message", type = "message" }, { name = "finish-reason", type = "option<string>" }, { name = "usage", type = "option<usage>" } } }
 M.soil.inference.inference.types.Role = { SYSTEM = "system", USER = "user", ASSISTANT = "assistant", TOOL = "tool" }
+M.soil.inference.inference.types.Segment = { fields = { { name = "text", type = "string" }, { name = "start-ms", type = "u32" }, { name = "end-ms", type = "u32" }, { name = "speaker", type = "option<string>" }, { name = "words", type = "list<word>" }, { name = "confidence", type = "option<f32>" } } }
 M.soil.inference.inference.types.Tool = { fields = { { name = "name", type = "string" }, { name = "description", type = "string" }, { name = "parameters", type = "string" } } }
 M.soil.inference.inference.types.ToolCall = { fields = { { name = "id", type = "string" }, { name = "name", type = "string" }, { name = "arguments", type = "string" } } }
+M.soil.inference.inference.types.TranscribeRequest = { fields = { { name = "model", type = "string" }, { name = "sample-rate", type = "u32" }, { name = "pcm16", type = "list<u8>" }, { name = "language", type = "option<string>" }, { name = "prompt", type = "option<string>" }, { name = "timestamps", type = "bool" }, { name = "diarize", type = "bool" } } }
+M.soil.inference.inference.types.TranscribeResponse = { fields = { { name = "model", type = "string" }, { name = "text", type = "string" }, { name = "language", type = "option<string>" }, { name = "duration-ms", type = "option<u32>" }, { name = "segments", type = "list<segment>" } } }
 M.soil.inference.inference.types.Usage = { fields = { { name = "prompt-tokens", type = "u32" }, { name = "completion-tokens", type = "u32" }, { name = "total-tokens", type = "u32" } } }
 M.soil.inference.inference.types.VoiceEmbeddingRequest = { fields = { { name = "model", type = "string" }, { name = "checkpoint", type = "string" }, { name = "sample-rate", type = "u32" }, { name = "dimensions", type = "option<u32>" }, { name = "pcm16", type = "list<u8>" } } }
 M.soil.inference.inference.types.VoiceEmbeddingResponse = { fields = { { name = "model", type = "string" }, { name = "embedding", type = "list<f32>" }, { name = "usage", type = "option<embed-usage>" } } }
+M.soil.inference.inference.types.Word = { fields = { { name = "text", type = "string" }, { name = "start-ms", type = "u32" }, { name = "end-ms", type = "u32" }, { name = "speaker", type = "option<string>" }, { name = "confidence", type = "option<f32>" } } }
 M.soil.inference.inference.CompletionStream = M.soil.inference.inference.CompletionStream or {}
 -- WIT: [method]completion-stream.cancel -> result<_, error>
 function M.soil.inference.inference.CompletionStream:cancel(args)
@@ -655,6 +679,12 @@ end
 -- WIT: state -> result<inference-state, error>
 function M.soil.inference.inference.state(args)
   return dispatch("soil:inference@0.3.0/inference", "state", args)
+end
+--- Non-streaming speech-to-text. PCM16 goes to the host's STT route, never to
+--- the chat route. Segments and words stay in provider order.
+-- WIT: transcribe -> result<transcribe-response, error>
+function M.soil.inference.inference.transcribe(args)
+  return dispatch("soil:inference@0.3.0/inference", "transcribe", args)
 end
 --- Non-streaming speaker embedding. This is an audio path, deliberately
 --- separate from text `embed`: it sends PCM16, not scrubbed text.

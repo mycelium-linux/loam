@@ -2323,6 +2323,106 @@
       "version": "1.0.0"
     },
     {
+      "docs": "Host-owned audio codec sessions.\n\nA Spore names a session and bounded packet/PCM bytes. The host owns libopus,\nsample rates, channel layouts, codec state and resource limits; no guest sees\na decoder handle, native pointer, or codec configuration.",
+      "id": "soil:codec@0.1.0",
+      "interfaces": [
+        {
+          "docs": null,
+          "functions": [
+            {
+              "docs": "Decode one encoded packet for a session into interleaved PCM16.",
+              "kind": "freestanding",
+              "lua": "decode",
+              "member": "decode",
+              "name": "decode",
+              "params": [
+                {
+                  "name": "session",
+                  "type": "string"
+                },
+                {
+                  "name": "packet",
+                  "type": "list<u8>"
+                },
+                {
+                  "name": "sample-rate",
+                  "type": "u32"
+                },
+                {
+                  "name": "channels",
+                  "type": "u16"
+                }
+              ],
+              "resource": null,
+              "result": "result<list<u8>, error>"
+            },
+            {
+              "docs": "Encode one interleaved PCM16 frame for a session.",
+              "kind": "freestanding",
+              "lua": "encode",
+              "member": "encode",
+              "name": "encode",
+              "params": [
+                {
+                  "name": "session",
+                  "type": "string"
+                },
+                {
+                  "name": "pcm",
+                  "type": "list<u8>"
+                },
+                {
+                  "name": "sample-rate",
+                  "type": "u32"
+                },
+                {
+                  "name": "channels",
+                  "type": "u16"
+                }
+              ],
+              "resource": null,
+              "result": "result<list<u8>, error>"
+            },
+            {
+              "docs": "Drop all codec state for a session.",
+              "kind": "freestanding",
+              "lua": "reset",
+              "member": "reset",
+              "name": "reset",
+              "params": [
+                {
+                  "name": "session",
+                  "type": "string"
+                }
+              ],
+              "resource": null,
+              "result": "result<_, error>"
+            }
+          ],
+          "id": "soil:codec@0.1.0/codec",
+          "name": "codec",
+          "types": [
+            {
+              "cases": [
+                "denied",
+                "invalid",
+                "unsupported",
+                "over-budget",
+                "io"
+              ],
+              "docs": null,
+              "kind": "enum",
+              "lua": "Error",
+              "name": "error"
+            }
+          ]
+        }
+      ],
+      "name": "codec",
+      "namespace": "soil",
+      "version": "0.1.0"
+    },
+    {
       "docs": "Host-mediated credentials.\n\nA Spore names a credential and asks the host to sign or verify. Secret bytes\nnever enter the guest: `resolve` returns an opaque handle, and every\noperation is re-checked against the host's grant and expiry on use.\n\nThe host adapter for this interface is Geode (Mycelium). This contract is\ndeliberately smaller than a key store: no enumeration, no read, no export.",
       "id": "soil:creds@1.0.0",
       "interfaces": [
@@ -3662,6 +3762,21 @@
               "result": "result<inference-state, error>"
             },
             {
+              "docs": "Non-streaming speech-to-text. PCM16 goes to the host's STT route, never to\nthe chat route. Segments and words stay in provider order.",
+              "kind": "freestanding",
+              "lua": "transcribe",
+              "member": "transcribe",
+              "name": "transcribe",
+              "params": [
+                {
+                  "name": "request",
+                  "type": "transcribe-request"
+                }
+              ],
+              "resource": null,
+              "result": "result<transcribe-response, error>"
+            },
+            {
               "docs": "Non-streaming speaker embedding. This is an audio path, deliberately\nseparate from text `embed`: it sends PCM16, not scrubbed text.",
               "kind": "freestanding",
               "lua": "voice_embed",
@@ -3710,7 +3825,9 @@
                 "tools",
                 "vision",
                 "embeddings",
-                "rerank"
+                "rerank",
+                "transcription",
+                "speech"
               ],
               "docs": "What a model can do. A host fills these from its provider catalog; a\nguest uses them to pick a tier without hardcoding provider names.",
               "kind": "enum",
@@ -3975,6 +4092,38 @@
               "docs": null,
               "fields": [
                 {
+                  "name": "text",
+                  "type": "string"
+                },
+                {
+                  "name": "start-ms",
+                  "type": "u32"
+                },
+                {
+                  "name": "end-ms",
+                  "type": "u32"
+                },
+                {
+                  "name": "speaker",
+                  "type": "option<string>"
+                },
+                {
+                  "name": "words",
+                  "type": "list<word>"
+                },
+                {
+                  "name": "confidence",
+                  "type": "option<f32>"
+                }
+              ],
+              "kind": "record",
+              "lua": "Segment",
+              "name": "segment"
+            },
+            {
+              "docs": null,
+              "fields": [
+                {
                   "name": "name",
                   "type": "string"
                 },
@@ -4010,6 +4159,70 @@
               "kind": "record",
               "lua": "ToolCall",
               "name": "tool-call"
+            },
+            {
+              "docs": "One PCM16LE mono utterance or window for transcription. The host owns the\nSTT route and model; the guest only names the audio and optional language.",
+              "fields": [
+                {
+                  "name": "model",
+                  "type": "string"
+                },
+                {
+                  "name": "sample-rate",
+                  "type": "u32"
+                },
+                {
+                  "name": "pcm16",
+                  "type": "list<u8>"
+                },
+                {
+                  "name": "language",
+                  "type": "option<string>"
+                },
+                {
+                  "name": "prompt",
+                  "type": "option<string>"
+                },
+                {
+                  "name": "timestamps",
+                  "type": "bool"
+                },
+                {
+                  "name": "diarize",
+                  "type": "bool"
+                }
+              ],
+              "kind": "record",
+              "lua": "TranscribeRequest",
+              "name": "transcribe-request"
+            },
+            {
+              "docs": null,
+              "fields": [
+                {
+                  "name": "model",
+                  "type": "string"
+                },
+                {
+                  "name": "text",
+                  "type": "string"
+                },
+                {
+                  "name": "language",
+                  "type": "option<string>"
+                },
+                {
+                  "name": "duration-ms",
+                  "type": "option<u32>"
+                },
+                {
+                  "name": "segments",
+                  "type": "list<segment>"
+                }
+              ],
+              "kind": "record",
+              "lua": "TranscribeResponse",
+              "name": "transcribe-response"
             },
             {
               "docs": null,
@@ -4078,6 +4291,34 @@
               "kind": "record",
               "lua": "VoiceEmbeddingResponse",
               "name": "voice-embedding-response"
+            },
+            {
+              "docs": null,
+              "fields": [
+                {
+                  "name": "text",
+                  "type": "string"
+                },
+                {
+                  "name": "start-ms",
+                  "type": "u32"
+                },
+                {
+                  "name": "end-ms",
+                  "type": "u32"
+                },
+                {
+                  "name": "speaker",
+                  "type": "option<string>"
+                },
+                {
+                  "name": "confidence",
+                  "type": "option<f32>"
+                }
+              ],
+              "kind": "record",
+              "lua": "Word",
+              "name": "word"
             }
           ]
         }
