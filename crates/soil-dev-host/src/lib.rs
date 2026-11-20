@@ -98,6 +98,15 @@ impl records::Host for DevHost {
         records::Host::scan(&mut self.records, collection, cursor, limit)
     }
 
+    fn scan_packed(
+        &mut self,
+        collection: String,
+        cursor: Option<String>,
+        limit: u32,
+    ) -> std::result::Result<records::PackedPage, records::Error> {
+        records::Host::scan_packed(&mut self.records, collection, cursor, limit)
+    }
+
     fn upsert(
         &mut self,
         entry: records::Entry,
