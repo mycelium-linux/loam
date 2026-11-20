@@ -22,6 +22,12 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
 
+      # soil-codec links libopus. apt's package lets audiopus-sys use
+      # pkg-config instead of building its bundled copy with an old CMake
+      # policy that current CMake rejects.
+      - name: Opus development library
+        run: sudo apt-get update && sudo apt-get install -y libopus-dev
+
       # A path dependency that escapes this checkout is a sibling worktree that
       # happened to exist on the machine the branch was written on: the tree
       # compiles there and nowhere else. Cheap and offline, so it runs before
