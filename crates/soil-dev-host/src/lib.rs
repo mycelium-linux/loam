@@ -561,6 +561,12 @@ pub fn run(args: Vec<String>) -> Result<()> {
         // even if a Spore asks for the wrong namespace: the grant simply does
         // not exist and the write is denied.
         let book = format!("personal/{wearer}/telemetry");
+        // The Omi Spore keys its device record by pendant id and uses the
+        // unnamespaced collection; expose that on the owner book only.
+        if wearer == &wearers[0] {
+            namespaces.push(Namespace::write("device.state", &book, "device.state"));
+            namespaces.push(Namespace::write("capture", &book, "capture"));
+        }
         for collection in [
             "signal",
             "device.state",
