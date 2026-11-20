@@ -111,7 +111,8 @@ pub fn wav_mono(pcm: &[u8], sample_rate: u32) -> Result<Vec<u8>, CodecError> {
     let mut cursor = std::io::Cursor::new(Vec::new());
     let mut writer = hound::WavWriter::new(&mut cursor, spec)
         .map_err(|error| CodecError::Opus(error.to_string()))?;
-    for sample in pcm.chunks_exact(2) {
+    let (samples, _) = pcm.as_chunks::<2>();
+    for sample in samples {
         writer
             .write_sample(i16::from_le_bytes([sample[0], sample[1]]))
             .map_err(|error| CodecError::Opus(error.to_string()))?;

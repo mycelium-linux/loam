@@ -369,7 +369,7 @@ impl InferenceHost {
     ) -> Result<api::TranscribeResponse, api::Error> {
         if request.pcm16.is_empty()
             || request.pcm16.len() > 64 * 1024 * 1024
-            || request.pcm16.len() % 2 != 0
+            || !request.pcm16.len().is_multiple_of(2)
             || !(8_000..=192_000).contains(&request.sample_rate)
         {
             return Err(api::Error::Invalid);

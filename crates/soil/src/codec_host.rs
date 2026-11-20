@@ -64,7 +64,7 @@ impl api::Host for CodecHost {
         sample_rate: u32,
         channels: u16,
     ) -> Result<Vec<u8>, api::Error> {
-        if pcm.is_empty() || pcm.len() > MAX_PCM || pcm.len() % 2 != 0 {
+        if pcm.is_empty() || pcm.len() > MAX_PCM || !pcm.len().is_multiple_of(2) {
             return Err(api::Error::OverBudget);
         }
         let encoder = if let Some(encoder) = self.encoders.get_mut(&session) {
@@ -74,8 +74,9 @@ impl api::Host for CodecHost {
                 .map_err(error)?;
             self.encoders.entry(session).or_insert(encoder)
         };
-        let samples: Vec<i16> = pcm
-            .chunks_exact(2)
+        let (pairs, _) = pcm.as_chunks::<2>();
+        let samples: Vec<i16> = pairs
+            .iter()
             .map(|pair| i16::from_le_bytes([pair[0], pair[1]]))
             .collect();
         encoder.encode(&samples).map_err(error)
