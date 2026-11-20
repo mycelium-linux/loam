@@ -57,3 +57,7 @@ interface bus {
 world unibus-host {
   import bus;
 }
+
+world guest {
+  import bus;
+}

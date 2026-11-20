@@ -7472,6 +7472,7 @@ dependencies = [
  "base64 0.22.1",
  "serde",
  "serde_json",
+ "soil-codec",
  "soil-inference",
  "soil-scrub",
  "tempfile",

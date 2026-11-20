@@ -497,6 +497,9 @@ pub fn exec(args: &[String]) -> Result<()> {
 
     let mut builder = WasiHostBuilder::new(WasiHostPolicy::default())
         .vfs(VfsHost::open(&vfs_root).context("open soil:vfs")?);
+    if spore.manifest.grants.contains_key("soil:codec") {
+        builder = builder.codec(::soil::codec_host::CodecHost::default());
+    }
     if let Some(listen) = wss_listen {
         let hub = StreamHub::new();
         let token = wss_token
@@ -743,6 +746,9 @@ async fn serve(spore: Spore, run: Run) -> Result<()> {
     std::fs::create_dir_all(&vfs_root).with_context(|| format!("create {}", vfs_root.display()))?;
     let mut builder = WasiHostBuilder::new(WasiHostPolicy::default())
         .vfs(VfsHost::open(&vfs_root).context("open soil:vfs")?);
+    if spore.manifest.grants.contains_key("soil:codec") {
+        builder = builder.codec(::soil::codec_host::CodecHost::default());
+    }
     if let Some(inference) = inference_host() {
         builder = builder.inference(inference);
     }
@@ -1047,6 +1053,14 @@ fn inference_host() -> Option<::soil::InferenceHost> {
     let host = ::soil::InferenceHost::new(url, api_key, "soil", model).with_session(session);
     let host = match std::env::var("SOIL_VOICEPRINT_URL") {
         Ok(url) if !url.trim().is_empty() => host.with_voice_url(url),
+        _ => host,
+    };
+    let host = match std::env::var("SOIL_STT_URL") {
+        Ok(url) if !url.trim().is_empty() => host.with_stt_url(url),
+        _ => host,
+    };
+    let host = match std::env::var("SOIL_STT_MODEL") {
+        Ok(model) if !model.trim().is_empty() => host.with_stt_model(model),
         _ => host,
     };
     Some(host)

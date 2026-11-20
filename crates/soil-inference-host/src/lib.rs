@@ -34,6 +34,8 @@ pub struct InferenceHost {
     agent: ureq::Agent,
     base_url: String,
     voice_url: Option<String>,
+    stt_url: Option<String>,
+    stt_model: Option<String>,
     api_key: Option<String>,
     provider: String,
     model: String,
@@ -89,6 +91,8 @@ impl InferenceHost {
             agent: ureq::AgentBuilder::new().build(),
             base_url: base_url.into(),
             voice_url: None,
+            stt_url: None,
+            stt_model: None,
             api_key,
             provider: provider.into(),
             model: model.into(),
@@ -118,6 +122,18 @@ impl InferenceHost {
     /// inference can have different hosts and model runtimes.
     pub fn with_voice_url(mut self, url: impl Into<String>) -> Self {
         self.voice_url = Some(url.into());
+        self
+    }
+
+    /// Use a dedicated speech-to-text service. The chat route is never used
+    /// for audio, even when both live behind the same gateway.
+    pub fn with_stt_url(mut self, url: impl Into<String>) -> Self {
+        self.stt_url = Some(url.into());
+        self
+    }
+
+    pub fn with_stt_model(mut self, model: impl Into<String>) -> Self {
+        self.stt_model = Some(model.into());
         self
     }
 
@@ -345,6 +361,197 @@ impl InferenceHost {
     }
 }
 
+
+impl InferenceHost {
+    fn transcribe(
+        &mut self,
+        request: api::TranscribeRequest,
+    ) -> Result<api::TranscribeResponse, api::Error> {
+        if request.pcm16.is_empty()
+            || request.pcm16.len() > 64 * 1024 * 1024
+            || request.pcm16.len() % 2 != 0
+            || !(8_000..=192_000).contains(&request.sample_rate)
+        {
+            return Err(api::Error::Invalid);
+        }
+        let model = if request.model.trim().is_empty() {
+            self.stt_model
+                .clone()
+                .unwrap_or_else(|| self.model.clone())
+        } else {
+            request.model.clone()
+        };
+        let wav = soil_codec::wav_mono(&request.pcm16, request.sample_rate)
+            .map_err(|_| api::Error::Invalid)?;
+        let boundary = format!(
+            "soil-stt-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+        let mut body = Vec::with_capacity(wav.len() + 1024);
+        let mut field = |name: &str, value: &str| {
+            body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+            body.extend_from_slice(
+                format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+            );
+            body.extend_from_slice(value.as_bytes());
+            body.extend_from_slice(b"\r\n");
+        };
+        field("model", &model);
+        field("response_format", "verbose_json");
+        if request.timestamps {
+            field("timestamp_granularities[]", "word");
+            field("timestamp_granularities[]", "segment");
+        }
+        if request.diarize {
+            field("diarize", "true");
+        }
+        if let Some(language) = &request.language {
+            field("language", language);
+        }
+        if let Some(prompt) = &request.prompt {
+            field("prompt", prompt);
+        }
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        body.extend_from_slice(
+            b"Content-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n",
+        );
+        body.extend_from_slice(b"Content-Type: audio/wav\r\n\r\n");
+        body.extend_from_slice(&wav);
+        body.extend_from_slice(b"\r\n");
+        body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+
+        let stt_base = self.stt_url.as_deref().unwrap_or(&self.base_url);
+        let response = self
+            .request("POST", &Self::url_at(stt_base, "/v1/audio/transcriptions"))
+            .set(
+                "content-type",
+                &format!("multipart/form-data; boundary={boundary}"),
+            )
+            .send_bytes(&body)
+            .map_err(Self::error)?;
+        let value: Value = response.into_json().map_err(|_| api::Error::Io)?;
+        let text = value
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let duration_ms = value
+            .get("duration")
+            .and_then(Value::as_f64)
+            .map(|seconds| (seconds * 1000.0).max(0.0) as u32);
+        let segments: Vec<api::Segment> = value
+            .get("segments")
+            .and_then(Value::as_array)
+            .map(|segments| {
+                segments
+                    .iter()
+                    .filter_map(|segment| {
+                        let text = segment.get("text")?.as_str()?.trim().to_string();
+                        if text.is_empty() {
+                            return None;
+                        }
+                        let start_ms = segment
+                            .get("start")
+                            .and_then(Value::as_f64)
+                            .map(|value| (value * 1000.0).max(0.0) as u32)
+                            .unwrap_or(0);
+                        let end_ms = segment
+                            .get("end")
+                            .and_then(Value::as_f64)
+                            .map(|value| (value * 1000.0).max(0.0) as u32)
+                            .unwrap_or(start_ms);
+                        let speaker = segment.get("speaker").and_then(|speaker| {
+                            speaker
+                                .as_str()
+                                .map(str::to_string)
+                                .or_else(|| speaker.as_u64().map(|id| format!("SPEAKER_{id:02}")))
+                        });
+                        let words = segment
+                            .get("words")
+                            .and_then(Value::as_array)
+                            .map(|words| {
+                                words
+                                    .iter()
+                                    .filter_map(|word| {
+                                        let text = word.get("word")?.as_str()?.to_string();
+                                        if text.is_empty() {
+                                            return None;
+                                        }
+                                        let start = word
+                                            .get("start")
+                                            .and_then(Value::as_f64)
+                                            .map(|value| (value * 1000.0).max(0.0) as u32)
+                                            .unwrap_or(start_ms);
+                                        let end = word
+                                            .get("end")
+                                            .and_then(Value::as_f64)
+                                            .map(|value| (value * 1000.0).max(0.0) as u32)
+                                            .unwrap_or(end_ms);
+                                        Some(api::Word {
+                                            text,
+                                            start_ms: start,
+                                            end_ms: end,
+                                            speaker: word
+                                                .get("speaker")
+                                                .and_then(Value::as_str)
+                                                .map(str::to_string),
+                                            confidence: word
+                                                .get("probability")
+                                                .and_then(Value::as_f64)
+                                                .map(|value| value as f32),
+                                        })
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        Some(api::Segment {
+                            text,
+                            start_ms,
+                            end_ms,
+                            speaker,
+                            words,
+                            confidence: segment
+                                .get("avg_logprob")
+                                .and_then(Value::as_f64)
+                                .map(|value| value as f32),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let segments = if segments.is_empty() && !text.is_empty() {
+            vec![api::Segment {
+                text: text.clone(),
+                start_ms: 0,
+                end_ms: duration_ms.unwrap_or(0),
+                speaker: None,
+                words: Vec::new(),
+                confidence: None,
+            }]
+        } else {
+            segments
+        };
+        Ok(api::TranscribeResponse {
+            model: value
+                .get("model")
+                .and_then(Value::as_str)
+                .unwrap_or(&model)
+                .to_string(),
+            text,
+            language: value
+                .get("language")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            duration_ms,
+            segments,
+        })
+    }
+}
+
 impl api::Host for InferenceHost {
     fn models(&mut self) -> Result<Vec<api::Model>, api::Error> {
         let response = self
@@ -544,6 +751,13 @@ impl api::Host for InferenceHost {
         InferenceHost::voice_embed(self, request)
     }
 
+    fn transcribe(
+        &mut self,
+        request: api::TranscribeRequest,
+    ) -> Result<api::TranscribeResponse, api::Error> {
+        InferenceHost::transcribe(self, request)
+    }
+
     fn open_stream(
         &mut self,
         request: api::Request,
@@ -649,6 +863,10 @@ fn capabilities(model: &Value, id: &str, tier: Option<&str>) -> Vec<api::Capabil
                     "vision" => Some(api::Capability::Vision),
                     "embeddings" => Some(api::Capability::Embeddings),
                     "rerank" => Some(api::Capability::Rerank),
+                    "transcription" | "stt" | "audio-transcription" => {
+                        Some(api::Capability::Transcription)
+                    }
+                    "speech" | "tts" | "audio-speech" => Some(api::Capability::Speech),
                     _ => None,
                 })
                 .collect()
@@ -716,6 +934,54 @@ mod tests {
         .unwrap();
         assert_eq!(response.embedding, vec![0.1, 0.2]);
         assert_eq!(response.usage.unwrap().total_tokens, 4);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn transcribe_sends_wav_to_the_stt_route() {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let address = server.server_addr().to_ip().unwrap();
+        let worker = thread::spawn(move || {
+            let mut request = server.recv().unwrap();
+            assert!(request.url().ends_with("/audio/transcriptions"));
+            let mut body = Vec::new();
+            request.as_reader().read_to_end(&mut body).unwrap();
+            let body = String::from_utf8_lossy(&body);
+            assert!(body.contains("name=\"model\""));
+            assert!(body.contains("scribe/stt"));
+            assert!(body.contains("name=\"file\"; filename=\"audio.wav\""));
+            assert!(body.contains("RIFF"));
+            request
+                .respond(
+                    tiny_http::Response::from_string(
+                        r#"{"model":"scribe/stt","text":"hello world","language":"en","duration":1.5,"segments":[{"text":"hello world","start":0.0,"end":1.5,"speaker":0,"words":[{"word":"hello","start":0.0,"end":0.6,"probability":0.9}]}]}"#,
+                    )
+                    .with_header(
+                        tiny_http::Header::from_bytes("content-type", "application/json").unwrap(),
+                    ),
+                )
+                .unwrap();
+        });
+        let mut host = InferenceHost::new(format!("http://{address}"), None, "soil", "default")
+            .with_stt_url(format!("http://{address}"))
+            .with_stt_model("scribe/stt");
+        let response = api::Host::transcribe(
+            &mut host,
+            api::TranscribeRequest {
+                model: "scribe/stt".into(),
+                sample_rate: 16_000,
+                pcm16: vec![0, 0, 1, 0],
+                language: Some("en".into()),
+                prompt: None,
+                timestamps: true,
+                diarize: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(response.text, "hello world");
+        assert_eq!(response.segments[0].speaker.as_deref(), Some("SPEAKER_00"));
+        assert_eq!(response.segments[0].words[0].text, "hello");
+        assert_eq!(response.duration_ms, Some(1500));
         worker.join().unwrap();
     }
 

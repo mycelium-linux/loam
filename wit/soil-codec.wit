@@ -37,3 +37,7 @@ interface codec {
 world host {
   import codec;
 }
+
+world guest {
+  import codec;
+}

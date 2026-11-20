@@ -790,6 +790,17 @@ impl inference_api::Host for WasiHost {
         inference_api::Host::voice_embed(&mut *host, request)
     }
 
+    fn transcribe(
+        &mut self,
+        request: inference_api::TranscribeRequest,
+    ) -> std::result::Result<inference_api::TranscribeResponse, inference_api::Error> {
+        let Some(host) = &self.inference else {
+            return Err(inference_api::Error::Unsupported);
+        };
+        let mut host = host.lock().map_err(|_| inference_api::Error::Io)?;
+        inference_api::Host::transcribe(&mut *host, request)
+    }
+
     fn open_stream(
         &mut self,
         _request: inference_api::Request,

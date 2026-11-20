@@ -21,6 +21,8 @@ interface inference {
     vision,
     embeddings,
     rerank,
+    transcription,
+    speech,
   }
 
   record tool-call {
@@ -132,6 +134,50 @@ interface inference {
     usage: option<embed-usage>,
   }
 
+  /// One PCM16LE mono utterance or window for transcription. The host owns the
+  /// STT route and model; the guest only names the audio and optional language.
+  record transcribe-request {
+    model: string,
+    sample-rate: u32,
+    /// Raw PCM16 little-endian mono samples, not a container format.
+    pcm16: list<u8>,
+    language: option<string>,
+    /// Optional vocabulary hint, passed to the provider as a prompt.
+    prompt: option<string>,
+    /// Ask for word timings when the provider supports them.
+    timestamps: bool,
+    /// Ask the provider to label speakers when it supports diarization.
+    diarize: bool,
+  }
+
+  record word {
+    text: string,
+    start-ms: u32,
+    end-ms: u32,
+    /// Provider speaker label, when diarization was requested.
+    speaker: option<string>,
+    confidence: option<f32>,
+  }
+
+  record segment {
+    text: string,
+    start-ms: u32,
+    end-ms: u32,
+    speaker: option<string>,
+    /// Word timings. Empty when the provider returned segment timings only.
+    words: list<word>,
+    confidence: option<f32>,
+  }
+
+  record transcribe-response {
+    model: string,
+    text: string,
+    language: option<string>,
+    duration-ms: option<u32>,
+    /// Ordered segments. The host never reorders them.
+    segments: list<segment>,
+  }
+
   record chunk {
     /// Raw provider chunk. For OpenAI-compatible SSE this is the event payload.
     data: list<u8>,
@@ -176,6 +222,10 @@ interface inference {
   /// Non-streaming speaker embedding. This is an audio path, deliberately
   /// separate from text `embed`: it sends PCM16, not scrubbed text.
   voice-embed: func(request: voice-embedding-request) -> result<voice-embedding-response, error>;
+
+  /// Non-streaming speech-to-text. PCM16 goes to the host's STT route, never to
+  /// the chat route. Segments and words stay in provider order.
+  transcribe: func(request: transcribe-request) -> result<transcribe-response, error>;
 
   /// Open a streaming completion. The returned resource is bounded by the host
   /// session and must be cancelled or dropped when the guest is done.
