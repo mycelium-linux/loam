@@ -5,6 +5,7 @@ package soil:ble-host@0.1.0;
 
 world host {
   import soil:ble/ble@1.2.0;
+  import soil:time/time@1.1.0;
 
   export run: func(args: list<string>) -> result<_, string>;
 }

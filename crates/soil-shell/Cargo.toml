@@ -11,6 +11,7 @@ name = "soil"
 path = "src/main.rs"
 
 [dependencies]
+soil-dev-host = { path = "../soil-dev-host" }
 anyhow = "1"
 # The announcer is a child process; `PR_SET_PDEATHSIG` is what stops it
 # outliving the node it advertises.

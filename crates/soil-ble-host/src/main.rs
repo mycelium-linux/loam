@@ -207,6 +207,47 @@ impl soil::ble::ble::Host for State {
     }
 }
 
+fn wall_clock() -> std::result::Result<soil::time::time::DateTime, soil::time::time::Error> {
+    #[cfg(unix)]
+    {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).map_err(|_| soil::time::time::Error::NotReady)?;
+        let seconds = libc::time_t::try_from(now.as_secs()).map_err(|_| soil::time::time::Error::NotReady)?;
+        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+        let resolved = unsafe { libc::localtime_r(&seconds, &mut tm) };
+        if resolved.is_null() { return Err(soil::time::time::Error::NotReady); }
+        let zone = if tm.tm_zone.is_null() { None } else {
+            Some(unsafe { std::ffi::CStr::from_ptr(tm.tm_zone) }.to_string_lossy().into_owned())
+        };
+        Ok(soil::time::time::DateTime {
+            unix_ms: u64::try_from(now.as_millis()).unwrap_or(u64::MAX),
+            offset_minutes: (tm.tm_gmtoff / 60) as i32,
+            year: (tm.tm_year + 1900) as u32, month: (tm.tm_mon + 1) as u8,
+            day: tm.tm_mday as u8, hour: tm.tm_hour as u8, minute: tm.tm_min as u8,
+            second: tm.tm_sec as u8, weekday: ((tm.tm_wday + 6) % 7 + 1) as u8, zone,
+        })
+    }
+    #[cfg(not(unix))]
+    { Err(soil::time::time::Error::NotReady) }
+}
+
+impl soil::time::time::Host for State {
+    fn monotonic_ms(&mut self) -> std::result::Result<u64, soil::time::time::Error> {
+        Ok(soil_ble_host::monotonic_ms())
+    }
+
+    fn wall_clock(&mut self) -> std::result::Result<soil::time::time::DateTime, soil::time::time::Error> {
+        wall_clock()
+    }
+
+    fn tick(&mut self, timeout_ms: u32) -> std::result::Result<Option<u64>, soil::time::time::Error> {
+        if timeout_ms > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(u64::from(timeout_ms.min(50))));
+        }
+        Ok(Some(soil_ble_host::monotonic_ms()))
+    }
+}
+
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     let guest_path = args
@@ -266,6 +307,7 @@ fn main() -> Result<()> {
         .map_err(anyhow::Error::from)
         .context("link wasi:cli")?;
 
+    soil::time::time::add_to_linker::<State, wasmtime::component::HasSelf<State>>(&mut linker, |state| state)?;
     soil::ble::ble::add_to_linker::<State, wasmtime::component::HasSelf<State>>(
         &mut linker,
         |state| state,
