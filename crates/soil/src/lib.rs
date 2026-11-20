@@ -54,6 +54,8 @@ pub mod creds;
 #[cfg(feature = "wasi")]
 mod gateway;
 #[cfg(feature = "wasi")]
+pub mod codec_host;
+#[cfg(feature = "wasi")]
 mod host;
 #[cfg(any(feature = "http", feature = "wasi"))]
 pub mod http_host;

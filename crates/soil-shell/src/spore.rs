@@ -516,6 +516,9 @@ pub fn exec(args: &[String]) -> Result<()> {
             RecordsBookHost::open(&records_root, book, "capture").context("open soil:records")?,
         );
     }
+    if spore.manifest.grants.contains_key("soil:codec") {
+        builder = builder.codec(::soil::codec_host::CodecHost::default());
+    }
     if let Some(inference) = inference_host() {
         builder = builder.inference(inference);
     }

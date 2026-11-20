@@ -78,6 +78,8 @@ pub struct WasiHostBuilder {
     metrics_granted: bool,
     /// Optional `soil:inference` provider. Absent answers `unsupported`.
     inference: Option<Arc<Mutex<soil_inference_host::InferenceHost>>>,
+    /// Optional native codec sessions.
+    pub(crate) codec: Option<Arc<Mutex<crate::codec_host::CodecHost>>>,
     /// Optional VFS. The same host serves `soil:vfs`, `soil:vfs-mut`,
     /// `soil:vfs-cid` and `soil:index`.
     vfs: Option<VfsHost>,
@@ -279,6 +281,7 @@ impl WasiHostBuilder {
             soil_http: self.http.clone(),
             metrics: self.metrics_granted.then(|| Arc::clone(&self.metrics)),
             inference: self.inference.clone(),
+            codec: self.codec.clone(),
             vfs: self.vfs.clone(),
             streams: self.streams.clone(),
         })
@@ -310,6 +313,15 @@ impl WasiHostBuilder {
         self
     }
 
+    pub fn codec(mut self, host: crate::codec_host::CodecHost) -> Self {
+        self.codec = Some(Arc::new(Mutex::new(host)));
+        self
+    }
+
+    pub fn has_codec(&self) -> bool {
+        self.codec.is_some()
+    }
+
     /// Convenience for hosts that only need a single preopen.
     pub fn preopen_read_only(self, host: impl AsRef<Path>, guest: impl Into<String>) -> Self {
         self.preopen_dir(host.as_ref(), guest, FsPerms::ReadOnly)
@@ -330,7 +342,7 @@ pub struct WasiHost {
     /// `Some` only when the manifest granted `soil:metrics`.
     metrics: Option<Arc<Metrics>>,
     inference: Option<Arc<Mutex<soil_inference_host::InferenceHost>>>,
-    vfs: Option<VfsHost>,
+    pub(crate) codec: Option<Arc<Mutex<crate::codec_host::CodecHost>>>,     vfs: Option<VfsHost>,
     streams: Option<Arc<StreamHub>>,
 }
 
