@@ -6,9 +6,9 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
-[[bin]]
-name = "soil-dev-host"
-path = "src/main.rs"
+[lib]
+name = "soil_dev_host"
+path = "src/lib.rs"
 
 [dependencies]
 anyhow = "1"

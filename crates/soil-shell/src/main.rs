@@ -84,6 +84,7 @@ fn run() -> Result<()> {
         // Any `.spore` on the names it claims: the same launcher for every
         // Spore, so a product never ships its own host again.
         "spore" => spore::run(&args),
+        "host" => soil_dev_host::run(args),
         // The command registry and runner, in this binary: a Spore installs a
         // command and `soil command run <name>` runs it, with no second tool to
         // find and no separate policy to drift.
