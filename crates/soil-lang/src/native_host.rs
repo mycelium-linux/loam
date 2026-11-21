@@ -5,6 +5,12 @@
 //! `soil:vfs`; it calls Soil's existing `VfsHost`, and delegates records and
 //! time to the same native hosts the Wasm host uses.
 
+use std::{sync::Arc, time::Duration};
+
+use soil::http_host::{
+    CredentialProvider, Error as HttpError, HttpHost, HttpPolicy, Method as HttpMethod,
+    Request as HttpRequest,
+};
 use soil::vfs_host::vfs::Host as VfsHostTrait;
 use soil::vfs_host::{VfsHost, vfs};
 
@@ -15,6 +21,7 @@ pub struct NativeHost {
     vfs: VfsHost,
     records: SoilRecordsHost,
     time: SystemTimeHost,
+    http: Option<HttpHost>,
 }
 
 impl NativeHost {
@@ -27,6 +34,43 @@ impl NativeHost {
             vfs: VfsHost::open(workspace_root)?,
             records: SoilRecordsHost::open(records_root, book)?,
             time: SystemTimeHost,
+            http: None,
+        })
+    }
+
+    /// Grant `soil:http` for the named origins.
+    ///
+    /// When `path_credential` is set, a request may put `__CREDENTIAL__` in one
+    /// URL path segment and supply the guest handle `default`; the host
+    /// substitutes the secret before the request leaves the process.
+    pub fn with_http(
+        mut self,
+        origins: impl IntoIterator<Item = String>,
+        path_credential: Option<String>,
+    ) -> anyhow::Result<Self> {
+        let policy = HttpPolicy::new(origins, 16 * 1024 * 1024, Duration::from_secs(30))?;
+        let mut http = HttpHost::new(policy);
+        if let Some(secret) = path_credential {
+            http = http.with_credentials(Arc::new(PathCredential { secret }));
+        }
+        self.http = Some(http);
+        Ok(self)
+    }
+
+    fn call_http(&mut self, function: &str, args: &[Value]) -> std::result::Result<Value, String> {
+        if function != "fetch" {
+            return Err(format!("unknown soil:http function `{function}`"));
+        }
+        let Some(http) = self.http.as_mut() else {
+            return Err("soil:http is not granted to this host".into());
+        };
+        let request = args
+            .first()
+            .ok_or_else(|| "soil:http/fetch needs a request".to_string())?;
+        let request = http_request(request)?;
+        Ok(match http.perform(request) {
+            Ok(response) => ok(http_response(response)),
+            Err(error) => err(http_error(error)),
         })
     }
 
@@ -68,6 +112,7 @@ impl Host for NativeHost {
             "soil:time" => self.time.granted(interface, function),
             "soil:records" => self.records.granted(interface, function),
             "soil:vfs" => matches!(function, "ls" | "stat" | "read"),
+            "soil:http" => self.http.is_some() && function == "fetch",
             _ => false,
         }
     }
@@ -82,6 +127,7 @@ impl Host for NativeHost {
             "soil:time" => self.time.call(interface, function, args),
             "soil:records" => self.records.call(interface, function, args),
             "soil:vfs" => self.call_vfs(function, args),
+            "soil:http" => self.call_http(function, args),
             other => Err(format!("unknown interface `{other}`")),
         }
     }
@@ -168,6 +214,153 @@ fn vfs_error(error: vfs::Error) -> Value {
         vfs::Error::Stale => "stale",
     };
     err(code)
+}
+
+/// One path credential, exposed under the guest handle `default`.
+///
+/// The secret stays in the host process: the guest supplies a handle and a URL
+/// containing `__CREDENTIAL__`, and `soil:http` substitutes the value.
+struct PathCredential {
+    secret: String,
+}
+
+impl CredentialProvider for PathCredential {
+    fn resolve(&self, _handle: &str) -> anyhow::Result<Option<(String, String)>> {
+        Ok(None)
+    }
+
+    fn resolve_path(&self, handle: &str) -> anyhow::Result<Option<String>> {
+        Ok((handle == "default").then(|| self.secret.clone()))
+    }
+}
+
+fn http_request(value: &Value) -> std::result::Result<HttpRequest, String> {
+    let method = match record_text(value, "method").as_deref() {
+        Some("get") => HttpMethod::Get,
+        Some("head") => HttpMethod::Head,
+        Some("post") => HttpMethod::Post,
+        Some("put") => HttpMethod::Put,
+        Some("patch") => HttpMethod::Patch,
+        Some("delete") => HttpMethod::Delete,
+        Some(other) => return Err(format!("soil:http: unknown method `{other}`")),
+        None => return Err("soil:http: request has no method".into()),
+    };
+    let url = record_text(value, "url").ok_or("soil:http: request has no url")?;
+    let headers = record_field(value, "headers")
+        .as_list()
+        .unwrap_or_default()
+        .iter()
+        .map(|header| (record_text(header, "name"), record_text(header, "value")))
+        .map(|(name, value)| match (name, value) {
+            (Some(name), Some(value)) => Ok((name, value)),
+            _ => Err("soil:http: header needs a name and value".to_string()),
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let body = match record_field(value, "body") {
+        Value::Nil => None,
+        bytes => Some(value_bytes(&bytes)?),
+    };
+    let credential = record_text(value, "credential");
+    let max_bytes = record_u32(value, "max-bytes").unwrap_or(1024 * 1024);
+    let timeout_ms = record_u32(value, "timeout-ms").unwrap_or(10_000);
+    Ok(HttpRequest {
+        url,
+        method,
+        headers,
+        body,
+        credential,
+        max_bytes,
+        timeout_ms,
+    })
+}
+
+fn http_response(response: soil::http_host::Response) -> Value {
+    Value::List(vec![
+        pair("status", Value::Int(i64::from(response.status))),
+        pair("final-url", Value::String(response.final_url)),
+        pair(
+            "headers",
+            Value::List(
+                response
+                    .headers
+                    .into_iter()
+                    .map(|(name, value)| {
+                        Value::List(vec![
+                            pair("name", Value::String(name)),
+                            pair("value", Value::String(value)),
+                        ])
+                    })
+                    .collect(),
+            ),
+        ),
+        pair(
+            "body",
+            Value::List(
+                response
+                    .body
+                    .into_iter()
+                    .map(|byte| Value::Int(i64::from(byte)))
+                    .collect(),
+            ),
+        ),
+    ])
+}
+
+fn http_error(error: HttpError) -> &'static str {
+    match error {
+        HttpError::Denied => "denied",
+        HttpError::Invalid => "invalid",
+        HttpError::OverBudget => "over-budget",
+        HttpError::Timeout => "timeout",
+        HttpError::Unavailable => "unavailable",
+        HttpError::Tls => "tls",
+        HttpError::Http => "http",
+        HttpError::Io => "io",
+        HttpError::Unsupported => "unsupported",
+    }
+}
+
+fn record_field<'a>(record: &'a Value, name: &str) -> &'a Value {
+    let Some(items) = record.as_list() else {
+        return &Value::Nil;
+    };
+    for item in items {
+        let Some(pair) = item.as_list() else { continue };
+        let Some(field) = pair
+            .first()
+            .and_then(Value::as_keyword)
+            .or_else(|| pair.first().and_then(Value::as_symbol))
+        else {
+            continue;
+        };
+        if field == name {
+            return pair.get(1).unwrap_or(&Value::Nil);
+        }
+    }
+    &Value::Nil
+}
+
+fn record_text(record: &Value, name: &str) -> Option<String> {
+    text(Some(record_field(record, name)))
+}
+
+fn record_u32(record: &Value, name: &str) -> Option<u32> {
+    let value = record_field(record, name).as_f64()?;
+    (value >= 0.0 && value <= f64::from(u32::MAX)).then_some(value as u32)
+}
+
+fn value_bytes(value: &Value) -> std::result::Result<Vec<u8>, String> {
+    match value {
+        Value::List(items) => items
+            .iter()
+            .map(|item| match item {
+                Value::Int(byte) if (0..=255).contains(byte) => Ok(*byte as u8),
+                _ => Err("soil:http: body must be a list of bytes".to_string()),
+            })
+            .collect(),
+        Value::String(text) => Ok(text.as_bytes().to_vec()),
+        _ => Err("soil:http: body must be a list of bytes or a string".into()),
+    }
 }
 
 fn text(value: Option<&Value>) -> Option<String> {

@@ -11,7 +11,7 @@ description = "Soil's Lisp: reader, evaluator, typed core, and Wasm backends"
 anyhow = "1"
 fungos-records = { workspace = true }
 serde_json = "1"
-soil = { path = "../soil", default-features = false, features = ["vfs", "records"] }
+soil = { path = "../soil", default-features = false, features = ["vfs", "records", "http"] }
 wasm-encoder = "0.263.0"
 wit-parser = "0.263.0"
 

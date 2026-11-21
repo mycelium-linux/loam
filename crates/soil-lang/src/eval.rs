@@ -433,6 +433,24 @@ impl Runtime {
                         ))
                     }
                     "+" | "-" | "*" | "/" => self.eval_arithmetic(head, &items[1..], env),
+                    "pow" => {
+                        let base = self.eval(require(items, 1, "pow")?, env)?;
+                        let exponent = self.eval(require(items, 2, "pow")?, env)?;
+                        let base = base
+                            .as_f64()
+                            .ok_or_else(|| anyhow!("pow expects numbers"))?;
+                        let exponent = exponent
+                            .as_f64()
+                            .ok_or_else(|| anyhow!("pow expects numbers"))?;
+                        Ok(Value::Float(base.powf(exponent)))
+                    }
+                    "round" => {
+                        let value = self.eval(require(items, 1, "round")?, env)?;
+                        let value = value
+                            .as_f64()
+                            .ok_or_else(|| anyhow!("round expects a number"))?;
+                        Ok(Value::Float(value.round()))
+                    }
                     "=" | ">" | "<" | ">=" | "<=" => self.eval_comparison(head, &items[1..], env),
                     name if self.functions.contains_key(name) => {
                         let function = self.functions.get(name).cloned().unwrap();

@@ -1,0 +1,43 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+; Generated from wit/soil-http.wit. Regenerate with:
+;   cargo run -p soil-lang --bin soil-witgen -- wit/soil-http.wit \
+;     --out crates/soil-lang/bindings/soil-http.soil
+
+(define-package "soil:http@0.1.0" :base "soil:http" :version "0.1.0")
+
+(define-enum soil:http/method get head post put patch delete)
+
+(define-record soil:http/header
+  (name string)
+  (value string)
+)
+
+(define-record soil:http/request
+  (url string)
+  (method soil:http/method)
+  (headers (list soil:http/header))
+  (body (option (list u8)))
+  (credential (option string))
+  (max-bytes u32)
+  (timeout-ms u32)
+)
+
+(define-record soil:http/response
+  (status u16)
+  (final-url string)
+  (headers (list soil:http/header))
+  (body (list u8))
+)
+
+(define-enum soil:http/error denied invalid over-budget timeout unavailable tls http io unsupported)
+
+(define-capability soil:http/fetch
+  :interface "soil:http"
+  :function "fetch"
+  :grant "soil:http"
+  :version "0.1.0"
+  :params ((request soil:http/request))
+  :result (result soil:http/response soil:http/error))
+
+(defun soil:http/fetch (request)
+  (host-call "soil:http" "fetch" (list request)))

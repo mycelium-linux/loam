@@ -14,6 +14,8 @@ fn main() -> Result<()> {
     let mut workspace_root: Option<PathBuf> = None;
     let mut book = "soil".to_string();
     let mut repl = false;
+    let mut http_origins: Vec<String> = Vec::new();
+    let mut http_credential: Option<String> = None;
     let mut program_args: Vec<String> = Vec::new();
     let mut args = std::env::args().skip(1);
 
@@ -50,6 +52,26 @@ fn main() -> Result<()> {
                     .ok_or_else(|| anyhow::anyhow!("--book needs a name"))?;
             }
             "--repl" => repl = true,
+            "--allow" => {
+                http_origins.push(
+                    args.next()
+                        .ok_or_else(|| anyhow::anyhow!("--allow needs an origin"))?,
+                );
+            }
+            "--http-credential" => {
+                http_credential = Some(
+                    args.next()
+                        .ok_or_else(|| anyhow::anyhow!("--http-credential needs a value"))?,
+                );
+            }
+            "--http-credential-env" => {
+                let name = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--http-credential-env needs a variable"))?;
+                let value = std::env::var(&name)
+                    .map_err(|_| anyhow::anyhow!("--http-credential-env: {name} is not set"))?;
+                http_credential = Some(value);
+            }
             "--" => {
                 program_args.extend(args.by_ref());
                 break;
@@ -57,7 +79,9 @@ fn main() -> Result<()> {
             "-h" | "--help" => {
                 println!(
                     "usage: soil-lang [--call NAME | --no-call] [--repl] [--prelude FILE] \
-                     [--records-root DIR] [--book NAME] [--workspace-root DIR] FILE... [-- ARG...]"
+                     [--records-root DIR] [--book NAME] [--workspace-root DIR] \
+                     [--allow ORIGIN]... [--http-credential VALUE | --http-credential-env VAR] \
+                     FILE... [-- ARG...]"
                 );
                 return Ok(());
             }
@@ -68,12 +92,28 @@ fn main() -> Result<()> {
     if files.is_empty() && prelude.is_none() && !repl {
         bail!(
             "usage: soil-lang [--call NAME | --no-call] [--repl] [--prelude FILE] \
-             [--records-root DIR] [--book NAME] [--workspace-root DIR] FILE... [-- ARG...]"
+             [--records-root DIR] [--book NAME] [--workspace-root DIR] \
+             [--allow ORIGIN]... [--http-credential VALUE | --http-credential-env VAR] \
+             FILE... [-- ARG...]"
         );
     }
 
+    let wants_http = !http_origins.is_empty() || http_credential.is_some();
+    if wants_http && http_origins.is_empty() {
+        bail!("--http-credential needs at least one --allow ORIGIN");
+    }
+    if wants_http && (workspace_root.is_none() || records_root.is_none()) {
+        bail!("--allow needs --workspace-root and --records-root");
+    }
+
     let host: Box<dyn Host> = match (workspace_root, records_root) {
-        (Some(workspace), Some(records)) => Box::new(NativeHost::open(workspace, records, book)?),
+        (Some(workspace), Some(records)) => {
+            let mut native = NativeHost::open(workspace, records, book)?;
+            if wants_http {
+                native = native.with_http(http_origins, http_credential)?;
+            }
+            Box::new(native)
+        }
         (Some(_), None) => bail!("--workspace-root requires --records-root"),
         (None, Some(records)) => Box::new(HostChain::new(vec![
             Box::new(SystemTimeHost),

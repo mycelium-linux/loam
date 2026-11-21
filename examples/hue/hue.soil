@@ -1,0 +1,254 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+; Philips Hue v1 local-bridge semantics in Soil.
+;
+; The bridge key is not written here. The guest names the host handle
+; `default`, puts `__CREDENTIAL__` where Hue expects the key, and the host
+; substitutes the real value. See examples/hue/README.md.
+;
+; Load the prelude and bindings first:
+;   (defun home () (hue/bridge "http://192.168.1.10" "default"))
+;   (hue/status (home))
+;   (hue/on (home) (hue/group "0"))
+;   (hue/bri (home) (hue/light "3") 180)
+;   (hue/scene (home) (hue/group "1") "Relax")
+
+(defun hue/bridge (base credential)
+  (list
+    (list :base (hue/trim-slash base))
+    (list :credential credential)))
+
+(defun hue/slash? (character)
+  (= character "/"))
+
+(defun hue/trim-slash (text)
+  (string-join
+    (reverse (drop-while 'hue/slash? (reverse (string-chars text))))
+    ""))
+
+(defun hue/url (bridge path)
+  (str (field bridge :base) "/api/__CREDENTIAL__" path))
+
+(defun hue/pair-url (bridge)
+  (str (field bridge :base) "/api"))
+
+(defun hue/header (name value)
+  (list (list :name name) (list :value value)))
+
+(defun hue/headers (body)
+  (if (nil? body)
+      (list (hue/header "accept" "application/json"))
+      (list
+        (hue/header "accept" "application/json")
+        (hue/header "content-type" "application/json"))))
+
+(defun hue/request (bridge method path body)
+  (list
+    (list :url (hue/url bridge path))
+    (list :method method)
+    (list :headers (hue/headers body))
+    (list :body (if (nil? body) nil (json-encode body)))
+    (list :credential (field bridge :credential))
+    (list :max-bytes 1048576)
+    (list :timeout-ms 10000)))
+
+(defun hue/check (response)
+  (let ((status (field response :status)))
+    (if (and (>= status 200) (< status 300))
+        (let ((value (json-decode (field response :body))))
+          (let ((error (hue/error-description value)))
+            (if (nil? error)
+                (list 'ok value)
+                (list 'err (str "bridge: " error)))))
+        (list 'err (str "bridge: HTTP " status)))))
+
+(defun hue/error-description (value)
+  (if (atom value)
+      nil
+      (let ((item (first value)))
+        (if (atom item)
+            nil
+            (let ((error (field item :error)))
+              (if (nil? error)
+                  nil
+                  (field error :description)))))))
+
+(defun hue/fetch (bridge method path body)
+  (let ((response (soil:http/fetch (hue/request bridge method path body))))
+    (if (ok? response)
+        (hue/check (value response))
+        response)))
+
+(defun hue/get (bridge path)
+  (hue/fetch bridge "get" path nil))
+
+(defun hue/put (bridge path body)
+  (hue/fetch bridge "put" path body))
+
+(defun hue/post (bridge path body)
+  (hue/fetch bridge "post" path body))
+
+(defun hue/status (bridge)
+  (hue/get bridge ""))
+
+(defun hue/lights (bridge)
+  (hue/get bridge "/lights"))
+
+(defun hue/groups (bridge)
+  (hue/get bridge "/groups"))
+
+(defun hue/scenes (bridge)
+  (hue/get bridge "/scenes"))
+
+(defun hue/group (id)
+  (list (list :kind "group") (list :id id)))
+
+(defun hue/light (id)
+  (list (list :kind "light") (list :id id)))
+
+(defun hue/action-path (target)
+  (if (= (field target :kind) "group")
+      (str "/groups/" (field target :id) "/action")
+      (str "/lights/" (field target :id) "/state")))
+
+(defun hue/state-path (target)
+  (if (= (field target :kind) "group")
+      (str "/groups/" (field target :id))
+      (str "/lights/" (field target :id))))
+
+(defun hue/set-power (bridge target on)
+  (hue/put bridge (hue/action-path target) (list (list :on on))))
+
+(defun hue/on (bridge target)
+  (hue/set-power bridge target #t))
+
+(defun hue/off (bridge target)
+  (hue/set-power bridge target #f))
+
+(defun hue/toggle (bridge target)
+  (let ((state (hue/get bridge (hue/state-path target))))
+    (if (ok? state)
+        (let ((key (if (= (field target :kind) "group") :action :state)))
+          (let ((on (field (field (value state) key) :on)))
+            (if (nil? on)
+                (list 'err "bridge: no power state")
+                (hue/set-power bridge target (not on)))))
+        state)))
+
+(defun hue/bri (bridge target value)
+  (let ((value (if (> value 254) 254 value)))
+    (let ((value (if (< value 1) 1 value)))
+      (hue/put bridge (hue/action-path target) (list (list :bri value))))))
+
+(defun hue/color-xy (bridge target x y)
+  (hue/put bridge (hue/action-path target) (list (list :xy (list x y)))))
+
+(defun hue/hex-value (character)
+  (cond
+    ((= character "0") 0)
+    ((= character "1") 1)
+    ((= character "2") 2)
+    ((= character "3") 3)
+    ((= character "4") 4)
+    ((= character "5") 5)
+    ((= character "6") 6)
+    ((= character "7") 7)
+    ((= character "8") 8)
+    ((= character "9") 9)
+    ((= character "a") 10)
+    ((= character "b") 11)
+    ((= character "c") 12)
+    ((= character "d") 13)
+    ((= character "e") 14)
+    ((= character "f") 15)
+    ((= character "A") 10)
+    ((= character "B") 11)
+    ((= character "C") 12)
+    ((= character "D") 13)
+    ((= character "E") 14)
+    ((= character "F") 15)
+    (else nil)))
+
+(defun hue/hex-byte (high low)
+  (let ((high (hue/hex-value high)))
+    (let ((low (hue/hex-value low)))
+      (if (or (nil? high) (nil? low))
+          nil
+          (+ (* 16 high) low)))))
+
+(defun hue/parse-hex (text)
+  (let ((chars (string-chars text)))
+    (let ((chars (if (and (not (nil? chars)) (= (first chars) "#"))
+                     (rest chars)
+                     chars)))
+      (if (not (= (length chars) 6))
+          nil
+          (let ((red (hue/hex-byte (nth 0 chars) (nth 1 chars))))
+            (let ((green (hue/hex-byte (nth 2 chars) (nth 3 chars))))
+              (let ((blue (hue/hex-byte (nth 4 chars) (nth 5 chars))))
+                (if (or (nil? red) (nil? green) (nil? blue))
+                    nil
+                    (list red green blue)))))))))
+
+(defun hue/gamma (channel)
+  (let ((value (/ channel 255.0)))
+    (if (> value 0.04045)
+        (pow (/ (+ value 0.055) 1.055) 2.4)
+        (/ value 12.92))))
+
+(defun hue/round-4 (value)
+  (/ (round (* value 10000.0)) 10000.0))
+
+(defun hue/rgb->xy (red green blue)
+  (let ((red (hue/gamma red)))
+    (let ((green (hue/gamma green)))
+      (let ((blue (hue/gamma blue)))
+        (let ((x (+ (* red 0.664511) (* green 0.154324) (* blue 0.162028))))
+          (let ((y (+ (* red 0.283881) (* green 0.668433) (* blue 0.047685))))
+            (let ((z (+ (* red 0.000088) (* green 0.072310) (* blue 0.986039))))
+              (let ((sum (+ x y z)))
+                (if (<= sum 0.0)
+                    (list 0.0 0.0)
+                    (list
+                      (hue/round-4 (/ x sum))
+                      (hue/round-4 (/ y sum))))))))))))
+
+(defun hue/color-hex (bridge target text)
+  (let ((rgb (hue/parse-hex text)))
+    (if (nil? rgb)
+        (list 'err (str "color: " text " is not #RRGGBB"))
+        (let ((xy (hue/rgb->xy (nth 0 rgb) (nth 1 rgb) (nth 2 rgb))))
+          (hue/color-xy bridge target (nth 0 xy) (nth 1 xy))))))
+
+(defun hue/find-scene-id (entries name)
+  (cond
+    ((nil? entries) nil)
+    ((= (field (nth 1 (first entries)) :name) name)
+      (first (first entries)))
+    (else (hue/find-scene-id (rest entries) name))))
+
+(defun hue/scene (bridge target name)
+  (let ((scenes (hue/scenes bridge)))
+    (if (ok? scenes)
+        (let ((id (hue/find-scene-id (value scenes) name)))
+          (if (nil? id)
+              (list 'err (str "scene: no scene named " name))
+              (hue/put bridge (hue/action-path target) (list (list :scene id)))))
+        scenes)))
+
+(defun hue/scene-id (bridge target id)
+  (hue/put bridge (hue/action-path target) (list (list :scene id))))
+
+(defun hue/pair (bridge device)
+  (let ((request
+          (list
+            (list :url (hue/pair-url bridge))
+            (list :method "post")
+            (list :headers (hue/headers (list (list :devicetype device))))
+            (list :body (json-encode (list (list :devicetype device))))
+            (list :credential nil)
+            (list :max-bytes 1048576)
+            (list :timeout-ms 10000))))
+    (let ((response (soil:http/fetch request)))
+      (if (ok? response)
+          (hue/check (value response))
+          response))))
