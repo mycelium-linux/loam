@@ -228,18 +228,25 @@ Track separately:
 - `rendered_tokens` — tokens in the final text.
 - `decode_steps` — forward passes, including forced suffixes.
 
-Expected ranges, to be replaced by measurements:
+Measured with `umie-bench structural-savings` and Ornith-1.5-9B's tokenizer
+(2026-11-21):
 
-| Mechanism | Sampled-token reduction | Notes |
-|---|---:|---|
-| Forced closer elision | 0–2% | Mostly latency; closers still render |
-| Auto-close + `CloseTo` / `Commit` | 8–15% | One action can close many frames |
-| Skeletons for common Soil forms | +5–10% | Removes keywords and repeated shapes |
-| Combined structural editing | 10–25% | Depends on nesting and skeleton coverage |
-| JSON / XML closers only | 5–12% | Keys, quotes, tags and commas remain |
+| Corpus | Naive | Auto-close, 1 action/run | Zero-cost-close bound | + Skeletons |
+|---|---:|---:|---:|---:|
+| `jmc.lisp` | 738 | 0.7% saved | 14.1% | 0.7% |
+| `bel.bel` (15.4k tokens) | 15,400 | 0.2% saved | 8.2% | 1.0% |
+| 100 Soil UI panels | 6,200 | **−1.6%** (worse) | 8.1% | 3.2% |
+| 100 JSON objects | 3,303 | **−3.0%** (worse) | 3.1% | n/a |
 
-Do not claim the upper bound until a corpus of real Soil forms is generated
-with and without each layer.
+The earlier 8–15% auto-close estimate was wrong for byte-level BPE. BPE already
+compresses closers; charging one action token per close run can increase sampled
+tokens. The zero-cost-close column is the optimistic bound if closing needs no
+token at all.
+
+The real wins are fewer malformed forms, fewer repair loops, and forced closers
+without forward passes. Skeleton expansion is the only consistent sampled-token
+win measured so far: ~1% on `bel.bel`, 3.2% on repetitive UI forms. Measure a
+real Soil corpus before claiming more than that.
 
 ## Integration points
 
