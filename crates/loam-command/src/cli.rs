@@ -146,6 +146,12 @@ fn run_as(args: Vec<String>, subcommand: &[&str]) -> Result<i32> {
                 warm = true;
                 i += 1;
             }
+            // `loam run NAME ...` is the public form. Older shims spell it
+            // `loam run run NAME ...`; accept both rather than making callers
+            // know which parser layer they are talking to.
+            other if subcommand.len() == 1 && subcommand[0] == "run" && !other.starts_with('-') => {
+                break;
+            }
             other => bail!("unknown option {other}"),
         }
     }
@@ -205,7 +211,7 @@ fn run_as(args: Vec<String>, subcommand: &[&str]) -> Result<i32> {
     }
     let Some(name) = args.get(i).cloned() else {
         bail!(
-            "usage: loam run [--root DIR]... [--env NAME=VALUE]... [--env-from NAME]... [--list] run NAME [ARGS...]\n       loam run [--root DIR]... shims [--dir DIR] [--prune]\n       loam run [--root DIR]... warm"
+            "usage: loam run [--root DIR]... [--env NAME=VALUE]... [--env-from NAME]... [--list] NAME [ARGS...]\n       loam run [--root DIR]... shims [--dir DIR] [--prune]\n       loam run [--root DIR]... warm"
         );
     };
     let entry = registry.get(&name).context("unknown command")?.clone();
@@ -242,17 +248,20 @@ fn run_as(args: Vec<String>, subcommand: &[&str]) -> Result<i32> {
         }
         None => None,
     };
-    let output = CommandRunner::new(records, bus)?.run(
-        &entry,
-        &RunRequest {
-            args: args[i + 1..].to_vec(),
-            stdin,
-            // Commands do not inherit the host environment; `--env` is the only
-            // way a variable reaches one.
-            env,
-            cwd: None,
-        },
-    )?;
+    let plugins = crate::plugin::PluginRegistry::scan_roots(&roots)?;
+    let output = CommandRunner::new(records, bus)?
+        .with_plugins(plugins)
+        .run(
+            &entry,
+            &RunRequest {
+                args: args[i + 1..].to_vec(),
+                stdin,
+                // Commands do not inherit the host environment; `--env` is the only
+                // way a variable reaches one.
+                env,
+                cwd: None,
+            },
+        )?;
     std::io::stdout().write_all(&output.stdout)?;
     std::io::stderr().write_all(&output.stderr)?;
     if output.code != 0 {
