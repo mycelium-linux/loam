@@ -1,6 +1,6 @@
 # Soil
 
-**A small Lisp and WebAssembly runtime for tools you can read.**
+**A Lisp-like programming language for performant applications and automation.**
 
 [![ci](https://github.com/ajmwagar/soil/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ajmwagar/soil/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
@@ -8,69 +8,29 @@
 [![website](https://img.shields.io/badge/website-soil--lang.org-c8f169.svg)](https://soil-lang.org)
 [![stars](https://img.shields.io/github/stars/ajmwagar/soil?style=flat&logo=github&label=stars)](https://github.com/ajmwagar/soil/stargazers)
 
-Soil is the WASM runtime for fungOS apps. Applications that run on Soil are
-called **Spores**: a signed manifest (module CID, capabilities, target,
-engine version) plus its module bytes. Distribution is planned as the **Spore
-Store** — publish by CID, resolve by CID + target, revoke, never re-sign.
+```soil
+(defun view (state)
+  (el "main" nil
+    (list
+      (el "h1" nil (list (txt "Hello from Soil")))
+      (el "button" (list (attr :data-op "inc"))
+        (list (txt "+"))))))
+```
+
+Soil compiles to WebAssembly and runs natively. Programs are called **Spores**:
+a signed manifest plus a Wasm module.
 
 [Website](https://soil-lang.org) ·
 [API docs](https://soil-lang.org/docs/) ·
-[Why Soil](https://soil-lang.org/#why) ·
 [Examples](https://soil-lang.org/#examples) ·
 [Source](https://github.com/ajmwagar/soil)
 
-> **Status: early.** The full runtime host is not implemented; the first
-> capability host (BLE) and one real Spore do run. Nothing here is a shipped
-> product surface yet. Canonical capability contracts for `soil:view`,
-> `soil:time`, `soil:storage`, `soil:ble` and `soil:canvas` live in [`wit/`](wit)
-> and are enforced by `crates/soil-abi`. Canvas is the cross-platform owner;
-> the spore-facing half is frozen as `soil:surface@1.1.0` in the spores repo, with
-> Canvas's own crates still on `soil:canvas@1.0.0`. The broader design record
-> lives in the `mycelium` repository (`docs/soil-capabilities.md`) and covers the
-> remaining capability boundary (`soil:gpu`, `soil:audio`, `soil:stream`),
-> signed-Spore verification, and the target matrix (macOS, Linux, Android/Fire TV,
-> CAT S22; tvOS is AOT-only because it forbids JIT).
+> **Status:** early. The interpreter, stdlib, native CLI, and Wasm path run today.
 
-The first concrete workload is the [Viewer Spore](docs/viewer-spore.md): one
-presentation viewer for web, signed Spores and retained scenes, with normalized
-remote actions and bounded host capture. It is designed for the existing Canvas
-Fire TV app first, then the extracted Soil runtime.
+## Language
 
-A second spike is the [Feeds Spore](docs/feeds-spore.md): a reader that consumes
-RSS/Atom items from `soil:records`, keeps its private settings in
-`soil:appdata`, and leaves fetching to a host-side poller with a dotfile feed
-list.
-
-Spores do not import Unibus or Iroh. The host owns the shared
-`unibus/peer/1` session, and application sync protocols are message kinds on
-that session. The Iroh listener/router lives in `crates/soil-sync-host`; a real
-encrypted loopback test syncs records through it. See
-[Shared peer sync](docs/peer-sync.md).
-
-Principles:
-
-- **No ambient authority.** A Spore runs against exactly the imports its signed
-  manifest was granted; there is no filesystem, network, clock or device access
-  beyond that.
-- **Transport in Soil, protocol in the Spore.** Radios and GPUs are host
-  capabilities; wire formats and state machines ship as `.wasm`.
-- **Honest failure.** A rejected or unverifiable Spore fails loudly with a named
-  reason, never silently degrades.
-
-## Start here
-
-- **Language** — [`crates/soil-lang`](crates/soil-lang/README.md): reader,
-  interpreter, typed core, Lisp stdlib, and Wasm backends.
-- **Runtime** — [One runner](#one-runner): one host binary, four modes.
-- **Capabilities** — [`wit/`](wit): the contracts a Spore can be granted.
-- **Site** — [soil-lang.org](https://soil-lang.org): examples and generated API
-  docs.
-
-## Soil Lisp
-
-The interpreter, reader, and stdlib live in `crates/soil-lang`. Performance
-counters and timing helpers are documented in
-[`docs/soil-lisp-perf.md`](docs/soil-lisp-perf.md).
+The reader, interpreter, typed core, stdlib, and Wasm backends live in
+[`crates/soil-lang`](crates/soil-lang/README.md).
 
 ## Capability contracts
 
