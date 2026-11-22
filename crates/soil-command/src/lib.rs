@@ -117,7 +117,7 @@ pub mod cli;
 
 /// What the runner can link for a command. A package that requires anything
 /// else is refused by the registry instead of failing at instantiation.
-pub const RUNNER_CAPABILITIES: &[&str] = &["soil:records", "soil:unibus"];
+pub const RUNNER_CAPABILITIES: &[&str] = &["soil:records", "soil:time", "soil:unibus"];
 
 #[derive(Debug, Clone)]
 pub struct CommandRegistry {
@@ -701,6 +701,9 @@ impl CommandRunner {
         if records.is_some() {
             ::soil::records_host::add_to_linker::<Host>(&mut linker)?;
         }
+        if entry.requires.iter().any(|cap| cap == "soil:time") {
+            ::soil::time::add_to_linker::<Host>(&mut linker)?;
+        }
         // The grant is the command's own declaration, not the caller's wish: a
         // command that lists `soil:unibus` in `requires` gets the interface,
         // and one that does not cannot reach the bus even if the host has one.
@@ -828,6 +831,23 @@ impl ::soil::unibus::bus::Host for Host {
             .as_mut()
             .ok_or(::soil::unibus::bus::Error::Unavailable)?;
         bus.poll(kinds, cursor, limit)
+    }
+}
+
+impl ::soil::time::api::Host for Host {
+    fn monotonic_ms(&mut self) -> Result<u64, ::soil::time::api::Error> {
+        ::soil::time::SystemTimeHost.monotonic_ms()
+    }
+
+    fn wall_clock(&mut self) -> Result<::soil::time::api::DateTime, ::soil::time::api::Error> {
+        ::soil::time::SystemTimeHost.wall_clock()
+    }
+
+    fn tick(
+        &mut self,
+        timeout_ms: u32,
+    ) -> Result<Option<u64>, ::soil::time::api::Error> {
+        ::soil::time::SystemTimeHost.tick(timeout_ms)
     }
 }
 

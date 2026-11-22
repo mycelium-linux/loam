@@ -179,6 +179,9 @@ fn encode_t0(value: crate::wit::soil::records::records::Key) -> Value {
 
 #[allow(clippy::all, dead_code)]
 fn parse_t1(value: &Value) -> Result<Vec<u8>, String> {
+    if let Value::String(text) = value {
+        return Ok(text.as_bytes().to_vec());
+    }
     let values = value
         .as_list()
         .ok_or_else(|| format!("expected list, got {value}"))?;
@@ -869,25 +872,28 @@ pub fn call(interface: &str, function: &str, args: &[Value]) -> Result<Value, St
     match (interface, function) {
         ("soil:records", "get") => {
             let arg0 = parse_t0(arg(args, 0, "soil:records", "get")?)?;
-            Ok(encode_t18(crate::wit::soil::records::records::get(arg0)))
+            Ok(encode_t18(crate::wit::soil::records::records::get(&arg0)))
         }
         ("soil:records", "scan") => {
             let arg0 = parse_string(arg(args, 0, "soil:records", "scan")?)?;
             let arg1 = parse_t4(arg(args, 1, "soil:records", "scan")?)?;
             let arg2 = parse_u32(arg(args, 2, "soil:records", "scan")?)?;
             Ok(encode_t19(crate::wit::soil::records::records::scan(
-                arg0, arg1, arg2,
+                arg0.as_str(),
+                arg1.as_deref(),
+                arg2,
             )))
         }
         ("soil:records", "query") => {
             let arg0 = parse_t10(arg(args, 0, "soil:records", "query")?)?;
-            Ok(encode_t19(crate::wit::soil::records::records::query(arg0)))
+            Ok(encode_t19(crate::wit::soil::records::records::query(&arg0)))
         }
         ("soil:records", "aggregate") => {
             let arg0 = parse_string(arg(args, 0, "soil:records", "aggregate")?)?;
             let arg1 = parse_t11(arg(args, 1, "soil:records", "aggregate")?)?;
             Ok(encode_t21(crate::wit::soil::records::records::aggregate(
-                arg0, arg1,
+                arg0.as_str(),
+                &arg1,
             )))
         }
         ("soil:records", "scan-packed") => {
@@ -895,35 +901,42 @@ pub fn call(interface: &str, function: &str, args: &[Value]) -> Result<Value, St
             let arg1 = parse_t4(arg(args, 1, "soil:records", "scan-packed")?)?;
             let arg2 = parse_u32(arg(args, 2, "soil:records", "scan-packed")?)?;
             Ok(encode_t22(crate::wit::soil::records::records::scan_packed(
-                arg0, arg1, arg2,
+                arg0.as_str(),
+                arg1.as_deref(),
+                arg2,
             )))
         }
         ("soil:records", "upsert") => {
             let arg0 = parse_t2(arg(args, 0, "soil:records", "upsert")?)?;
-            Ok(encode_t18(crate::wit::soil::records::records::upsert(arg0)))
+            Ok(encode_t18(crate::wit::soil::records::records::upsert(
+                &arg0,
+            )))
         }
         ("soil:records", "compare-and-swap") => {
             let arg0 = parse_t0(arg(args, 0, "soil:records", "compare-and-swap")?)?;
             let arg1 = parse_t23(arg(args, 1, "soil:records", "compare-and-swap")?)?;
             let arg2 = parse_t2(arg(args, 2, "soil:records", "compare-and-swap")?)?;
             Ok(encode_t24(
-                crate::wit::soil::records::records::compare_and_swap(arg0, arg1, arg2),
+                crate::wit::soil::records::records::compare_and_swap(&arg0, arg1.as_ref(), &arg2),
             ))
         }
         ("soil:records", "delete") => {
             let arg0 = parse_t0(arg(args, 0, "soil:records", "delete")?)?;
-            Ok(encode_t25(crate::wit::soil::records::records::delete(arg0)))
+            Ok(encode_t25(crate::wit::soil::records::records::delete(
+                &arg0,
+            )))
         }
         ("soil:records", "changes") => {
             let arg0 = parse_t4(arg(args, 0, "soil:records", "changes")?)?;
             let arg1 = parse_u32(arg(args, 1, "soil:records", "changes")?)?;
             Ok(encode_t19(crate::wit::soil::records::records::changes(
-                arg0, arg1,
+                arg0.as_deref(),
+                arg1,
             )))
         }
         ("soil:records", "apply") => {
             let arg0 = parse_t3(arg(args, 0, "soil:records", "apply")?)?;
-            Ok(encode_t26(crate::wit::soil::records::records::apply(arg0)))
+            Ok(encode_t26(crate::wit::soil::records::records::apply(&arg0)))
         }
         ("soil:time", "monotonic-ms") => {
             Ok(encode_t30(crate::wit::soil::time::time::monotonic_ms()))

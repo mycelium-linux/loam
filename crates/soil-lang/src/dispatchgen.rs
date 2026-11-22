@@ -209,9 +209,12 @@ fn write_call_arm(
             "            let arg{index} = {parse}(arg(args, {index}, {key:?}, {name:?})?)?;"
         );
     }
-    let args = (0..function.params.len())
-        .map(|index| format!("arg{index}"))
-        .collect::<Vec<_>>()
+    let args = function
+        .params
+        .iter()
+        .enumerate()
+        .map(|(index, param)| call_arg_expr(resolve, param.ty, &format!("arg{index}")))
+        .collect::<Result<Vec<_>>>()?
         .join(", ");
     let call = format!("{module}::{}({args})", rust_name(name));
     match function.result {
@@ -226,6 +229,53 @@ fn write_call_arm(
     }
     let _ = writeln!(rust, "        }}");
     Ok(())
+}
+
+fn call_arg_expr(resolve: &Resolve, ty: Type, name: &str) -> Result<String> {
+    Ok(match ty {
+        Type::String => format!("{name}.as_str()"),
+        Type::Id(id) => {
+            let ty = &resolve.types[id];
+            match &ty.kind {
+                TypeDefKind::Record(_) | TypeDefKind::Variant(_) | TypeDefKind::Flags(_) => {
+                    format!("&{name}")
+                }
+                TypeDefKind::List(_) | TypeDefKind::FixedLengthList(_, _) => format!("&{name}"),
+                TypeDefKind::Option(inner) => match *inner {
+                    Type::String => format!("{name}.as_deref()"),
+                    Type::Id(inner_id)
+                        if matches!(
+                            resolve.types[inner_id].kind,
+                            TypeDefKind::List(_) | TypeDefKind::FixedLengthList(_, _)
+                        ) =>
+                    {
+                        format!("{name}.as_deref()")
+                    }
+                    inner if needs_borrow(resolve, inner) => format!("{name}.as_ref()"),
+                    _ => name.to_string(),
+                },
+                TypeDefKind::Type(inner) => return call_arg_expr(resolve, *inner, name),
+                _ => name.to_string(),
+            }
+        }
+        _ => name.to_string(),
+    })
+}
+
+fn needs_borrow(resolve: &Resolve, ty: Type) -> bool {
+    match ty {
+        Type::String => true,
+        Type::Id(id) => match &resolve.types[id].kind {
+            TypeDefKind::Record(_)
+            | TypeDefKind::Variant(_)
+            | TypeDefKind::Flags(_)
+            | TypeDefKind::List(_)
+            | TypeDefKind::FixedLengthList(_, _) => true,
+            TypeDefKind::Type(inner) => needs_borrow(resolve, *inner),
+            _ => false,
+        },
+        _ => false,
+    }
 }
 
 fn write_type_functions(
@@ -282,6 +332,11 @@ fn write_type_functions(
             );
         }
         TypeDefKind::List(inner) | TypeDefKind::FixedLengthList(inner, _) => {
+            if matches!(inner, Type::U8) {
+                rust.push_str(
+                    "    if let Value::String(text) = value { return Ok(text.as_bytes().to_vec()); }\n",
+                );
+            }
             let inner_parse = parse_expr(resolve, *inner)?;
             let _ = writeln!(
                 rust,

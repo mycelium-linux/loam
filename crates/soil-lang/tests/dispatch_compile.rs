@@ -87,45 +87,38 @@ mod wit {
                     Unsupported,
                 }
 
-                pub fn get(_: Key) -> Result<Entry, Error> {
+                pub fn get(_: &Key) -> Result<Entry, Error> {
                     Err(Error::Unsupported)
                 }
-                pub fn scan(_: String, _: Option<String>, _: u32) -> Result<Page, Error> {
+                pub fn scan(_: &str, _: Option<&str>, _: u32) -> Result<Page, Error> {
                     Err(Error::Unsupported)
                 }
-                pub fn query(_: QuerySpec) -> Result<Page, Error> {
+                pub fn query(_: &QuerySpec) -> Result<Page, Error> {
                     Err(Error::Unsupported)
                 }
-                pub fn aggregate(
-                    _: String,
-                    _: AggregateSpec,
-                ) -> Result<Vec<AggregateGroup>, Error> {
+                pub fn aggregate(_: &str, _: &AggregateSpec) -> Result<Vec<AggregateGroup>, Error> {
                     Err(Error::Unsupported)
                 }
-                pub fn scan_packed(
-                    _: String,
-                    _: Option<String>,
-                    _: u32,
-                ) -> Result<PackedPage, Error> {
+                pub fn scan_packed(_: &str, _: Option<&str>, _: u32) -> Result<PackedPage, Error> {
                     Err(Error::Unsupported)
                 }
-                pub fn upsert(_: Entry) -> Result<Entry, Error> {
+                pub fn upsert(_: &Entry) -> Result<Entry, Error> {
                     Err(Error::Unsupported)
                 }
                 pub fn compare_and_swap(
-                    _: Key,
-                    _: Option<Version>,
-                    _: Entry,
+                    _: &Key,
+                    _: Option<&Version>,
+                    _: &Entry,
                 ) -> Result<CasResult, Error> {
                     Err(Error::Unsupported)
                 }
-                pub fn delete(_: Key) -> Result<(), Error> {
+                pub fn delete(_: &Key) -> Result<(), Error> {
                     Err(Error::Unsupported)
                 }
-                pub fn changes(_: Option<String>, _: u32) -> Result<Page, Error> {
+                pub fn changes(_: Option<&str>, _: u32) -> Result<Page, Error> {
                     Err(Error::Unsupported)
                 }
-                pub fn apply(_: Vec<Entry>) -> Result<ApplyResult, Error> {
+                pub fn apply(_: &[Entry]) -> Result<ApplyResult, Error> {
                     Err(Error::Unsupported)
                 }
             }

@@ -7685,6 +7685,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "soil-lang-wasm"
+version = "0.1.0"
+dependencies = [
+ "soil-lang",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "soil-layout"
 version = "0.1.0"
 dependencies = [

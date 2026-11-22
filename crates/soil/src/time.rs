@@ -17,7 +17,7 @@ wasmtime::component::bindgen!({
     world: "host",
 });
 
-use soil::time::time as api;
+pub use soil::time::time as api;
 
 /// Monotonic epoch for this host process.
 ///

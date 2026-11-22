@@ -44,7 +44,7 @@ fn emits_typed_parse_and_encode_for_canonical_fields() {
     assert!(text.contains("fn parse_t10(value: &Value)"));
     assert!(text.contains("group_by: parse_t9(field(value, \"group-by\")"));
     assert!(text.contains("updated_at_ms: parse_u64(field(value, \"updated-at-ms\")"));
-    assert!(text.contains("crate::wit::soil::records::records::query(arg0)"));
+    assert!(text.contains("crate::wit::soil::records::records::query(&arg0)"));
     assert!(text.contains("crate::wit::soil::time::time::monotonic_ms()"));
     assert!(!text.contains("scan-query"));
     assert!(!text.contains("scan-fields"));

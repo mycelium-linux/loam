@@ -1,0 +1,6 @@
+package soil:lang-wasm@0.1.0;
+
+world guest {
+  import soil:records/records@0.1.0;
+  import soil:time/time@1.1.0;
+}
