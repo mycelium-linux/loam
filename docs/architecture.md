@@ -65,15 +65,19 @@ soil:codec
 
 They are native implementations today. They are still plugins: a build without them still provides the core runtime.
 
-Optional plugin contracts are kept in `wit/` but are not linked by the runtime:
+Optional plugin contracts are not linked by the runtime:
 
 ```text
-soil:process
+soil:process          wit/soil-process.wit
+soil:http             crates/loam/wit/http
+soil:streams          crates/loam/wit/stream
 ```
 
-`soil:process` is the opt-in process/pipe contract. A host that wants it links a
-plugin provider and grants `soil:process` explicitly; the default `loam` build
-does not expose it.
+`soil:process` is the opt-in process/pipe contract, `soil:http` is bounded
+host-mediated HTTP, and `soil:streams` is the host-accepted byte-stream queue.
+The HTTP and stream contracts stay beside their host implementations rather than
+being duplicated at the root. A host that wants one links it explicitly; the
+default `loam run` profile does not expose them.
 
 ## Plugin forms
 
