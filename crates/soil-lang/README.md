@@ -55,6 +55,30 @@ built with `--no-default-features`.
 cargo check -p soil-lang --no-default-features --target wasm32-wasip2
 ```
 
+## Run a bus automation
+
+`--unibus-config` grants the native host the same bounded `soil:unibus` poll
+and publish contract the Wasm host exposes. `--hub` adds ordered fallback
+after the config's `hub_endpoint`. `--repeat 0 --interval-ms N` runs the
+entry point continuously without recursing in the interpreter.
+
+```sh
+cargo run -p soil-lang --bin soil-lang -- \
+  --records-root ~/.local/share/fungos/records --book home \
+  --unibus-config ~/.config/unibus/frigate-home.json \
+  --repeat 0 --interval-ms 2000 \
+  crates/soil-lang/bindings/soil-unibus.soil \
+  crates/soil-lang/bindings/soil-records.soil \
+  crates/soil-lang/bindings/soil-time.soil \
+  crates/soil-lang/stdlib/prelude.soil \
+  crates/soil-lang/examples/frigate_automation.soil
+```
+
+The Frigate example ignores `update`, filters by label and score, dedupes on
+`event_id` through `soil:records`, and prints one `frigate.action.v1` record per
+new event. `soil:unibus` is a live tail, so a one-shot run only sees frames
+that arrive while it is running.
+
 ## Compile
 
 WIT bindings:

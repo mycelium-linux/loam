@@ -8,6 +8,8 @@ pub mod lisp;
 #[cfg(feature = "native")]
 pub mod native_host;
 pub mod sexp;
+#[cfg(feature = "native")]
+pub mod unibus_host;
 pub mod wasm;
 #[cfg(feature = "witgen")]
 pub mod witgen;
@@ -22,6 +24,8 @@ pub use native_host::NativeHost;
 pub use sexp::{Comment, Document, Form, Span, parse_document, print_document};
 #[cfg(feature = "native")]
 pub use soil::time::SystemTimeHost;
+#[cfg(feature = "native")]
+pub use unibus_host::UnibusHost;
 pub use wasm::compile;
 #[cfg(feature = "witgen")]
 pub use witgen::{Generated, generate};

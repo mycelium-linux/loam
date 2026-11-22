@@ -103,3 +103,7 @@
     (and
       (= (hue/find-scene-id scenes "Relax") "7")
       (nil? (hue/find-scene-id scenes "Missing")))))
+
+(defun test/hue-bri-encodes-as-an-integer ()
+  (let ((body (json-encode (list (list :bri (hue/clamp-bri 160.4))))))
+    (= body "{\"bri\":160}")))

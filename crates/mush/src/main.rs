@@ -915,7 +915,13 @@ fn run() -> Result<()> {
         args.remove(0);
         return match subcommand.as_str() {
             "add" => projects::add(&config, args),
-            other => anyhow::bail!("unknown project subcommand {other:?}; try `add`"),
+            "define" | "checkout" | "status" | "commit" | "push" | "list" | "show" | "help"
+            | "--help" | "-h" => {
+                worktree::run_project(&config, [subcommand].into_iter().chain(args).collect())
+            }
+            other => anyhow::bail!(
+                "unknown project subcommand {other:?}; try define, checkout, status, commit, push"
+            ),
         };
     }
     let explicit_root = args.iter().any(|arg| arg == "--root");

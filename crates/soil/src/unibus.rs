@@ -565,12 +565,24 @@ impl UnibusBus {
     /// token travel together; the token is read here and never enters the
     /// Spore or the process environment.
     pub fn from_config_file(path: &Path) -> anyhow::Result<Self> {
+        Self::from_config_file_with_hubs(path, &[])
+    }
+
+    /// Connect from a JSON `ClientConfig` file with ordered hub fallback.
+    ///
+    /// The config's own `hub_endpoint` is the first endpoint; `hubs` are tried
+    /// after it. This is the same shape `soil-shell` uses for a Spore, made
+    /// available to the native Soil Lisp runner. Token paths are resolved
+    /// relative to `path`, never the current directory.
+    pub fn from_config_file_with_hubs(path: &Path, hubs: &[String]) -> anyhow::Result<Self> {
         let mut config: unibus::client::ClientConfig = serde_json::from_slice(
             &std::fs::read(path).with_context(|| format!("read {}", path.display()))?,
         )
         .with_context(|| format!("parse {}", path.display()))?;
         config.resolve_token_file(path);
-        Self::connect(config)
+        let mut endpoints = vec![config.hub_endpoint.clone()];
+        endpoints.extend(hubs.iter().cloned());
+        Self::connect_any(&config, &endpoints)
     }
 
     /// Connect by trying `endpoints` in order, cloning `base` with each

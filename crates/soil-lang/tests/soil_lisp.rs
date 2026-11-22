@@ -42,6 +42,7 @@ fn runtime(root: &Path) -> Runtime {
         "bindings/soil-http.soil",
         "../../examples/hue/hue.soil",
         "../../examples/playback/playback.soil",
+        "examples/frigate_automation.soil",
         "boot/boot.soil",
     ] {
         runtime.load_file(dir.join(file)).unwrap();

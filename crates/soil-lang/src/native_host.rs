@@ -422,6 +422,38 @@ impl NativeHost {
 }
 
 impl Host for NativeHost {
+    fn read_source(&mut self, path: &str) -> std::result::Result<String, String> {
+        let entry = VfsHostTrait::stat(&mut self.vfs, path.to_string())
+            .map_err(|error| format!("stat {path}: {error:?}"))?;
+        if entry.size > 16 * 1024 * 1024 {
+            return Err(format!("source {path} is too large: {} bytes", entry.size));
+        }
+        let length = u32::try_from(entry.size).map_err(|_| "source is too large".to_string())?;
+        let chunk = VfsHostTrait::read(&mut self.vfs, path.to_string(), 0, length)
+            .map_err(|error| format!("read {path}: {error:?}"))?;
+        String::from_utf8(chunk.data).map_err(|_| format!("source {path} is not UTF-8"))
+    }
+
+    fn write_source(&mut self, path: &str, source: &str) -> std::result::Result<(), String> {
+        let mut writer = self
+            .vfs
+            .begin_writer(
+                path.to_string(),
+                "text/x-soil".to_string(),
+                Some(source.len() as u64),
+                None,
+                None,
+            )
+            .map_err(|error| format!("begin-write {path}: {error:?}"))?;
+        writer
+            .write(source.as_bytes())
+            .map_err(|error| format!("write {path}: {error:?}"))?;
+        writer
+            .finish()
+            .map_err(|error| format!("finish {path}: {error:?}"))?;
+        Ok(())
+    }
+
     fn granted(&self, interface: &str, function: &str) -> bool {
         match interface {
             "soil:time" => {

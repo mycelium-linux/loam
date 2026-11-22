@@ -16,14 +16,20 @@ witgen = ["dep:wit-parser"]
 
 [dependencies]
 anyhow = "1"
+blake3 = "1"
 serde_json = "1"
-soil = { path = "../soil", optional = true, default-features = false, features = ["vfs", "records", "wasi"] }
+soil = { path = "../soil", optional = true, default-features = false, features = ["vfs", "records", "unibus", "wasi"] }
 wasm-encoder = "0.263.0"
 wit-parser = { version = "0.263.0", optional = true }
 
 [[bin]]
 name = "soil-lang"
 path = "src/bin/soil-lang.rs"
+required-features = ["native"]
+
+[[bin]]
+name = "soil-image"
+path = "src/bin/soil-image.rs"
 required-features = ["native"]
 
 [[bin]]

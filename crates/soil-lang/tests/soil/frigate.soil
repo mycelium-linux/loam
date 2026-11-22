@@ -1,0 +1,42 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+; Frigate automation policy without a bus or a records store.
+
+(defun frigate/event (type label score)
+  (list
+    (list :event_id "1712345678.123456-abc123")
+    (list :type type)
+    (list :camera "front_door")
+    (list :label label)
+    (list :score score)
+    (list :zones (list "porch"))
+    (list :entered_zones (list "porch" "walkway"))
+    (list :has_snapshot #t)
+    (list :has_clip #f)))
+
+(defun test/frigate-actionable-person ()
+  (and
+    (frigate/actionable? (frigate/event "new" "person" 0.9))
+    (not (frigate/actionable? (frigate/event "new" "person" 0.5)))
+    (not (frigate/actionable? (frigate/event "new" "cat" 0.9)))
+    (not (frigate/actionable? (frigate/event "update" "person" 0.9)))
+    (not (frigate/actionable? (frigate/event "end" "person" 0.9)))))
+
+(defun test/frigate-member ()
+  (and
+    (frigate/member? "person" (frigate/labels))
+    (frigate/member? "car" (frigate/labels))
+    (not (frigate/member? "cat" (frigate/labels)))
+    (not (frigate/member? "person" nil))))
+
+(defun test/frigate-decision-keeps-the-fields-automation-needs ()
+  (let ((decision (frigate/decision (frigate/event "new" "person" 0.91))))
+    (and
+      (= (field decision :action) :notify)
+      (= (field decision :event_id) "1712345678.123456-abc123")
+      (= (field decision :camera) "front_door")
+      (= (field decision :label) "person")
+      (= (field decision :score) 0.91)
+      (= (field decision :zones) (list "porch"))
+      (= (field decision :entered_zones) (list "porch" "walkway"))
+      (= (field decision :has_snapshot) #t)
+      (= (field decision :has_clip) #f))))

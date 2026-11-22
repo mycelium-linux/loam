@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{Result, bail};
 use soil_lang::sexp::Value;
-use soil_lang::{FakeHost, Host, NativeHost, Runtime};
+use soil_lang::{FakeHost, Host, HostChain, NativeHost, Runtime, UnibusHost};
 
 fn run() -> Result<()> {
     let mut files: Vec<PathBuf> = Vec::new();
@@ -21,6 +22,10 @@ fn run() -> Result<()> {
     let mut geode_socket: Option<PathBuf> = None;
     let mut geode_reference: Option<String> = None;
     let mut geode_purpose: Option<String> = None;
+    let mut unibus_config: Option<PathBuf> = None;
+    let mut unibus_hubs: Vec<String> = Vec::new();
+    let mut repeat: u64 = 1;
+    let mut interval_ms: u64 = 0;
     let mut program_args: Vec<String> = Vec::new();
     let mut args = std::env::args().skip(1);
 
@@ -104,6 +109,32 @@ fn run() -> Result<()> {
                         .ok_or_else(|| anyhow::anyhow!("--geode-purpose needs a purpose"))?,
                 );
             }
+            "--unibus-config" => {
+                unibus_config =
+                    Some(PathBuf::from(args.next().ok_or_else(|| {
+                        anyhow::anyhow!("--unibus-config needs a path")
+                    })?));
+            }
+            "--hub" => {
+                unibus_hubs.push(
+                    args.next()
+                        .ok_or_else(|| anyhow::anyhow!("--hub needs an address"))?,
+                );
+            }
+            "--repeat" => {
+                repeat = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--repeat needs a count (0 = forever)"))?
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("--repeat needs a non-negative integer"))?;
+            }
+            "--interval-ms" => {
+                interval_ms = args
+                    .next()
+                    .ok_or_else(|| anyhow::anyhow!("--interval-ms needs a duration"))?
+                    .parse()
+                    .map_err(|_| anyhow::anyhow!("--interval-ms needs a non-negative integer"))?;
+            }
             "--" => {
                 program_args.extend(args.by_ref());
                 break;
@@ -116,6 +147,8 @@ fn run() -> Result<()> {
                      [--http-credential VALUE | --http-credential-env VAR \
                       | --bearer-env VAR \
                       | --geode-socket PATH --geode-reference REF --geode-purpose PURPOSE] \
+                     [--unibus-config FILE] [--hub ADDR]... \
+                     [--repeat N] [--interval-ms MS] \
                      FILE... [-- ARG...]"
                 );
                 return Ok(());
@@ -132,6 +165,8 @@ fn run() -> Result<()> {
              [--http-credential VALUE | --http-credential-env VAR \
               | --bearer-env VAR \
               | --geode-socket PATH --geode-reference REF --geode-purpose PURPOSE] \
+             [--unibus-config FILE] [--hub ADDR]... \
+             [--repeat N] [--interval-ms MS] \
              FILE... [-- ARG...]"
         );
     }
@@ -157,8 +192,11 @@ fn run() -> Result<()> {
     if wants_http && (workspace_root.is_none() || records_root.is_none()) {
         bail!("--allow needs --workspace-root and --records-root");
     }
+    if unibus_config.is_none() && !unibus_hubs.is_empty() {
+        bail!("--hub needs --unibus-config");
+    }
 
-    let host: Box<dyn Host> = match (workspace_root, records_root) {
+    let mut host: Box<dyn Host> = match (workspace_root, records_root) {
         (Some(workspace), Some(records)) => {
             let mut native = NativeHost::open(workspace, records, book)?;
             if wants_geode {
@@ -186,6 +224,12 @@ fn run() -> Result<()> {
         (None, Some(records)) => Box::new(NativeHost::open(".", records, book)?),
         (None, None) => Box::new(FakeHost::new()),
     };
+    if let Some(path) = unibus_config {
+        host = Box::new(HostChain::new(vec![
+            host,
+            Box::new(UnibusHost::connect(path, &unibus_hubs)?),
+        ]));
+    }
     let mut runtime = Runtime::new(host);
     runtime.set_args(program_args);
 
@@ -207,9 +251,19 @@ fn run() -> Result<()> {
 
     if let Some(name) = call {
         if runtime.has_function(&name) {
-            let value = runtime.call(&name, &[])?;
-            if !matches!(value, Value::Nil) {
-                println!("{value}");
+            let mut iteration = 0_u64;
+            loop {
+                let value = runtime.call(&name, &[])?;
+                if !matches!(value, Value::Nil) {
+                    println!("{value}");
+                }
+                iteration += 1;
+                if repeat != 0 && iteration >= repeat {
+                    break;
+                }
+                if interval_ms > 0 {
+                    std::thread::sleep(Duration::from_millis(interval_ms));
+                }
             }
         } else if !matches!(last, Value::Nil) {
             println!("{last}");

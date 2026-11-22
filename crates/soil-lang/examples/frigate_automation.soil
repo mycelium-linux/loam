@@ -1,0 +1,117 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+; Frigate NVR automation, written as Soil Lisp over soil:unibus + soil:records.
+;
+; The unibus-frigate adapter publishes frigate.event.v1 for Frigate's
+; new/update/end lifecycle. This script is a one-poll decision step:
+;
+;   - only `new` events can trigger a notification
+;   - only the labels below, at or above the score threshold
+;   - an event_id is acted on once, even across restarts
+;   - the decision is recorded before it is printed
+;
+; Run once with the default `main`. Run continuously with:
+;
+;   soil-lang ... --repeat 0 --interval-ms 2000 examples/frigate_automation.soil
+;
+; A production daemon belongs in a Spore with a soil:time tick; this file is
+; the policy in plain Soil, not a new scheduler.
+
+;;; Labels that are worth interrupting a person for.
+(defun frigate/labels ()
+  (list "person" "car"))
+
+;;; Minimum Frigate confidence for an actionable detection.
+(defun frigate/min-score ()
+  0.7)
+
+;;; Return true when `needle` is one of `xs`.
+(defun frigate/member? (needle xs)
+  (cond
+    ((nil? xs) #f)
+    ((= needle (first xs)) #t)
+    (else (frigate/member? needle (rest xs)))))
+
+;;; A `new` event, for a configured label, above the score threshold.
+(defun frigate/actionable? (event)
+  (and
+    (= (field event :type) "new")
+    (frigate/member? (field event :label) (frigate/labels))
+    (>= (field event :score) (frigate/min-score))))
+
+;;; True when this event_id was already handled.
+(defun frigate/already-seen? (event-id)
+  (ok? (soil:records/get (record-key "frigate.seen" event-id))))
+
+;;; Persist the id so a restart or a duplicate delivery cannot re-trigger it.
+(defun frigate/mark-seen (event now)
+  (upsert-record
+    "frigate.seen"
+    (field event :event_id)
+    "frigate.seen.v1"
+    (list
+      (list :event_id (field event :event_id))
+      (list :camera (field event :camera))
+      (list :label (field event :label))
+      (list :seen_at now))
+    now))
+
+;;; The host-neutral action. A Spore, a notification bridge, or a later
+;;; Soil script can consume this without re-reading Frigate's MQTT schema.
+(defun frigate/decision (event)
+  (list
+    (list :action :notify)
+    (list :event_id (field event :event_id))
+    (list :type (field event :type))
+    (list :camera (field event :camera))
+    (list :label (field event :label))
+    (list :score (field event :score))
+    (list :zones (field event :zones))
+    (list :entered_zones (field event :entered_zones))
+    (list :has_snapshot (field event :has_snapshot))
+    (list :has_clip (field event :has_clip))))
+
+;;; Record the action for audit; the id is the Frigate event id.
+(defun frigate/record-action (decision now)
+  (upsert-record
+    "frigate.action"
+    (field decision :event_id)
+    "frigate.action.v1"
+    decision
+    now))
+
+;;; Fold one page of frames into a list of new actions, newest last.
+(defun frigate/handle-frames-into (frames now out)
+  (if (nil? frames)
+      (reverse out)
+      (let ((event (json-decode (bytes->string (field (first frames) :body)))))
+        (if (frigate/actionable? event)
+            (if (frigate/already-seen? (field event :event_id))
+                (frigate/handle-frames-into (rest frames) now out)
+                (let ((decision (frigate/decision event)))
+                  (frigate/mark-seen event now)
+                  (frigate/record-action decision now)
+                  (frigate/handle-frames-into
+                    (rest frames) now (cons decision out))))
+            (frigate/handle-frames-into (rest frames) now out)))))
+
+;;; One live-tail poll. The bus has no replay, so a daemon must call this
+;;; continuously; the runner's --repeat/--interval-ms does that without
+;;; recursing in the interpreter.
+(defun frigate/poll-once ()
+  (let ((page (soil:unibus/bus.poll (list "frigate.event.v1") nil 64)))
+    (if (ok? page)
+        (let ((actions
+                (frigate/handle-frames-into
+                  (field (value page) :frames)
+                  (now-ms)
+                  nil)))
+          (list
+            (list :ok #t)
+            (list :count (if (nil? actions) 0 (length actions)))
+            (list :actions actions)))
+        (list
+          (list :ok #f)
+          (list :error (nth 1 (value page)))))))
+
+(defun main ()
+  (frigate/poll-once))

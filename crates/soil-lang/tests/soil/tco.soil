@@ -1,0 +1,31 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+
+(defun tco/sum (n acc)
+  (if (= n 0)
+      acc
+      (tco/sum (- n 1) (+ acc n))))
+
+(defun tco/even? (n)
+  (cond
+    ((= n 0) #t)
+    (else (tco/odd? (- n 1)))))
+
+(defun tco/odd? (n)
+  (cond
+    ((= n 0) #f)
+    (else (tco/even? (- n 1)))))
+
+(defun tco/through-let (n acc)
+  (let ((next (- n 1)))
+    (if (= n 0)
+        acc
+        (tco/through-let next (+ acc n)))))
+
+(defun test/tail-recursion ()
+  (= (tco/sum 50000 0) 1250025000))
+
+(defun test/mutual-tail-recursion ()
+  (not (tco/even? 100001)))
+
+(defun test/tail-through-let ()
+  (= (tco/through-let 50000 0) 1250025000))
