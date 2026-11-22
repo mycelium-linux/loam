@@ -40,6 +40,7 @@ One JSON request per line, one JSON response per line:
 {"op":"load","session":"s1","path":"lib/example.soil"}
 {"op":"compile","session":"s1","source":"(defun add (a b) (+ a b))"}
 {"op":"call-compiled","session":"s1","source":"(defun add (a b) (+ a b))","function":"add","args":[20,22]}
+{"op":"compile-function","session":"s1","name":"add"}
 {"op":"eval","session":"s1","source":"(defun f (x) (+ x 1))"}
 {"op":"status","session":"s1"}
 {"op":"reload","session":"s1"}
@@ -83,6 +84,7 @@ same VFS the image uses:
 ```json
 {"op":"compile","session":"s1","source":"(defun add (a b) (+ a b))"}
 {"op":"call-compiled","session":"s1","source":"(defun add (a b) (+ a b))","function":"add","args":[20,22]}
+{"op":"compile-function","session":"s1","name":"add"}
 ```
 
 Response:
@@ -114,6 +116,30 @@ cached by content hash for later calls. `source` may be supplied instead of
 
 This is still the numeric core only. Unsupported forms return an error and the
 harness should fall back to interpreted eval.
+
+## Per-function compilation
+
+`compile-function` installs a compiled variant under the live function name:
+
+```json
+{"op":"compile-function","session":"s1","name":"add"}
+```
+
+After that, ordinary image evaluation dispatches to the compiled function:
+
+```json
+{"op":"eval","session":"s1","source":"(add 20 22)"}
+```
+
+The interpreter remains the fallback:
+
+- if the function is not in the numeric core, compilation fails and nothing is installed
+- if arguments or the return shape cannot be represented, the call falls back
+- redefining the function removes its compiled variant
+- changing a `defconst` clears all compiled variants, because constants are inlined
+
+`status` reports `compiled` names. This is the first per-function replacement
+path; it is not yet a full native compiler.
 
 ## Provenance
 

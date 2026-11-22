@@ -60,10 +60,20 @@ enum Tail {
     Call(Value, Vec<Value>),
 }
 
+/// A compiled replacement for one interpreted function.
+///
+/// `call` returns `None` when the call cannot be represented by the compiled
+/// code, which lets the image fall back to the interpreter without losing the
+/// function.
+pub trait CompiledFunction: Send {
+    fn call(&mut self, args: &[Value]) -> Result<Option<Value>>;
+}
+
 pub struct Runtime {
     functions: HashMap<String, Function>,
     macros: HashMap<String, Function>,
     constants: HashMap<String, Value>,
+    compiled: HashMap<String, Box<dyn CompiledFunction>>,
     origins: HashMap<String, Origin>,
     forms: HashMap<String, Value>,
     closures: HashMap<u64, Closure>,
@@ -156,6 +166,7 @@ impl Runtime {
             functions: HashMap::new(),
             macros: HashMap::new(),
             constants: HashMap::new(),
+            compiled: HashMap::new(),
             origins: HashMap::new(),
             forms: HashMap::new(),
             closures: HashMap::new(),
@@ -178,6 +189,46 @@ impl Runtime {
 
     pub fn has_function(&self, name: &str) -> bool {
         self.functions.contains_key(name)
+    }
+
+    /// Install a compiled variant under an interpreted function's name.
+    pub fn install_compiled(&mut self, name: &str, function: Box<dyn CompiledFunction>) {
+        self.compiled.insert(name.to_string(), function);
+    }
+
+    /// Names currently backed by compiled code.
+    pub fn compiled_definitions(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.compiled.keys().cloned().collect();
+        names.sort();
+        names
+    }
+
+    /// The original form for a definition, if it is still in the image.
+    pub fn definition_form(&self, name: &str) -> Option<&Value> {
+        self.forms.get(name)
+    }
+
+    /// A numeric-core source unit for one function.
+    ///
+    /// Constants are included because the compiler inlines them. Function
+    /// dependencies are not resolved yet; a function that calls another
+    /// compiled function must be compiled as part of the same unit for now.
+    pub fn numeric_source(&self, name: &str) -> Option<String> {
+        let mut source = String::new();
+        for form in self.forms.values() {
+            if form
+                .as_list()
+                .and_then(|items| items.first())
+                .and_then(Value::as_symbol)
+                == Some("defconst")
+            {
+                source.push_str(&form.to_string());
+                source.push('\n');
+            }
+        }
+        source.push_str(&self.forms.get(name)?.to_string());
+        source.push('\n');
+        Some(source)
     }
 
     pub fn load_file(&mut self, path: impl AsRef<Path>) -> Result<Value> {
@@ -225,6 +276,7 @@ impl Runtime {
                     } else {
                         self.macros.insert(name.clone(), function);
                     }
+                    self.compiled.remove(&name);
                     self.forms.insert(name.clone(), form.value.clone());
                     if let Some(path) = origin {
                         self.origins.insert(
@@ -245,6 +297,7 @@ impl Runtime {
                     let mut env = HashMap::new();
                     let value = self.eval(&value, &mut env)?;
                     self.constants.insert(name.clone(), value);
+                    self.compiled.clear();
                     self.forms.insert(name.clone(), form.value.clone());
                     if let Some(path) = origin {
                         self.origins.insert(
@@ -462,6 +515,14 @@ impl Runtime {
                     frame.params.len(),
                     args.len()
                 );
+            }
+            if let Some(mut compiled) = self.compiled.remove(&frame.name) {
+                let result = compiled.call(&args);
+                self.compiled.insert(frame.name.clone(), compiled);
+                match result? {
+                    Some(value) => return Ok(value),
+                    None => {}
+                }
             }
             let mut env = frame.env.clone();
             for (name, value) in frame.params.iter().zip(args) {
@@ -1097,8 +1158,7 @@ impl Runtime {
                     }
                     "string-starts-with?" => {
                         let text = self.eval(require(items, 1, "string-starts-with?")?, env)?;
-                        let prefix =
-                            self.eval(require(items, 2, "string-starts-with?")?, env)?;
+                        let prefix = self.eval(require(items, 2, "string-starts-with?")?, env)?;
                         let Some(text) = text.as_str() else {
                             bail!("string-starts-with? expects a string");
                         };
@@ -1519,7 +1579,6 @@ fn is_json_object(items: &[Value]) -> bool {
     matches!(items, [Value::Symbol(name)] if name == JSON_OBJECT_MARKER)
 }
 
-
 /// Turn a parsed document into the record shape the linter and doc tools read.
 ///
 /// Forms retain their source byte span and leading comments. The raw comment
@@ -1534,7 +1593,13 @@ fn document_value(document: crate::sexp::Document, tokens: Vec<Token>) -> Result
         ),
         pair(
             "trailing-comments",
-            Value::List(document.trailing_comments.into_iter().map(comment_value).collect()),
+            Value::List(
+                document
+                    .trailing_comments
+                    .into_iter()
+                    .map(comment_value)
+                    .collect(),
+            ),
         ),
         pair(
             "tokens",
@@ -1978,7 +2043,9 @@ mod document_tests {
         assert_eq!(forms.len(), 1);
         let form = &forms[0];
         assert_eq!(
-            field_value(form, &Value::Keyword("value".into())).as_list().unwrap()[1]
+            field_value(form, &Value::Keyword("value".into()))
+                .as_list()
+                .unwrap()[1]
                 .as_symbol(),
             Some("foo")
         );

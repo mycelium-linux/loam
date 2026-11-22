@@ -192,6 +192,86 @@ fn compile_writes_a_wasm_artifact_to_vfs() {
 }
 
 #[test]
+fn compile_function_replaces_calls_in_the_image() {
+    let root = tempfile::tempdir_in("/tmp").unwrap();
+    let workspace = root.path().join("workspace");
+    let records = root.path().join("records");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::create_dir_all(&records).unwrap();
+
+    let socket = root.path().join("image.sock");
+    let prelude = Path::new(env!("CARGO_MANIFEST_DIR")).join("stdlib/prelude.soil");
+    let child = Command::new(env!("CARGO_BIN_EXE_soil-image"))
+        .arg("--socket")
+        .arg(&socket)
+        .env("SOIL_PRELUDE", prelude)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let _daemon = Daemon(child);
+
+    let mut stream = wait_for_socket(&socket);
+    let attached = request(
+        &mut stream,
+        json!({
+            "op": "attach",
+            "session": "s4",
+            "workspace": workspace,
+            "records": records,
+        }),
+    );
+    assert_eq!(attached["ok"], true);
+    for source in ["(defun add (a b) (+ a b))", "(defun under? (x) (< x 3))"] {
+        let loaded = request(
+            &mut stream,
+            json!({"op": "eval", "session": "s4", "source": source}),
+        );
+        assert_eq!(loaded["ok"], true);
+    }
+    for name in ["add", "under?"] {
+        let compiled = request(
+            &mut stream,
+            json!({"op": "compile-function", "session": "s4", "name": name}),
+        );
+        assert_eq!(compiled["ok"], true, "{compiled}");
+        assert_eq!(compiled["result"]["installed"], true);
+    }
+    let status = request(&mut stream, json!({"op": "status", "session": "s4"}));
+    assert_eq!(status["result"]["compiled"], json!(["add", "under?"]));
+
+    let added = request(
+        &mut stream,
+        json!({"op": "eval", "session": "s4", "source": "(add 20 22)"}),
+    );
+    assert_eq!(added["result"]["result"], "42");
+    let yes = request(
+        &mut stream,
+        json!({"op": "eval", "session": "s4", "source": "(under? 2)"}),
+    );
+    assert_eq!(yes["result"]["result"], "true");
+    let no = request(
+        &mut stream,
+        json!({"op": "eval", "session": "s4", "source": "(under? 4)"}),
+    );
+    assert_eq!(no["result"]["result"], "false");
+
+    // Redefining the function removes the installed compiled variant.
+    let redefined = request(
+        &mut stream,
+        json!({"op": "eval", "session": "s4", "source": "(defun add (a b) 0)"}),
+    );
+    assert_eq!(redefined["ok"], true);
+    let status = request(&mut stream, json!({"op": "status", "session": "s4"}));
+    assert_eq!(status["result"]["compiled"], json!(["under?"]));
+    let zero = request(
+        &mut stream,
+        json!({"op": "eval", "session": "s4", "source": "(add 20 22)"}),
+    );
+    assert_eq!(zero["result"]["result"], "0");
+}
+
+#[test]
 fn load_uses_vfs_and_reports_provenance() {
     let root = tempfile::tempdir_in("/tmp").unwrap();
     let workspace = root.path().join("workspace");
