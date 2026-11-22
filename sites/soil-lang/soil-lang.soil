@@ -3,7 +3,7 @@
 ;
 ; This is a static page with no actions. It uses only the four-function UI
 ; contract, so the same file renders in the browser host and can be exported
-; to plain HTML later.
+; to plain HTML later. Editable copy lives in copy.soil.
 
 (defun initial-state ()
   #f)
@@ -14,36 +14,44 @@
 (defun a (href class children)
   (el "a" (list (attr :href href) (attr :class class)) children))
 
-(defun manifesto-item (number title body)
+(defun manifesto-item (item)
   (el "li" nil
     (list
-      (el "span" (list (attr :class "manifesto-number")) (list (txt number)))
+      (el "span" (list (attr :class "manifesto-number")) (list (txt (field item :number))))
       (el "div" nil
         (list
-          (el "h3" nil (list (txt title)))
-          (el "p" nil (list (txt body))))))))
+          (el "h3" nil (list (txt (field item :title))))
+          (el "p" nil (list (txt (field item :body)))))))))
 
-(defun step (number title body)
+(defun step (item)
   (el "li" nil
     (list
-      (el "span" (list (attr :class "step-number")) (list (txt number)))
+      (el "span" (list (attr :class "step-number")) (list (txt (field item :number))))
       (el "div" nil
         (list
-          (el "strong" nil (list (txt title)))
-          (el "p" nil (list (txt body))))))))
+          (el "strong" nil (list (txt (field item :title))))
+          (el "p" nil (list (txt (field item :body)))))))))
 
-(defun example-preview (slug title)
-  (el "figure"
+(defun example-preview (item)
+  (let ((slug (field item :slug))
+        (title (field item :title)))
+    (el "figure"
+      (list
+        (attr :class "example")
+        (attr :data-soil-component slug))
+      (list
+        (el "iframe"
+          (list
+            (attr :src (str "examples/" slug ".html"))
+            (attr :title title)
+            (attr :scrolling "no"))
+          nil)))))
+
+(defun spore-card (item)
+  (el "article" (list (attr :class "card"))
     (list
-      (attr :class "example")
-      (attr :data-soil-component slug))
-    (list
-      (el "iframe"
-        (list
-          (attr :src (str "examples/" slug ".html"))
-          (attr :title title)
-          (attr :scrolling "no"))
-        nil))))
+      (el "h3" nil (list (txt (field item :title))))
+      (el "p" nil (list (txt (field item :body)))))))
 
 (defun view (state)
   (el "div" (list (attr :class "site"))
@@ -58,36 +66,36 @@
                   (el "span" (list (attr :class "logo-word")) (list (txt "Soil")))))
               (el "nav" (list (attr :class "nav-links"))
                 (list
-                  (a "#why" "" (list (txt "Why Soil")))
-                  (a "#substrate" "" (list (txt "Substrate")))
-                  (a "#learn" "" (list (txt "Learn")))
-                  (a "docs/" "" (list (txt "API")))
-                  (a "#examples" "" (list (txt "Examples")))
-                  (a "#spores" "" (list (txt "Spores")))
-                  (a "#community" "" (list (txt "Community")))))
-              (a "https://github.com/mycelium-linux/soil" "nav-cta" (list (txt "GitHub")))))))
+                  (a "#why" "" (list (txt (copy :nav :why))))
+                  (a "#substrate" "" (list (txt (copy :nav :substrate))))
+                  (a "#learn" "" (list (txt (copy :nav :learn))))
+                  (a "docs/" "" (list (txt (copy :nav :api))))
+                  (a "#examples" "" (list (txt (copy :nav :examples))))
+                  (a "#spores" "" (list (txt (copy :nav :spores))))
+                  (a "#community" "" (list (txt (copy :nav :community))))
+              (a "https://github.com/mycelium-linux/soil" "nav-cta" (list (txt (copy :nav :github))))))))))
       (el "main" nil
         (list
           (el "section" (list (attr :class "hero"))
             (list
               (el "div" (list (attr :class "hero-copy"))
                 (list
-                  (el "p" (list (attr :class "kicker")) (list (txt "SOIL-LANG.ORG")))
+                  (el "p" (list (attr :class "kicker")) (list (txt (copy :hero :kicker))))
                   (el "h1" nil
                     (list
-                      (txt "A substrate for tools that ")
-                      (el "span" (list (attr :class "accent")) (list (txt "explain themselves.")))))
+                      (txt (copy :hero :title-prefix))
+                      (el "span" (list (attr :class "accent")) (list (txt (copy :hero :title-accent))))))
                   (el "p" (list (attr :class "lede"))
-                    (list (txt "Soil is a small homoiconic Lisp with WIT capabilities. It keeps the Lisp bargain — code as data, macros, a live system — and adds typed host interfaces, GPU-resident views, and spores that travel.")))
+                    (list (txt (copy :hero :lede))))
                   (el "div" (list (attr :class "actions"))
                     (list
-                      (a "#learn" "btn primary" (list (txt "Get started")))
-                      (a "https://github.com/mycelium-linux/soil" "btn" (list (txt "View on GitHub")))))
+                      (a "#learn" "btn primary" (list (txt (copy :hero :primary-label))))
+                      (a "https://github.com/mycelium-linux/soil" "btn" (list (txt (copy :hero :github-label))))))
                   (el "p" (list (attr :class "meta"))
                     (list
-                      (txt "In the Lisp family. ")
-                      (a "https://lisp-lang.org/" "" (list (txt "lisp-lang.org")))
-                      (txt " · MIT OR Apache-2.0 · Rust core · native and WASM hosts")))))
+                      (txt (copy :hero :meta-prefix))
+                      (a "https://lisp-lang.org/" "" (list (txt (copy :hero :meta-link-label))))
+                      (txt (copy :hero :meta-suffix))))))
               (el "div" (list (attr :class "hero-code"))
                 (list
                   (el "div" (list (attr :class "code-head"))
@@ -95,110 +103,81 @@
                       (el "span" (list (attr :class "dot")) nil) 
                       (el "span" (list (attr :class "dot")) nil) 
                       (el "span" (list (attr :class "dot")) nil) 
-                      (el "span" (list (attr :class "code-name")) (list (txt "counter.soil")))))
-                  (code-block "(defun view (state)\n  (el \"div\" (list (attr :class \"app\"))\n    (list\n      (el \"output\" (list (attr :class \"value\"))\n        (list (txt state)))\n      (el \"button\" (list (attr :data-op \"inc\"))\n        (list (txt \"+\"))))))")
+                      (el "span" (list (attr :class "code-name")) (list (txt (copy :hero :code-name))))))
+                  (code-block (copy :hero :code))
                   (el "div" (list (attr :class "code-foot"))
-                    (list (txt "→ real HTML and CSS. No virtual DOM required.")))))))
+                    (list (txt (copy :hero :code-foot))))))))
           (el "section" (list (attr :class "section") (attr :id "why"))
             (list
               (el "div" (list (attr :class "editorial"))
                 (list
                   (el "div" (list (attr :class "editorial-copy"))
                     (list
-                      (el "p" (list (attr :class "kicker")) (list (txt "WHY SOIL")))
-                      (el "h2" nil (list (txt "Small core. Sharp edges. No hidden layers.")))
+                      (el "p" (list (attr :class "kicker")) (list (txt (copy :why :kicker))))
+                      (el "h2" nil (list (txt (copy :why :title))))
                       (el "p" (list (attr :class "body"))
-                        (list (txt "The substrate is deliberately thin. The interesting decisions live in the forms and the host boundary, not in a framework between them.")))))
+                        (list (txt (copy :why :body))))))
                   (el "ol" (list (attr :class "manifesto"))
-                    (list
-                      (manifesto-item "01" "Homoiconic"
-                        "The source, the AST, the docs, and the UI are the same tree. A tool can read and rewrite itself without a second representation.")
-                      (manifesto-item "02" "Editable"
-                        "Every form carries a source span. An agent can replace one form and keep the comments, layout, and everything it did not touch.")
-                      (manifesto-item "03" "Portable"
-                        "One WIT contract, two hosts. The same Lisp runs natively and in the browser; the GPU stays an optional capability, not a requirement.")))))))
+                    (map 'manifesto-item (copy :why :items)))))))
           (el "section" (list (attr :class "section") (attr :id "substrate"))
             (list
               (el "div" (list (attr :class "editorial reverse"))
                 (list
                   (el "ol" (list (attr :class "manifesto"))
-                    (list
-                      (manifesto-item "01" "Lisp, kept intact"
-                        "Homoiconic forms, macros, a small core, and a REPL-shaped workflow. The source, the docs, and the UI do not fork into separate representations.")
-                      (manifesto-item "02" "GPU when it matters"
-                        "Canvas and GPU-resident scenes are a host capability. Trees, forms, and docs stay ordinary HTML/CSS; waveforms and schematics stay on the GPU.")
-                      (manifesto-item "03" "Boundaries and distance"
-                        "WIT makes capabilities typed and portable. Spores are content-addressed, so the same artifact can run on this machine or another host.")))
+                    (map 'manifesto-item (copy :substrate :items)))
                   (el "div" (list (attr :class "editorial-copy"))
                     (list
-                      (el "p" (list (attr :class "kicker")) (list (txt "LISP, EXTENDED")))
-                      (el "h2" nil (list (txt "The Lisp bargain, with a modern substrate.")))
+                      (el "p" (list (attr :class "kicker")) (list (txt (copy :substrate :kicker))))
+                      (el "h2" nil (list (txt (copy :substrate :title))))
                       (el "p" (list (attr :class "body"))
-                        (list (txt "Lisp gave us code as data, macros, and a live system. Soil keeps that bargain and adds a typed capability boundary, GPU-resident views, and spores that travel between machines.")))))))))
+                        (list (txt (copy :substrate :body))))))))))
           (el "section" (list (attr :class "section split") (attr :id "learn"))
             (list
               (el "div" nil
                 (list
-                  (el "p" (list (attr :class "kicker")) (list (txt "LEARN")))
-                  (el "h2" nil (list (txt "From a form to a running tool.")))
+                  (el "p" (list (attr :class "kicker")) (list (txt (copy :learn :kicker))))
+                  (el "h2" nil (list (txt (copy :learn :title))))
                   (el "p" (list (attr :class "body"))
-                    (list (txt "Start with the language, then the host, then a spore. You do not need a framework to put a real interface on screen.")))
+                    (list (txt (copy :learn :body))))
                   (el "ol" (list (attr :class "steps"))
-                    (list
-                      (step "01" "Read the roadmap" "Phases from the core language to self-hosting, with done criteria.")
-                      (step "02" "Run an example" "Counter, TODO, calculator, tic-tac-toe. All of them are plain .soil.")
-                      (step "03" "Write a spore" "One manifest and one entry form. A library and an app are the same artifact.")))))
+                    (map 'step (copy :learn :steps)))))
               (el "pre" (list (attr :class "code block"))
-                (highlight-soil ";; tend build\n;; tend run\n\n(defun view (state)\n  (el \"main\" (list (attr :class \"app\"))\n    (list\n      (el \"h1\" nil (list (txt \"Hello from Soil\")))\n      (el \"p\" nil (list (txt \"This is a form, not a template.\"))))))"))))
+                (highlight-soil (copy :learn :code)))))
           (el "section" (list (attr :class "section") (attr :id "examples"))
             (list
-              (el "p" (list (attr :class "kicker")) (list (txt "EXAMPLES")))
-              (el "h2" nil (list (txt "Six tools, inline.")))
+              (el "p" (list (attr :class "kicker")) (list (txt (copy :examples :kicker))))
+              (el "h2" nil (list (txt (copy :examples :title))))
               (el "p" (list (attr :class "body"))
-                (list (txt "These are the actual Soil widgets, mounted inline. No iframes, no separate app shell, no carousel.")))
+                (list (txt (copy :examples :body))))
               (el "div" (list (attr :class "workbench"))
-                (list
-                  (example-preview "todo" "TODO")
-                  (example-preview "counter" "Counter")
-                  (example-preview "calculator" "Calculator")
-                  (example-preview "tictactoe" "Tic-tac-toe")
-                  (example-preview "tabs" "Tabs")
-                  (example-preview "form" "Form")))))
+                (map 'example-preview (copy :examples :items)))))
           (el "section" (list (attr :class "section") (attr :id "spores"))
             (list
-              (el "p" (list (attr :class "kicker")) (list (txt "SPORES")))
-              (el "h2" nil (list (txt "Libraries and apps are the same artifact.")))
+              (el "p" (list (attr :class "kicker")) (list (txt (copy :spores :kicker))))
+              (el "h2" nil (list (txt (copy :spores :title))))
               (el "div" (list (attr :class "grid two"))
-                (list
-                  (el "article" (list (attr :class "card"))
-                    (list
-                      (el "h3" nil (list (txt "Load it for its functions")))
-                      (el "p" nil (list (txt "A spore that exports forms is a library. Require it, call its functions, compose its views.")))))
-                  (el "article" (list (attr :class "card"))
-                    (list
-                      (el "h3" nil (list (txt "Launch it for its entry point")))
-                      (el "p" nil (list (txt "The same spore with a start form is an app. tend resolves it, builds it, and runs it here or on another host.")))))))))
+                (map 'spore-card (copy :spores :cards)))))
           (el "section" (list (attr :class "community") (attr :id "community"))
             (list
               (el "div" nil
                 (list
-                  (el "p" (list (attr :class "kicker")) (list (txt "COMMUNITY")))
-                  (el "h2" nil (list (txt "Grow it with us.")))
+                  (el "p" (list (attr :class "kicker")) (list (txt (copy :community :kicker))))
+                  (el "h2" nil (list (txt (copy :community :title))))
                   (el "p" (list (attr :class "body"))
-                    (list (txt "Soil is free software. The core is small on purpose. Bring a spore, a capability, or a hard question about what a tool should be able to explain.")))))
+                    (list (txt (copy :community :body))))))
               (el "div" (list (attr :class "actions"))
                 (list
-                  (a "https://github.com/mycelium-linux/soil" "btn primary" (list (txt "GitHub")))
-                  (a "https://github.com/mycelium-linux/soil/issues" "btn" (list (txt "Issues")))))))))
+                  (a "https://github.com/mycelium-linux/soil" "btn primary" (list (txt (copy :community :primary-label))))
+                  (a "https://github.com/mycelium-linux/soil/issues" "btn" (list (txt (copy :community :secondary-label))))))))))
       (el "footer" (list (attr :class "footer"))
         (list
-          (el "div" nil (list (txt "Soil · soil-lang.org")))
+          (el "div" nil (list (txt (copy :footer :left))))
           (el "div" (list (attr :class "footer-links"))
             (list
-              (a "#why" "" (list (txt "Why")))
-              (a "#learn" "" (list (txt "Learn")))
-              (a "#community" "" (list (txt "Community")))))
-          (el "div" nil (list (txt "MIT OR Apache-2.0"))))))))
+              (a "#why" "" (list (txt (copy :nav :why))))
+              (a "#learn" "" (list (txt (copy :nav :learn))))
+              (a "#community" "" (list (txt (copy :nav :community))))))
+          (el "div" nil (list (txt (copy :footer :license)))))))))
 
 (defun styles ()
   (str

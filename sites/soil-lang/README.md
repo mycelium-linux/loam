@@ -6,7 +6,8 @@ Preview it full-screen through the dev proxy:
 
 ```sh
 # 1. Rust host (no rebuild needed for the site source)
-.bin/soil-ui-proto --source sites/soil-lang/soil-lang.soil --port 7882
+.bin/soil-ui-proto --source sites/soil-lang/soil-lang.soil \
+  --prelude sites/soil-lang/copy.soil --port 7882
 
 # 2. Serve the current web assets from disk and proxy the API
 SOIL_UI_UPSTREAM=http://127.0.0.1:7882 SOIL_UI_PORT=7883 \
@@ -17,7 +18,8 @@ open 'http://127.0.0.1:7883/?bare=1'
 ```
 
 The page is a static landscape: nav, hero, why, substrate, learn, spores,
-community, footer. It has no actions and no state.
+community, footer. It has no actions and no state. All editable prose lives in
+`sites/soil-lang/copy.soil`; `soil-lang.soil` owns the structure and CSS.
 
 Build the static page and every example through the Soil standard library:
 
