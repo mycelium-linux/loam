@@ -24,6 +24,17 @@ soil:codec            audio/image codec boundary
 soil:mcp              generic MCP catalog and tool invocation
 ```
 
+## Plugin / extra
+
+Contracts a host or plugin may provide, but `loam` does not link by default:
+
+```text
+soil:process          opt-in process spawning with opaque pipe handles
+```
+
+They stay out of `loam doctor` and the runner's capability profile. Supplying
+one is an explicit host/plugin decision, not an ambient grant.
+
 ## Runtime support
 
 ```text

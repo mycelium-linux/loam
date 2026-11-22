@@ -43,6 +43,10 @@ First-party native plugins:
 | BLE | `loam-ble-api`, `loam-ble-host`, `loam-ble-sim` | native |
 | Audio + codec | `loam-media` | native |
 
+`soil:process` is a plugin/extra contract, not part of the default runtime. It
+lives in `wit/` so an opt-in host or plugin can provide it, but `loam` does not
+link it or advertise it in `loam doctor`.
+
 The runtime also provides WASI p2 and `wasi:http` through Wasmtime:
 
 ```text
