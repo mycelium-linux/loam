@@ -24,8 +24,8 @@ We want the transcript to be a **CRDT document in VFS**:
 
 ```text
 Transcript
-  id              session id
-  thread          optional Desktop thread id
+  id              transcript id (normally the agent session id)
+  session         optional Desktop session id
   ops             append-only CRDT operations
   head            derived view / snapshot pointer
   attachments     content ids, never inline bytes
@@ -89,7 +89,7 @@ instead of living in a separate mutable side table.
 The exact layout is still open, but it must satisfy the VFS model:
 
 ```text
-threads/<thread>/transcripts/<session>/
+sessions/<session>/transcripts/
   ops/
     <actor>/<lamport>-<op-id>.json
   snapshots/

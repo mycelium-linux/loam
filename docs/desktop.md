@@ -1,7 +1,7 @@
 # Desktops
 
 Status: **design, 2026-11-07.** This note fixes the vocabulary and the
-boundary between a Desktop, a Project, a Thread, a Worktree, a Checkout, and
+boundary between a Desktop, a Project, a Session, a Worktree, a Checkout, and
 the runtime session that Mush uses.
 
 ## Definition
@@ -32,8 +32,8 @@ does not: each machine gets its own mount root and checkouts.
 ```text
 Desktop
   Project                 named set of pinned repositories
-    Thread                agent session + its per-repo worktrees
-      Mount root          the thread's VFS/checkout root
+    Session                agent session + its per-repo worktrees
+      Mount root          the session's VFS/checkout root
         repo A worktree
         repo B worktree
       Image               live runtime attached to the mount root
@@ -42,19 +42,19 @@ Desktop
 The short form:
 
 ```text
-Desktop -> Project -> Thread -> Mount root -> Image
+Desktop -> Project -> Session -> Mount root -> Image
 ```
 
 `Workspace` is not a durable layer. If the word is used at all, it means one
-thread's mount root, or the local session context around it. It is not a synonym
-for Desktop, Project, or Thread.
+session's mount root, or the local session context around it. It is not a synonym
+for Desktop, Project, or Session.
 
 A **Project** is a named set of repositories, not a repository. The project
 manifest pins each repository (source, path inside the mount root, base branch,
-and eventually a commit/tree). A **Thread** gets one mount root and one worktree
-per repository. A **subagent** in the same thread shares that mount root and
-those worktrees. A **parallel thread** gets a different mount root and different
-worktrees. An **Image** attaches to the thread's mount root; it does not attach
+and eventually a commit/tree). A **Session** gets one mount root and one worktree
+per repository. A **subagent** in the same session shares that mount root and
+those worktrees. A **parallel session** gets a different mount root and different
+worktrees. An **Image** attaches to the session's mount root; it does not attach
 to the Desktop and it does not attach to one repository.
 
 ## Vocabulary
@@ -64,28 +64,28 @@ to the Desktop and it does not attach to one repository.
 | **Desktop** | Top-level namespace for a major context | Yes | Personal or shared |
 | **Shared Desktop** | Desktop with multiple principals | Yes | Yes |
 | **Project** | Named set of pinned repositories referenced by a Desktop | Yes | Per Desktop policy |
-| **Thread** | Agent session plus its per-repo worktrees | Yes | Per thread policy |
-| **Mount root** | This device's VFS/checkout root for one thread's project | Local | Per device |
-| **Worktree** | A thread's version of one repository | Yes | Per thread policy |
+| **Session** | Agent session plus its per-repo worktrees | Yes | Per session policy |
+| **Mount root** | This device's VFS/checkout root for one session's project | Local | Per device |
+| **Worktree** | A session's version of one repository | Yes | Per session policy |
 | **Checkout** | Materialized worktree files on one machine | Local | Per device |
-| **Image** | Live runtime attached to a thread mount root | Local | Per thread |
+| **Image** | Live runtime attached to a session mount root | Local | Per session |
 | **Canvas** | Visual projection of a Desktop | Yes | Per Desktop policy |
 | **Mush session** | Local shell/VFS execution context | Local | Per device |
 
 `Workspace` should not be a user-facing synonym for any of these. If the word
 survives internally, it should mean only the local VFS/session context.
 
-## The hierarchy
+## The Desktop tree
 
 ```text
 Desktop / Shared Desktop
   ├─ projects/
   │    ├─ Project A (repos: soil, spores, theseus)
-  │    │    ├─ Thread 1 mount root
+  │    │    ├─ Session 1 mount root
   │    │    │    ├─ soil worktree   -> checkout on Neo
   │    │    │    ├─ spores worktree
   │    │    │    └─ theseus worktree
-  │    │    └─ Thread 2 mount root
+  │    │    └─ Session 2 mount root
   │    │         ├─ soil worktree   -> checkout on Studio
   │    │         └─ spores worktree
   │    └─ Project B
@@ -94,14 +94,14 @@ Desktop / Shared Desktop
   ├─ commands/
   ├─ records bindings
   ├─ Canvas layouts + Desktop theme
-  └─ threads/
+  └─ sessions/
        ├─ conversation and comments
        └─ mount roots and worktrees
 ```
 
 A Desktop can contain many projects. A `ProjectRef` can be re-used in many
 Desktops, but that is a **reference**, not a shared mutable instance. Each
-Desktop attaches the same upstream repository and gets its own thread
+Desktop attaches the same upstream repository and gets its own session
 worktrees and checkouts. Use this for public/FOSS repositories that people want
 in more than one Desktop. Changes leave a Desktop through Git upstream, a PR,
 or an explicit assignment; they never write through another Desktop's checkout.
@@ -126,9 +126,9 @@ ProjectManifest
   id              stable project identity (one per Desktop)
   title
   repos[]
-    name          directory inside the thread mount root
+    name          directory inside the session mount root
     source        checkout or remote
-    base          branch the thread worktree forks from
+    base          branch the session worktree forks from
     pin           commit/tree, when pinned
 
 DesktopMount
@@ -157,13 +157,13 @@ inside the Desktop VFS.
 Desktop manifest       soil:records, one book selected by host/principal
 Desktop files          soil:vfs namespace rooted at the Desktop
 Project references     manifest, not file copies
-Thread worktrees       VFS histories scoped to the thread and project
+Session worktrees       VFS histories scoped to the session and project
 Checkouts              local filesystem, one per device/participant
 Canvas layouts         records or VFS metadata, scoped to the Desktop
 ```
 
 The Desktop is the durable namespace. The checkout is a disposable projection
-of a thread worktree.
+of a session worktree.
 
 ## Declares and reveals
 
@@ -280,7 +280,7 @@ Sync responsibilities:
 - **Mycelium** proves the principal, device, team membership, and grants.
 - **Records/VFS sync** carries the manifest, VFS namespace, and content.
 - **Unibus** may carry invalidations, presence, and change notifications.
-- **Delta** may be one optional thread/ACP client. It is not the Desktop store.
+- **Delta** may be one optional session/ACP client. It is not the Desktop store.
 
 A Desktop does not depend on DeltaDB. DeltaDB is proprietary and tightly
 coupled; it can remain an optional adapter.
@@ -292,15 +292,15 @@ A Desktop is a scope, not a grant.
 ```text
 principal -> Desktop membership role
 Desktop role -> project mount visibility
-Thread share -> narrower than Desktop membership
-Project worktree -> still subject to thread/principal policy
+Session share -> narrower than Desktop membership
+Project worktree -> still subject to session/principal policy
 ```
 
 Rules:
 
 - No path escapes a Desktop root.
-- A Desktop member does not automatically see every thread in it.
-- A thread share does not grant Desktop membership.
+- A Desktop member does not automatically see every session in it.
+- A session share does not grant Desktop membership.
 - Leaving a Shared Desktop removes local mounts and cached content according to
   policy; it does not silently retain a readable local copy.
 - `$HOME` is not the Desktop. The OS home remains private to the POSIX user.
@@ -320,7 +320,7 @@ Switching Desktops in Canvas must visibly change:
 - background and accent theme;
 - project set;
 - records scope;
-- open threads/panels;
+- open sessions/panels;
 - visible services and pinned commands.
 
 A Canvas layout belongs to exactly one Desktop. It must not retain a mix of
@@ -330,9 +330,9 @@ new Desktop, the layout is copied, not shared.
 `Canvas Workspace` should mean "a saved Canvas layout for a Desktop," not a
 second storage container.
 
-## Project, thread, mount root, image
+## Project, session, mount root, image
 
-A project is the unit of source. A thread is the unit of work. A mount root is
+A project is the unit of source. A session is the unit of work. A mount root is
 where that work happens on this device. An image is the live evaluator attached
 to that mount root.
 
@@ -340,8 +340,8 @@ to that mount root.
 FPL Desktop
   Project fpl-suite
     repos: soil, spores, theseus
-    Thread auth-refactor
-      mount root /threads/auth-refactor/fpl-suite
+    Session auth-refactor
+      mount root /sessions/auth-refactor/fpl-suite
         soil/
         spores/
         theseus/
@@ -354,27 +354,28 @@ project manifest.
 
 ### Subagents
 
-A subagent is part of the same thread and therefore shares its mount root and
+A subagent is part of the same session and therefore shares its mount root and
 worktrees. This is deliberate: a reviewer, a test fixer, and the main agent
 should not each get a divergent copy of the same change.
 
 ```text
-Thread auth-refactor
-  main agent      -> /threads/auth-refactor/fpl-suite
+Session auth-refactor
+  main agent      -> /sessions/auth-refactor/fpl-suite
   review subagent -> same mount root
   test subagent   -> same mount root
 ```
 
-A parallel thread is different work and gets a different mount root:
+A parallel session is different work and gets a different mount root:
 
 ```text
-Thread auth-refactor     -> /threads/auth-refactor/fpl-suite
-Thread auth-retry        -> /threads/auth-retry/fpl-suite
+Session auth-refactor     -> /sessions/auth-refactor/fpl-suite
+Session auth-retry        -> /sessions/auth-retry/fpl-suite
 ```
 
-Subagents share the worktree; they do not share an image process. The harness
-may multiplex one image or attach several clients to the same image, but the
-namespace and files are the thread's.
+Subagents share the worktree and the session image. The harness attaches several
+clients to one image; definitions and globals are shared, while output and
+cancellation are per client. If an agent needs an isolated image, it needs a
+separate session.
 
 ### Adding repositories
 
@@ -383,10 +384,10 @@ a repository is a project edit, not an agent convenience.
 
 ```sh
 mush project add-repo fpl-suite --repo ~/src/extra --desktop fpl
-mush project checkout fpl-suite --thread auth-refactor --desktop fpl
+mush project checkout fpl-suite --session auth-refactor --desktop fpl
 ```
 
-The add is durable in the project manifest. Existing thread mount roots pick up
+The add is durable in the project manifest. Existing session mount roots pick up
 the new repository on the next checkout; they do not silently delete worktrees
 for repositories that are still in the project. An agent-facing capability
 should expose `add-repo` only, never `remove-repo`.
@@ -424,8 +425,8 @@ A Desktop may contain multiple project mounts:
 ```text
 /
   projects/
-    crm/       -> checkout of thread worktree
-    fleet/     -> checkout of thread worktree
+    crm/       -> checkout of session worktree
+    fleet/     -> checkout of session worktree
   notes/
   scratch/
   commands/
@@ -442,44 +443,44 @@ mounts, not copies.
 ### First worktree slice
 
 Mush now has `mush tree` and `mush worktree` commands for content-addressed tree
-snapshots and thread-owned worktree records. They store `thread`, `worktree`,
+snapshots and session-owned worktree records. They store `session`, `worktree`,
 `tree`, `ref`, and `checkout` records in `soil:records` and can materialize a
-tree into a VFS path. This is the substrate for the per-thread worktrees below;
+tree into a VFS path. This is the substrate for the per-session worktrees below;
 it is not yet a mount table, checkout reconciliation, or peer sync. See
 [Mush worktrees](mush.md#worktrees-and-trees).
 
-## Threads and worktrees
+## Sessions and worktrees
 
-A thread is a conversation plus the mount root and worktrees it owns.
+A session is a conversation plus the mount root and worktrees it owns.
 
 ```text
 Desktop acme
   Project crm-suite
     repos: crm, crm-ui, crm-worker
-    Thread 42
-      mount root threads/42/crm-suite
+    Session 42
+      mount root sessions/42/crm-suite
         crm/worktree
         crm-ui/worktree
         crm-worker/worktree
       image crm-suite/42
   Project fleet-suite
     repos: fleet, fleet-api
-    Thread 42
-      mount root threads/42/fleet-suite
+    Session 42
+      mount root sessions/42/fleet-suite
         fleet/worktree
         fleet-api/worktree
 ```
 
 Rules:
 
-- A thread belongs to one Desktop for permission and namespace purposes.
-- A thread can touch one or more projects in that Desktop.
-- A project gets one thread-scoped mount root; each repository in it gets one
+- A session belongs to one Desktop for permission and namespace purposes.
+- A session can touch one or more projects in that Desktop.
+- A project gets one session-scoped mount root; each repository in it gets one
   worktree.
-- Subagents of a thread share its mount root and worktrees.
-- Parallel threads get separate mount roots and branches; they do not share
+- Subagents of a session share its mount root and worktrees.
+- Parallel sessions get separate mount roots and branches; they do not share
   mutable worktree state.
-- A Desktop can outlive every thread in it. Threads can be archived without
+- A Desktop can outlive every session in it. Sessions can be archived without
   deleting the Desktop.
 
 ## Storage split
@@ -489,8 +490,8 @@ Desktop manifest / membership    soil:records
 Desktop files and snapshots      soil:vfs
 Project manifest and pins        soil:records
 Project identity and remotes     ProjectRef in manifest
-Thread mount root                local VFS/checkout path, device-local
-Thread worktree history          VFS history scoped by thread/project
+Session mount root                local VFS/checkout path, device-local
+Session worktree history          VFS history scoped by session/project
 Image provenance                 image-local, flushable to VFS
 Canvas layout and theme          records or VFS metadata
 Command roots                    Desktop-scoped host config
@@ -511,7 +512,7 @@ A Desktop follows a principal across machines, including offline work.
   worktree refs before serving a stale checkout.
 
 Do not silently replace a local checkout with a remote snapshot. Show the
-reconciliation state and let the thread/worktree policy decide.
+reconciliation state and let the session/worktree policy decide.
 
 ## Lifecycle
 
@@ -547,14 +548,14 @@ archive
    records scope, and open panels change together.
 3. On machine B, sign in as the same principal and see the same Desktop with a
    different local mount path.
-4. Share a Desktop with a second principal; they see only projects and threads
+4. Share a Desktop with a second principal; they see only projects and sessions
    allowed by their role.
 5. Offline edit on machine B; reconnect and reconcile without replacing the
    local checkout silently.
-6. Mush `cd /projects/<name>` resolves to the thread worktree checkout, not a
+6. Mush `cd /projects/<name>` resolves to the session worktree checkout, not a
    copied directory inside the Desktop VFS.
 7. Add the same public repository to two Desktops. Each Desktop creates an
-   independent thread worktree; neither Desktop can write through the other's
+   independent session worktree; neither Desktop can write through the other's
    checkout.
 8. Bind a machine to a Desktop whose content ids are not on it. Every entry
    reads `placeholder`, no entry claims to be missing, and `fetch` fills them
@@ -564,7 +565,7 @@ archive
 ## Transcripts
 
 Conversations are durable, but they are not the Desktop manifest. An agent
-transcript is a CRDT document stored in VFS and anchored to the thread/session
+transcript is a CRDT document stored in VFS and anchored to the session/session
 that produced it; comments are annotations on that document, not a separate
 mutable table. See [Transcripts as CRDT documents](transcript-crdt.md).
 
@@ -572,16 +573,16 @@ mutable table. See [Transcripts as CRDT documents](transcript-crdt.md).
 
 - A Desktop is not a POSIX account or `$HOME` replacement.
 - A Desktop is not a Git worktree implementation.
-- A Desktop is not a thread.
+- A Desktop is not a session.
 - A Desktop is not a DeltaDB dependency.
 - A Desktop does not grant access merely by being named in a path.
 
 ## Open decisions
 
 1. Desktop IDs: opaque UUID, or `org/team/name` with an opaque suffix?
-2. Can a thread span projects from two Desktops? Recommendation: no. A
+2. Can a session span projects from two Desktops? Recommendation: no. A
    `ProjectRef` may be attached to many Desktops, especially for public/FOSS
-   repositories, but every use gets its own thread worktree. Do not share one
+   repositories, but every use gets its own session worktree. Do not share one
    mutable project instance across two Desktops; cross-Desktop work goes through
    Git upstream, a PR, or an explicit assignment.
 3. Is Desktop membership itself a `soil:records` schema, or host policy backed by

@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# Thin host launcher for the Soil playback CLI.
+#
+# The command surface is examples/playback/playback_cli.soil. This script only
+# supplies the deadwax origin, an optional SSH tunnel to a loopback-only
+# deadwax, the optional Spotify bearer token, and the host workspace.
+set -euo pipefail
+
+here=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+root=$(CDPATH= cd -- "$here/../.." && pwd)
+
+SOIL_LANG=${SOIL_LANG:-}
+if [[ -z "$SOIL_LANG" ]]; then
+  if [[ -x "$root/.bin/soil-lang" ]]; then
+    SOIL_LANG="$root/.bin/soil-lang"
+  else
+    SOIL_LANG="$root/target/debug/soil-lang"
+  fi
+fi
+if [[ ! -x "$SOIL_LANG" ]]; then
+  echo "playback: no soil-lang binary at $SOIL_LANG (build soil-lang or set SOIL_LANG)" >&2
+  exit 2
+fi
+
+local_port=${DEADWAX_LOCAL_PORT:-$((20000 + $$ % 20000))}
+deadwax=${DEADWAX_URL:-http://127.0.0.1:6601}
+case "$deadwax" in
+  http://* | https://*) ;;
+  *) deadwax="http://$deadwax" ;;
+esac
+deadwax=${deadwax%/}
+cache=${XDG_CACHE_HOME:-"$HOME/.cache"}/soil/playback
+workspace=${PLAYBACK_WORKSPACE:-"$cache/workspace"}
+records=${PLAYBACK_RECORDS:-"$cache/records"}
+mkdir -p "$workspace" "$records"
+
+if [[ -n "${DEADWAX_SSH:-}" ]]; then
+  if ! curl -fsS --max-time 1 "http://127.0.0.1:$local_port/health" >/dev/null 2>&1; then
+    # Keep the tunnel after this command so the next invocation reuses it.
+    ssh -f -N -o BatchMode=yes -o ConnectTimeout=5 -o ExitOnForwardFailure=yes \
+      -o ServerAliveInterval=5 \
+      -L "$local_port":127.0.0.1:6601 "$DEADWAX_SSH"
+    ready=0
+    for _ in $(seq 1 100); do
+      if curl -fsS --max-time 1 "http://127.0.0.1:$local_port/health" >/dev/null 2>&1; then
+        ready=1
+        break
+      fi
+      sleep 0.1
+    done
+    if [[ $ready -ne 1 ]]; then
+      echo "playback: could not reach deadwax through $DEADWAX_SSH" >&2
+      exit 2
+    fi
+  fi
+  deadwax="http://127.0.0.1:$local_port"
+fi
+
+args=("$@")
+has_source=0
+for arg in "${args[@]}"; do
+  case "$arg" in
+    --source | --source=*) has_source=1 ;;
+  esac
+done
+if [[ $has_source -eq 0 ]]; then
+  args+=(--source "$deadwax")
+fi
+
+allow_args=(--allow "$deadwax")
+credential_args=()
+if [[ -n "${SPOTIFY_TOKEN:-}" ]]; then
+  allow_args+=(--allow "https://api.spotify.com")
+  credential_args=(--bearer-env SPOTIFY_TOKEN)
+fi
+
+cmd=(
+  "$SOIL_LANG"
+  --workspace-root "$workspace"
+  --records-root "$records"
+  --prelude "$root/crates/soil-lang/stdlib/prelude.soil"
+  "${allow_args[@]}"
+  "${credential_args[@]}"
+  "$root/crates/soil-lang/stdlib/cli.soil"
+  "$root/crates/soil-lang/bindings/wasi-cli.soil"
+  "$root/crates/soil-lang/bindings/soil-http.soil"
+  "$root/examples/playback/playback.soil"
+  "$root/examples/playback/playback_cli.soil"
+  -- "${args[@]}"
+)
+exec "${cmd[@]}"

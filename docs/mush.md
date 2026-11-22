@@ -166,9 +166,9 @@ one Desktop. See [attaching a checkout](#attaching-a-checkout).
 `mush desktop list --json` and `mush desktop show ID --json` print the same row
 shape as `mush attach --json`, so a script reads one schema.
 
-### Projects and thread mount roots
+### Projects and session mount roots
 
-A project is a named set of repositories. A thread gets one mount root and one
+A project is a named set of repositories. A session gets one mount root and one
 git worktree per repository:
 
 ```sh
@@ -179,24 +179,24 @@ mush project define fpl-suite \
   --repo ~/src/singularity
 
 mush project add-repo fpl-suite --repo ~/src/theseus --desktop fpl
-mush project checkout fpl-suite --thread auth-refactor --desktop fpl
-mush project status fpl-suite --thread auth-refactor --desktop fpl
-mush project commit fpl-suite --thread auth-refactor --desktop fpl -m "auth: retry"
-mush project push fpl-suite --thread auth-refactor --desktop fpl
+mush project checkout fpl-suite --session auth-refactor --desktop fpl
+mush project status fpl-suite --session auth-refactor --desktop fpl
+mush project commit fpl-suite --session auth-refactor --desktop fpl -m "auth: retry"
+mush project push fpl-suite --session auth-refactor --desktop fpl
 ```
 
 The checkout is idempotent: re-running it reuses existing worktrees and adds any
-repository that was added to the project since the thread started. The mount
+repository that was added to the project since the session started. The mount
 root is:
 
 ```text
-<desktop-root>/threads/<thread>/<project>/
+<desktop-root>/sessions/<session>/<project>/
   <repo>/
   <repo>/
 ```
 
-Subagents of the same thread share that root. Parallel threads get different
-roots and different branches (`soil/<project>/<thread>/<repo>`).
+Subagents of the same session share that root. Parallel sessions get different
+roots and different branches (`soil/<project>/<session>/<repo>`).
 
 `add-repo` is deliberately the only agent-facing mutation. Removing or
 re-pinning a repository is a project edit; an agent may request it, but doing it

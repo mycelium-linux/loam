@@ -1,0 +1,298 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+; Command-line surface for deadwax/MPD and Spotify.
+;
+; The transport and provider semantics live in playback.soil. This file owns
+; argv, source selection, formatting, and exit-worthy errors. It has the same
+; shape as examples/hue/hue_cli.soil and examples/marbles/mb.soil.
+
+(defun playback/cli-spec ()
+  (cli-spec "playback" "deadwax/MPD and Spotify playback" "0.1.0"
+    (list
+      (cli-opt-value "source" "URL" "deadwax base URL (default http://127.0.0.1:6601)")
+      (cli-opt "spotify" "Use Spotify Connect instead of deadwax")
+      (cli-opt-value "device" "ID" "Spotify device id")
+      (cli-opt-value "limit" "N" "Search/track limit (default 20)")
+      (cli-opt "json" "Print raw JSON"))
+    (list
+      (cli-command-entry "health" "Check the deadwax service" nil nil)
+      (cli-command-entry "status" "Current play/pause state" nil nil)
+      (cli-command-entry "now" "Now playing with artist/album" nil nil)
+      (cli-command-entry "queue" "List the current queue" nil nil)
+      (cli-command-entry "playlists" "List playlists" nil nil)
+      (cli-command-entry "tracks" "List tracks" nil nil)
+      (cli-command-entry "search" "Search the catalog" nil
+        (list (cli-arg "query" #t "Search text")))
+      (cli-command-entry "play" "Resume playback" nil nil)
+      (cli-command-entry "pause" "Pause playback" nil nil)
+      (cli-command-entry "toggle" "Toggle playback" nil nil)
+      (cli-command-entry "next" "Next track" nil nil)
+      (cli-command-entry "prev" "Previous track" nil nil)
+      (cli-command-entry "stop" "Stop playback" nil nil)
+      (cli-command-entry "volume" "Set volume 0-100" nil
+        (list (cli-arg "level" #t "Volume level")))
+      (cli-command-entry "seek" "Seek to seconds" nil
+        (list (cli-arg "seconds" #t "Position in seconds")))
+      (cli-command-entry "add" "Append a URI to the queue" nil
+        (list (cli-arg "uri" #t "Track URI")))
+      (cli-command-entry "play-position" "Play a queue position" nil
+        (list (cli-arg "position" #t "Queue position")))
+      (cli-command-entry "playlist" "Play a deadwax playlist" nil
+        (list (cli-arg "user" #t "Playlist owner")
+              (cli-arg "name" #t "Playlist name")))
+      (cli-command-entry "spotify-devices" "List Spotify devices" nil nil)
+      (cli-command-entry "spotify-status" "Spotify player state" nil nil)
+      (cli-command-entry "spotify-play" "Play a Spotify URI" nil
+        (list (cli-arg "uri" #t "Spotify URI or URL")))
+      (cli-command-entry "spotify-pause" "Pause Spotify" nil nil)
+      (cli-command-entry "spotify-next" "Next Spotify track" nil nil)
+      (cli-command-entry "spotify-prev" "Previous Spotify track" nil nil)
+      (cli-command-entry "spotify-volume" "Set Spotify volume 0-100" nil
+        (list (cli-arg "level" #t "Volume percent")))
+      (cli-command-entry "spotify-transfer" "Transfer Spotify playback" nil
+        (list (cli-arg "device" #t "Device id"))))))
+
+(defun playback/cli-json? (result)
+  (not (nil? (cli-result-option result "json"))))
+
+(defun playback/cli-spotify? (result)
+  (not (nil? (cli-result-option result "spotify"))))
+
+(defun playback/cli-source (result)
+  (if (playback/cli-spotify? result)
+      (spotify/source "default" (cli-result-option result "device"))
+      (let ((base (cli-result-option result "source")))
+        (deadwax/source
+          (if (nil? base) "http://127.0.0.1:6601" base)))))
+
+(defun playback/cli-limit (result)
+  (let ((raw (cli-result-option result "limit")))
+    (if (nil? raw)
+        (list 'ok 20)
+        (playback/int raw))))
+
+(defun playback/cli-value (result name)
+  (cli-result-option result name))
+
+(defun playback/cli-or (value fallback)
+  (if (nil? value) fallback value))
+
+(defun playback/cli-state (status)
+  (if (or (field status :playing) (field status :is_playing))
+      "playing"
+      "paused"))
+
+(defun playback/cli-status (result source)
+  (let ((status (playback/status source)))
+    (if (ok? status)
+        (if (playback/cli-json? result)
+            (list 'ok (json-encode (value status)))
+            (let ((status (value status)))
+              (list 'ok
+                (str (playback/cli-state status) "\n"
+                     "title: " (playback/cli-or (field status :title) "-") "\n"
+                     "uri: " (playback/cli-or (field status :uri) "-")))))
+        status)))
+
+(defun playback/cli-now (result source)
+  (let ((snapshot (playback/snapshot source)))
+    (if (ok? snapshot)
+        (if (playback/cli-json? result)
+            (list 'ok (json-encode (value snapshot)))
+            (let ((status (field (value snapshot) :status))
+                  (current (field (value snapshot) :current)))
+              (list 'ok
+                (str (playback/cli-state status) "\n"
+                     "title: " (playback/cli-or (field status :title) "-") "\n"
+                     "artist: " (playback/cli-or (field current :artist) "-") "\n"
+                     "album: " (playback/cli-or (field current :album) "-") "\n"
+                     "uri: " (playback/cli-or (field status :uri) "-")))))
+        snapshot)))
+
+(defun playback/cli-format-item (item)
+  (str (if (field item :current) "*\t" "\t")
+       (playback/cli-or (field item :artist) "-") "\t"
+       (playback/cli-or (field item :title) "-") "\t"
+       (playback/cli-or (field item :uri) "-")))
+
+(defun playback/cli-queue (result source)
+  (let ((queue (deadwax/queue source)))
+    (if (ok? queue)
+        (if (playback/cli-json? result)
+            (list 'ok (json-encode (value queue)))
+            (let ((items (field (value queue) :items)))
+              (if (nil? items)
+                  (list 'ok "queue is empty")
+                  (list 'ok (string-join (map 'playback/cli-format-item items) "\n")))))
+        queue)))
+
+(defun playback/cli-format-playlist (entry)
+  (str (deadwax/playlist-owner entry) "\t"
+       (playback/cli-or (deadwax/playlist-name entry) "-") "\t"
+       (playback/cli-or (deadwax/playlist-kind entry) "-")))
+
+(defun playback/cli-playlists (result source)
+  (let ((playlists (deadwax/playlists source)))
+    (if (ok? playlists)
+        (if (playback/cli-json? result)
+            (list 'ok (json-encode (value playlists)))
+            (list 'ok (string-join (map 'playback/cli-format-playlist (value playlists)) "\n")))
+        playlists)))
+
+(defun playback/cli-format-track (track)
+  (str (playback/cli-or (field track :artist) "-") "\t"
+       (playback/cli-or (field track :title) "-") "\t"
+       (playback/cli-or (field track :uri) "-")))
+
+(defun playback/cli-tracks (result source limit)
+  (let ((tracks (deadwax/tracks source limit)))
+    (if (ok? tracks)
+        (if (playback/cli-json? result)
+            (list 'ok (json-encode (value tracks)))
+            (list 'ok (string-join (map 'playback/cli-format-track (value tracks)) "\n")))
+        tracks)))
+
+(defun playback/cli-search (result source query limit)
+  (let ((tracks (deadwax/search source query limit)))
+    (if (ok? tracks)
+        (if (playback/cli-json? result)
+            (list 'ok (json-encode (value tracks)))
+            (list 'ok (string-join (map 'playback/cli-format-track (value tracks)) "\n")))
+        tracks)))
+
+(defun playback/cli-health (result source)
+  (let ((health (deadwax/health source)))
+    (if (ok? health)
+        (if (playback/cli-json? result)
+            (list 'ok (json-encode (value health)))
+            (list 'ok "ok"))
+        health)))
+
+(defun playback/cli-control (result source verb value)
+  (let ((reply (playback/control source verb value)))
+    (if (ok? reply)
+        (if (playback/cli-json? result)
+            (list 'ok (json-encode (value reply)))
+            (list 'ok (str verb " ok")))
+        reply)))
+
+(defun playback/cli-numbered-control (result source verb raw)
+  (let ((value (playback/int raw)))
+    (if (ok? value)
+        (playback/cli-control result source verb (value value))
+        value)))
+
+(defun playback/cli-playlist (result source user name)
+  (let ((reply (deadwax/control source "play-playlist" (list user name))))
+    (if (ok? reply)
+        (if (playback/cli-json? result)
+            (list 'ok (json-encode (value reply)))
+            (list 'ok (str "playing " user " / " name)))
+        reply)))
+
+(defun playback/cli-spotify-source (result)
+  (spotify/source "default" (cli-result-option result "device")))
+
+(defun playback/cli-format-device (device)
+  (str (playback/cli-or (field device :id) "-") "\t"
+       (playback/cli-or (field device :name) "-") "\t"
+       (playback/cli-or (field device :type) "-") "\t"
+       (if (field device :is_active) "active" "idle")))
+
+(defun playback/cli-spotify-devices (result)
+  (let ((devices (spotify/devices (playback/cli-spotify-source result))))
+    (if (ok? devices)
+        (if (playback/cli-json? result)
+            (list 'ok (json-encode (value devices)))
+            (let ((items (field (value devices) :devices)))
+              (if (nil? items)
+                  (list 'ok "no devices")
+                  (list 'ok
+                    (string-join
+                      (map 'playback/cli-format-device items)
+                      "\n")))))
+        devices)))
+
+(defun playback/cli-spotify-status (result)
+  (let ((status (spotify/status (playback/cli-spotify-source result))))
+    (if (ok? status)
+        (if (playback/cli-json? result)
+            (list 'ok (json-encode (value status)))
+            (let ((status (value status)))
+              (list 'ok
+                (str (playback/cli-or (field status :is_playing) #f) "\n"
+                     "device: " (playback/cli-or (field (field status :device) :name) "-") "\n"
+                     "track: " (playback/cli-or (field (field status :item) :name) "-")))))
+        status)))
+
+(defun playback/cli-spotify-transfer (result device)
+  (let ((reply (spotify/transfer (playback/cli-spotify-source result) device #t)))
+    (if (ok? reply)
+        (list 'ok (str "transferred to " device))
+        reply)))
+
+(defun playback/cli-run (result)
+  (let ((name (field result :name))
+        (args (cli-result-args result))
+        (source (playback/cli-source result))
+        (limit (playback/cli-limit result)))
+    (cond
+      ((= name "health") (playback/cli-health result source))
+      ((= name "status") (playback/cli-status result source))
+      ((= name "now") (playback/cli-now result source))
+      ((= name "queue") (playback/cli-queue result source))
+      ((= name "playlists") (playback/cli-playlists result source))
+      ((= name "tracks")
+        (if (ok? limit)
+            (playback/cli-tracks result source (value limit))
+            limit))
+      ((= name "search")
+        (if (ok? limit)
+            (playback/cli-search result source (first args) (value limit))
+            limit))
+      ((= name "play") (playback/cli-control result source "play" nil))
+      ((= name "pause") (playback/cli-control result source "pause" nil))
+      ((= name "toggle") (playback/cli-control result source "toggle" nil))
+      ((= name "next") (playback/cli-control result source "next" nil))
+      ((= name "prev") (playback/cli-control result source "prev" nil))
+      ((= name "stop") (playback/cli-control result source "stop" nil))
+      ((= name "volume") (playback/cli-numbered-control result source "volume" (first args)))
+      ((= name "seek") (playback/cli-numbered-control result source "seek" (first args)))
+      ((= name "add") (playback/cli-control result source "add" (first args)))
+      ((= name "play-position")
+        (playback/cli-numbered-control result source "play-position" (first args)))
+      ((= name "playlist") (playback/cli-playlist result source (first args) (nth 1 args)))
+      ((= name "spotify-devices") (playback/cli-spotify-devices result))
+      ((= name "spotify-status") (playback/cli-spotify-status result))
+      ((= name "spotify-play")
+        (playback/cli-control result (playback/cli-spotify-source result) "play" (first args)))
+      ((= name "spotify-pause")
+        (playback/cli-control result (playback/cli-spotify-source result) "pause" nil))
+      ((= name "spotify-next")
+        (playback/cli-control result (playback/cli-spotify-source result) "next" nil))
+      ((= name "spotify-prev")
+        (playback/cli-control result (playback/cli-spotify-source result) "prev" nil))
+      ((= name "spotify-volume")
+        (playback/cli-numbered-control result (playback/cli-spotify-source result)
+          "volume" (first args)))
+      ((= name "spotify-transfer")
+        (playback/cli-spotify-transfer result (first args)))
+      (else (list 'err (str "unknown command: " name))))))
+
+(defun playback/cli-main ()
+  (let ((parsed (cli-parse-argv (playback/cli-spec) (cli-args))))
+    (cond
+      ((not (nil? (field parsed :help))) (list 'ok (field parsed :help)))
+      ((not (nil? (field parsed :version))) (list 'ok (field parsed :version)))
+      ((not (nil? (field parsed :error))) (list 'err (field parsed :error)))
+      (else
+        (playback/cli-run (field parsed :ok))))))
+
+(defun playback/fail (message)
+  (eprintln (str "playback: " message))
+  (exit 1))
+
+(defun main ()
+  (let ((reply (playback/cli-main)))
+    (if (ok? reply)
+        (println (value reply))
+        (playback/fail (value reply)))))

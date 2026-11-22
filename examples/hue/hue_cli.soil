@@ -1,0 +1,355 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+; Command-line surface for the Hue façade.
+;
+; `hue.soil` owns the bridge semantics. This file owns argv, room selection,
+; human/JSON formatting, and exit-worthy errors. The native `hue` wrapper
+; resolves the bridge and credential, then calls `hue/cli-main`.
+
+(defun hue/cli-spec ()
+  (cli-spec "hue" "Philips Hue rooms, scenes and moods" "0.1.0"
+    (list
+      (cli-opt-value "bridge" "URL" "Bridge base URL")
+      (cli-opt-value "credential" "HANDLE" "Host credential handle (default: default)")
+      (cli-opt-value "room" "NAME" "Room/group name (case-insensitive)")
+      (cli-opt-value "group" "ID" "Group id, instead of a room name")
+      (cli-opt "json" "Print machine-readable JSON")
+      (cli-opt "dry-run" "Plan but do not write")
+      (cli-opt-value "snapshot-json" "JSON" "Internal: snapshot payload for restore"))
+    (list
+      (cli-command-entry "status" "Show bridge status" nil nil)
+      (cli-command-entry "rooms" "List rooms/groups" nil nil)
+      (cli-command-entry "lights" "List lights, optionally for a room" nil nil)
+      (cli-command-entry "moods" "List built-in moods" nil nil)
+      (cli-command-entry "discover" "List bridges on the LAN" nil nil)
+      (cli-command-entry "on" "Turn a room on" nil nil)
+      (cli-command-entry "off" "Turn a room off" nil nil)
+      (cli-command-entry "toggle" "Invert a room's power state" nil nil)
+      (cli-command-entry "bri" "Set room brightness 0-254" nil
+        (list (cli-arg "level" #t "Brightness 0-254")))
+      (cli-command-entry "scene" "Recall a bridge scene by name" nil
+        (list (cli-arg "name" #t "Scene name")))
+      (cli-command-entry "mood" "Apply a generated mood" nil
+        (list (cli-arg "name" #t "Mood name")))
+      (cli-command-entry "plan" "Print a mood plan without writing" nil
+        (list (cli-arg "name" #t "Mood name")))
+      (cli-command-entry "snapshot" "Print a restorable room snapshot" nil nil)
+      (cli-command-entry "restore" "Restore a snapshot from --snapshot-json" nil nil)
+      (cli-command-entry "pair" "Press the bridge button, then mint a key" nil
+        (list (cli-arg "device" #f "Application device name"))))))
+
+(defun hue/cli-json? (result)
+  (not (nil? (cli-result-option result "json"))))
+
+(defun hue/cli-dry-run? (result)
+  (not (nil? (cli-result-option result "dry-run"))))
+
+;;; `--group ID` wins over `--room NAME`; neither means the all-lights group.
+(defun hue/cli-target (bridge result)
+  (let ((group (cli-result-option result "group"))
+        (room (cli-result-option result "room")))
+    (cond
+      ((not (nil? group))
+        (list 'ok (list (list :id group) (list :name (str "group " group)))))
+      ((not (nil? room)) (hue/room bridge room))
+      (else
+        (list 'ok (list (list :id "0") (list :name "all lights")))))))
+
+(defun hue/cli-digit (character)
+  (cond
+    ((= character "0") 0)
+    ((= character "1") 1)
+    ((= character "2") 2)
+    ((= character "3") 3)
+    ((= character "4") 4)
+    ((= character "5") 5)
+    ((= character "6") 6)
+    ((= character "7") 7)
+    ((= character "8") 8)
+    ((= character "9") 9)
+    (else nil)))
+
+(defun hue/cli-digits (characters value)
+  (if (nil? characters)
+      (list 'ok value)
+      (let ((digit (hue/cli-digit (first characters))))
+        (if (nil? digit)
+            (list 'err (str "bri: not a number: " (string-join characters "")))
+            (hue/cli-digits (rest characters) (+ (* value 10) digit))))))
+
+(defun hue/cli-int (text)
+  (let ((characters (string-chars text)))
+    (if (nil? characters)
+        (list 'err "bri: expected 0-254")
+        (hue/cli-digits characters 0))))
+
+(defun hue/cli-format-group (entry)
+  (let ((group (nth 1 entry)))
+    (str (hue/key-text (first entry)) "\t"
+         (field group :name) "\t"
+         (length (field group :lights)) " lights")))
+
+(defun hue/cli-format-light (light)
+  (let ((state (field light :state)))
+    (str (field light :id) "\t"
+         (field light :name) "\t"
+         (if (field state :on) "on" "off")
+         "\tbri " (field state :bri)
+         "\t" (field state :colormode))))
+
+(defun hue/cli-light-record (entry)
+  (cons (list :id (hue/key-text (first entry))) (nth 1 entry)))
+
+(defun hue/cli-all-lights (bridge)
+  (let ((lights (hue/lights bridge)))
+    (if (ok? lights)
+        (list 'ok (map 'hue/cli-light-record (value lights)))
+        lights)))
+
+(defun hue/cli-lights (bridge result)
+  (let ((target (hue/cli-target bridge result)))
+    (if (ok? target)
+        (let ((room-id (field (value target) :id)))
+          (let ((lights (if (= room-id "0")
+                            (hue/cli-all-lights bridge)
+                            (hue/room-lights bridge (value target)))))
+            (if (ok? lights)
+                (if (hue/cli-json? result)
+                    (list 'ok (json-encode (value lights)))
+                    (list 'ok (string-join (map 'hue/cli-format-light (value lights)) "\n")))
+                lights)))
+        target)))
+
+(defun hue/cli-status (bridge result)
+  (let ((status (hue/status bridge)))
+    (if (ok? status)
+        (if (hue/cli-json? result)
+            (list 'ok (json-encode (value status)))
+            (let ((config (field (value status) :config)))
+              (list 'ok
+                (str "bridge: " (field config :name) "\n"
+                     "lights: " (length (field (value status) :lights)) "\n"
+                     "groups: " (length (field (value status) :groups))))))
+        status)))
+
+(defun hue/cli-rooms (bridge result)
+  (let ((groups (hue/groups bridge)))
+    (if (ok? groups)
+        (if (hue/cli-json? result)
+            (list 'ok (json-encode (value groups)))
+            (list 'ok (string-join (map 'hue/cli-format-group (value groups)) "\n")))
+        groups)))
+
+(defun hue/cli-format-plan (entry)
+  (str (field entry :id) "\t"
+       (field entry :name) "\tbri " (field entry :bri)
+       "\txy (" (nth 0 (field entry :xy)) ", " (nth 1 (field entry :xy)) ")"))
+
+(defun hue/cli-plan (bridge result mood)
+  (let ((target (hue/cli-target bridge result)))
+    (if (ok? target)
+        (let ((plan (hue/atmosphere-plan bridge (field (value target) :id) mood nil)))
+          (if (ok? plan)
+              (if (or (hue/cli-json? result) (hue/cli-dry-run? result))
+                  (list 'ok (json-encode (value plan)))
+                  (list 'ok (string-join (map 'hue/cli-format-plan (value plan)) "\n")))
+              plan))
+        target)))
+
+(defun hue/cli-mood (bridge result mood)
+  (let ((target (hue/cli-target bridge result)))
+    (if (ok? target)
+        (let ((plan (hue/atmosphere-plan bridge (field (value target) :id) mood nil)))
+          (if (ok? plan)
+              (if (hue/cli-dry-run? result)
+                  (list 'ok (json-encode (value plan)))
+                  (let ((applied (hue/apply-plan-verified bridge (value plan))))
+                    (if (ok? applied)
+                        (if (hue/cli-json? result)
+                            (list 'ok
+                              (json-encode
+                                (list
+                                  (list :room (field (value target) :id))
+                                  (list :room-name (field (value target) :name))
+                                  (list :mood mood)
+                                  (list :plan (value plan))
+                                  (list :replies (value applied)))))
+                            (list 'ok
+                              (str "applied " mood " to "
+                                   (field (value target) :name)
+                                   " (" (length (value plan)) " lights)")))
+                        applied)))
+              plan))
+        target)))
+
+(defun hue/cli-power (bridge result on)
+  (let ((target (hue/cli-target bridge result)))
+    (if (ok? target)
+        (let ((reply (hue/set-power bridge
+                      (hue/group (field (value target) :id)) on)))
+          (if (ok? reply)
+              (list 'ok
+                (str (field (value target) :name) ": "
+                     (if on "on" "off")))
+              reply))
+        target)))
+
+(defun hue/cli-toggle (bridge result)
+  (let ((target (hue/cli-target bridge result)))
+    (if (ok? target)
+        (let ((reply (hue/toggle bridge (hue/group (field (value target) :id)))))
+          (if (ok? reply)
+              (list 'ok (str (field (value target) :name) ": toggled"))
+              reply))
+        target)))
+
+(defun hue/cli-bri (bridge result level)
+  (let ((target (hue/cli-target bridge result)))
+    (if (ok? target)
+        (let ((reply (hue/bri bridge
+                      (hue/group (field (value target) :id)) level)))
+          (if (ok? reply)
+              (list 'ok
+                (str (field (value target) :name) ": brightness " level))
+              reply))
+        target)))
+
+(defun hue/cli-scene (bridge result name)
+  (let ((target (hue/cli-target bridge result)))
+    (if (ok? target)
+        (let ((reply (hue/scene bridge
+                      (hue/group (field (value target) :id)) name)))
+          (if (ok? reply)
+              (list 'ok
+                (str (field (value target) :name) ": scene " name))
+              reply))
+        target)))
+
+(defun hue/cli-snapshot (bridge result)
+  (let ((target (hue/cli-target bridge result)))
+    (if (ok? target)
+        (let ((snapshot (hue/snapshot-room bridge (value target))))
+          (if (ok? snapshot)
+              (list 'ok (json-encode (value snapshot)))
+              snapshot))
+        target)))
+
+(defun hue/cli-restore (bridge result)
+  (let ((json (cli-result-option result "snapshot-json")))
+    (if (nil? json)
+        (list 'err "restore: pass a snapshot file or pipe one in")
+        (let ((snapshot (json-decode json)))
+          (let ((reply (hue/restore-snapshot bridge snapshot)))
+            (if (ok? reply)
+                (list 'ok
+                  (str "restored " (length (field snapshot :lights)) " lights"))
+                reply))))))
+
+(defun hue/cli-pair (bridge result)
+  (let ((device (if (nil? (first (cli-result-args result)))
+                    "soil#hue"
+                    (first (cli-result-args result)))))
+    (let ((reply (hue/pair bridge device)))
+      (if (ok? reply)
+          (if (hue/cli-json? result)
+              (list 'ok (json-encode (value reply)))
+              (let ((success (field (first (value reply)) :success)))
+                (if (nil? success)
+                    (list 'err "bridge: pairing failed")
+                    (let ((key (field success :username)))
+                      (list 'ok
+                        (str "paired " device "\n"
+                             "application key: " key "\n"
+                             "store it in Geode as geode://home/hue/bridge"))))))
+          reply))))
+
+(defun hue/cli-format-bridge (bridge)
+  (str (field bridge :id) "\t" (field bridge :internalipaddress)))
+
+(defun hue/cli-discover (result)
+  (let ((bridges (hue/discover)))
+    (if (ok? bridges)
+        (if (hue/cli-json? result)
+            (list 'ok (json-encode (value bridges)))
+            (list 'ok (string-join (map 'hue/cli-format-bridge (value bridges)) "\n")))
+        bridges)))
+
+(defun hue/cli-run (result bridge)
+  (let ((name (field result :name))
+        (args (cli-result-args result)))
+    (cond
+      ((= name "status") (hue/cli-status bridge result))
+      ((= name "rooms") (hue/cli-rooms bridge result))
+      ((= name "lights") (hue/cli-lights bridge result))
+      ((= name "moods")
+        (if (hue/cli-json? result)
+            (list 'ok (json-encode (hue/mood-names)))
+            (list 'ok (string-join (hue/mood-names) "\n"))))
+      ((= name "discover") (hue/cli-discover result))
+      ((= name "on") (hue/cli-power bridge result #t))
+      ((= name "off") (hue/cli-power bridge result #f))
+      ((= name "toggle") (hue/cli-toggle bridge result))
+      ((= name "bri")
+        (let ((level (hue/cli-int (first args))))
+          (if (ok? level)
+              (hue/cli-bri bridge result (value level))
+              level)))
+      ((= name "scene") (hue/cli-scene bridge result (first args)))
+      ((= name "mood") (hue/cli-mood bridge result (first args)))
+      ((= name "plan") (hue/cli-plan bridge result (first args)))
+      ((= name "snapshot") (hue/cli-snapshot bridge result))
+      ((= name "restore") (hue/cli-restore bridge result))
+      ((= name "pair") (hue/cli-pair bridge result))
+      (else (list 'err (str "unknown command: " name))))))
+
+(defun hue/cli-main (base credential)
+  (let ((parsed (cli-parse-argv (hue/cli-spec) (cli-args))))
+    (cond
+      ((not (nil? (field parsed :help))) (list 'ok (field parsed :help)))
+      ((not (nil? (field parsed :version))) (list 'ok (field parsed :version)))
+      ((not (nil? (field parsed :error))) (list 'err (field parsed :error)))
+      (else
+        (let ((result (field parsed :ok)))
+          (let ((bridge
+                  (if (or (nil? credential) (= credential ""))
+                      (hue/bridge base nil)
+                      (hue/bridge base credential))))
+            (hue/cli-run result bridge)))))))
+
+
+(defun hue/fail (message)
+  (eprintln (str "hue: " message))
+  (exit 1))
+
+(defun hue/cli-parse ()
+  (cli-parse-argv (hue/cli-spec) (cli-args)))
+
+(defun hue/cli-resolve-credential (result)
+  (if (= (field result :name) "pair")
+      nil
+      (let ((credential (cli-result-option result "credential")))
+        (if (nil? credential) "default" credential))))
+
+(defun hue/cli-print (result bridge)
+  (let ((reply (hue/cli-run result bridge)))
+    (if (ok? reply)
+        (println (value reply))
+        (hue/fail (value reply)))))
+
+;;; The wasm/native command entry point. `mb.soil` uses the same shape: parse
+;;; `wasi:cli` argv, dispatch, and exit non-zero on a bridge or usage error.
+(defun main ()
+  (let ((parsed (hue/cli-parse)))
+    (cond
+      ((not (nil? (field parsed :help))) (println (field parsed :help)))
+      ((not (nil? (field parsed :version))) (println (field parsed :version)))
+      ((not (nil? (field parsed :error))) (hue/fail (field parsed :error)))
+      (else
+        (let ((result (field parsed :ok)))
+          (let ((base (cli-result-option result "bridge")))
+            (if (nil? base)
+                (if (or (= (field result :name) "discover")
+                        (= (field result :name) "moods"))
+                    (hue/cli-print result (hue/bridge "http://127.0.0.1" nil))
+                    (hue/fail "--bridge is required (the launcher injects it from HUE_BRIDGE)"))
+                (hue/cli-print result
+                  (hue/bridge base (hue/cli-resolve-credential result))))))))))

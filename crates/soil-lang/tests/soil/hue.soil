@@ -107,3 +107,40 @@
 (defun test/hue-bri-encodes-as-an-integer ()
   (let ((body (json-encode (list (list :bri (hue/clamp-bri 160.4))))))
     (= body "{\"bri\":160}")))
+
+(defun test/hue-key-text-normalises-json-keys ()
+  (and
+    (= (hue/key-text :81) "81")
+    (= (hue/key-text "81") "81")
+    (= (hue/key-text :living-room) "living-room")))
+
+(defun test/hue-find-group-is-case-insensitive ()
+  (let ((entries
+          (list
+            (list "3" (list (list :name "Window Lamp")))
+            (list "81" (list (list :name "Living room"))))))
+    (and
+      (= (first (hue/find-group entries "living room")) "81")
+      (nil? (hue/find-group entries "kitchen")))))
+
+(defun test/hue-replies-ok-rejects-empty-success ()
+  (and
+    (hue/replies-ok? (list (list 'ok (list (list :success (list))))))
+    (not (hue/replies-ok? (list (list 'ok nil))))
+    (not (hue/replies-ok? (list (list 'err "bridge: no"))))
+    (not (hue/replies-ok? nil))))
+
+(defun test/hue-cli-int-parses-and-rejects ()
+  (and
+    (= (value (hue/cli-int "180")) 180)
+    (= (value (hue/cli-int "0")) 0)
+    (not (ok? (hue/cli-int "18x")))))
+
+(defun test/hue-cli-spec-parses-room ()
+  (let ((parsed (cli-parse-argv (hue/cli-spec)
+                  (list "mood" "sunset" "--room" "Living room"))))
+    (and
+      (cli-ok? parsed)
+      (= (field (field parsed :ok) :name) "mood")
+      (= (cli-result-option (field parsed :ok) "room") "Living room")
+      (= (first (cli-result-args (field parsed :ok))) "sunset"))))

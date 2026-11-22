@@ -94,3 +94,10 @@
     (and (= (field spec :name) "x")
          (= (field (first (field spec :commands)) :name) "go")
          (= (field (first (field spec :options)) :long) "json"))))
+
+(defun test/cli-global-option-before-command ()
+  (let ((result (cli-parse-argv (test/cli-spec)
+                  (list "--project" "acme" "ready"))))
+    (and
+      (cli-ok? result)
+      (= (cli-result-option (field result :ok) "project") "acme"))))

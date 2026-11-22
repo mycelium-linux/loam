@@ -1,0 +1,88 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+; A small home façade over the Hue and playback adapters.
+;
+; The point is one bounded snapshot and one command vocabulary, not a second
+; device model. A UI renders `home/snapshot`; an automation sends
+; `home/command`. Each adapter can fail independently, so a dead deadwax does
+; not blank the lights and a dead bridge does not blank the player.
+
+(defun home/config (hue-base credential room deadwax-base)
+  (list
+    (list :hue-base hue-base)
+    (list :hue-credential credential)
+    (list :room room)
+    (list :deadwax-base deadwax-base)))
+
+(defun home/bridge (config)
+  (hue/bridge
+    (field config :hue-base)
+    (field config :hue-credential)))
+
+(defun home/deadwax (config)
+  (deadwax/source (field config :deadwax-base)))
+
+(defun home/room-record (config)
+  (hue/room (home/bridge config) (field config :room)))
+
+(defun home/room-section (config)
+  (let ((room (home/room-record config)))
+    (if (ok? room)
+        (let ((lights (hue/room-lights (home/bridge config) (value room))))
+          (if (ok? lights)
+              (list
+                (list :room (value room))
+                (list :lights (value lights)))
+              (list
+                (list :room (value room))
+                (list :error (value lights)))))
+        (list (list :error (value room))))))
+
+(defun home/media-section (config)
+  (let ((snapshot (deadwax/snapshot (home/deadwax config))))
+    (if (ok? snapshot)
+        (value snapshot)
+        (list (list :error (value snapshot))))))
+
+;;; A camera adapter is intentionally absent until the NVR path is reachable.
+;;; The card is still in the snapshot so the dashboard can say so honestly.
+(defun home/cameras (config)
+  (let ((cameras (field config :cameras)))
+    (if (nil? cameras)
+        (list
+          (list
+            (list :name "Cameras")
+            (list :status "unavailable")
+            (list :detail "no camera adapter configured")))
+        cameras)))
+
+(defun home/snapshot (config)
+  (list
+    (list :schema "home.snapshot/1")
+    (list :room (home/room-section config))
+    (list :media (home/media-section config))
+    (list :cameras (home/cameras config))))
+
+(defun home/command (config command)
+  (let ((kind (field command :kind)))
+    (cond
+      ((= kind "mood")
+        (let ((room (home/room-record config)))
+          (if (ok? room)
+              (hue/apply-room-mood
+                (home/bridge config)
+                (value room)
+                (field command :mood)
+                (field command :layout))
+              room)))
+      ((= kind "media")
+        (playback/control
+          (home/deadwax config)
+          (field command :verb)
+          (field command :value)))
+      ((= kind "playlist")
+        (deadwax/control
+          (home/deadwax config)
+          "play-playlist"
+          (list (field command :user) (field command :name))))
+      (else
+        (list 'err (str "home: unknown command " kind))))))

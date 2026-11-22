@@ -87,6 +87,75 @@ fn native_http_substitutes_the_path_credential_and_decodes_json() {
     server.join().unwrap();
 }
 
+#[test]
+fn native_http_nil_credential_is_not_a_handle() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (tx, rx) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+            let read = stream.read(&mut buffer).unwrap();
+            if read == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..read]);
+        }
+        tx.send(String::from_utf8_lossy(&request).into_owned())
+            .unwrap();
+        let body = br#"{"ok":true}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            body.len()
+        )
+        .unwrap();
+        stream.write_all(body).unwrap();
+    });
+
+    let root = tempfile::tempdir().unwrap();
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    // A configured path credential must not turn a nil request credential into
+    // the literal handle "nil".
+    let host = NativeHost::open(&workspace, root.path(), "soil")
+        .unwrap()
+        .with_http(vec![format!("http://{address}")], Some("secret".into()))
+        .unwrap();
+    let mut runtime = Runtime::new(Box::new(host));
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    runtime.load_file(dir.join("stdlib/prelude.soil")).unwrap();
+    runtime
+        .load_file(dir.join("bindings/soil-http.soil"))
+        .unwrap();
+    let source = r#"
+(defun test/fetch ()
+  (let ((response
+          (soil:http/fetch
+            (list
+              (list :url "http://__ORIGIN__/public")
+              (list :method "get")
+              (list :headers nil)
+              (list :body nil)
+              (list :credential nil)
+              (list :max-bytes 4096)
+              (list :timeout-ms 5000)))))
+    (and
+      (ok? response)
+      (= (field (value response) :status) 200))))
+"#
+    .replace("__ORIGIN__", &address.to_string());
+    runtime.load(&source).unwrap();
+
+    assert_eq!(runtime.call("test/fetch", &[]).unwrap(), Value::Bool(true));
+    let request = rx.recv().unwrap();
+    assert!(request.starts_with("GET /public HTTP/1.1"), "{request}");
+    assert!(!request.contains("secret"), "{request}");
+    server.join().unwrap();
+}
+
 #[cfg(unix)]
 #[test]
 fn native_http_leases_the_path_credential_from_geode() {
