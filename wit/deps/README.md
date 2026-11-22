@@ -1,12 +1,12 @@
 # Vendored WIT dependencies
 
-These packages are upstream, not Soil contracts, and are not reviewed by
-`soil-abi`. They are vendored here so the canonical tree resolves as one graph
-when `soil-sdk-lua` generates bindings.
+These packages are upstream, not loam contracts. They are vendored so a
+contract in this tree resolves as one WIT graph.
 
-| Package | Source copy |
+| Package | Why it is here |
 |---|---|
-| `wasi:webgpu@0.3.0-rc.2` | `crates/soil-webgpu/wit/deps/wasi-webgpu-0.3.0-rc.2/` |
+| `wasi:webgpu@0.3.0-rc.2` | dependency of the `soil:present` surface contract |
 
-Keep each copy byte-identical to the host crate that consumes it. A host that
-needs a different upstream version should update both copies in the same change.
+Keep the vendored package byte-identical to the upstream release named in the
+path. A host that consumes a different version updates the copy and the contract
+in the same change.

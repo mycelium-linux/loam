@@ -1,37 +1,9 @@
 target/
-
-# Pinned native toolchains fetched by scripts/bootstrap-toolchain.sh.
 .toolchain/
+.worktrees/
+.bin/
+.DS_Store
 *.wasm
 *.component.wasm
-.worktrees/
-
-# Checked-in Mush Spore component.
-!spores/mush/module.wasm
-
-# Checked-in media/surface ABI fixture Spores.
-!spores/media-probe/module.wasm
-!spores/surface-probe/module.wasm
-
-# Checked-in CRM and Contacts Spore components.
-!spores/crm/module.wasm
-!spores/contacts/module.wasm
-
-# Checked-in WebGPU component fixture for the ignored GPU test.
-!crates/soil-webgpu/fixtures/hello-compute.wasm
-
-# Checked-in audio component fixture for the ignored device test.
-!crates/wasi-audio-wasmtime/fixtures/tone.wasm
-
-# Checked-in wgpu 29 component fixture for the ignored GPU test.
-!crates/soil-webgpu/fixtures/wgpu-compute.wasm
-
-# Checked-in wgpu 29 Canvas presentation fixture.
-!crates/soil-webgpu/fixtures/wgpu-test.wasm
-
-# Checked-in cpal threaded process fixture.
-!crates/soil-process/fixtures/cpal-tone.wasm
-
-
-# Local frozen binaries (cargo freeze)
-.bin/
+# The audio fixture is checked in for the native sink test.
+!crates/loam-audio/fixtures/tone.wasm

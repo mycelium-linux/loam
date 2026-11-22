@@ -1,6 +1,0 @@
-package soil:canvas-actions-host@0.1.0;
-
-world actions-guest {
-  import fungos:actions/catalog@1.0.0;
-  export run: func() -> result<u32, string>;
-}

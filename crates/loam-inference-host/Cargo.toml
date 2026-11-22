@@ -1,0 +1,25 @@
+[package]
+name = "loam-inference-host"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "soil_inference_host"
+
+[dependencies]
+soil-codec = { package = "loam-codec", path = "../loam-codec" }
+anyhow = "1"
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+soil-inference = { package = "loam-inference", path = "../loam-inference" }
+soil-scrub = { package = "loam-scrub", path = "../loam-scrub" }
+ureq = { version = "2", features = ["json"] }
+wasmtime = { version = "50", features = ["anyhow"] }
+
+[dev-dependencies]
+tempfile = "3"
+tiny_http = "0.12"

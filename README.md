@@ -1,306 +1,133 @@
-# Soil
+# loam
 
-**Soil is the WASM runtime for fungOS apps.** Applications that run on Soil are
-called **Spores**: a Spore is a signed manifest (module CID, capabilities, target,
-engine version) plus its module bytes. Distribution is planned as the **Spore
-Store** — publish by CID, resolve by CID + target, revoke, never re-sign.
+**loam is the native runtime for Soil components.**
 
-Status: **early.** The full runtime host is not implemented; the first
-capability host (BLE) and one real Spore do run. Nothing here is a shipped
-product surface yet. Canonical capability contracts for `soil:view`,
-`soil:time`, `soil:storage`, `soil:ble` and `soil:canvas` live in [`wit/`](wit)
-and are enforced by `crates/soil-abi`. Canvas is the cross-platform owner;
-the spore-facing half is frozen as `soil:surface@1.1.0` in the spores repo, with
-Canvas's own crates still on `soil:canvas@1.0.0`. The broader design record lives in the `mycelium`
-repository (`docs/soil-capabilities.md`, PR pending) and covers the remaining
-capability boundary (`soil:gpu`, `soil:audio`, `soil:stream`),
-signed-Spore verification, and the target matrix (macOS, Linux, Android/Fire TV,
-CAT S22; tvOS is AOT-only because it forbids JIT).
+It is the host side of the Soil system:
 
-The first concrete workload is the [Viewer Spore](docs/viewer-spore.md): one
-presentation viewer for web, signed Spores and retained scenes, with normalized
-remote actions and bounded host capture. It is designed for the existing Canvas
-Fire TV app first, then the extracted Soil runtime.
+```text
+soil   the language, tools and Spores
+loam   the native runtime that runs them
+```
 
-A second spike is the [Feeds Spore](docs/feeds-spore.md): a reader that consumes
-RSS/Atom items from `soil:records`, keeps its private settings in
-`soil:appdata`, and leaves fetching to a host-side poller with a dotfile feed
-list.
+A Soil program compiles to a WebAssembly component. `loam` executes that component, provides the host capabilities it was granted, and enforces the signed grant boundary.
 
-Spores do not import Unibus or Iroh. The host owns the shared
-`unibus/peer/1` session, and application sync protocols are message kinds on
-that session. The Iroh listener/router lives in `crates/soil-sync-host`; a real
-encrypted loopback test syncs records through it. See
-[Shared peer sync](docs/peer-sync.md).
+There is one command:
 
-Principles:
+```sh
+loam run NAME [ARGS...]
+```
 
-- **No ambient authority.** A Spore runs against exactly the imports its signed
-  manifest was granted; there is no filesystem, network, clock or device access
-  beyond that.
-- **Transport in Soil, protocol in the Spore.** Radios and GPUs are host
-  capabilities; wire formats and state machines ship as `.wasm`.
-- **Honest failure.** A rejected or unverifiable Spore fails loudly with a named
-  reason, never silently degrades.
+`loam` is not the compiler, the REPL, the formatter, the LSP, the package authoring tool, or the UI framework. Those live in the Soil repository.
 
-## Soil Lisp
+## What belongs here
 
-The interpreter, reader, and stdlib live in `crates/soil-lang`. Performance
-counters and timing helpers are documented in
-[`docs/soil-lisp-perf.md`](docs/soil-lisp-perf.md).
+First-party runtime capabilities:
 
-## Capability contracts
-
-| Package | Grant | Status |
+| Capability | WIT | Status |
 |---|---|---|
-| [`soil:principal@0.1.0`](wit/soil-principal.wit) | `soil:principal` | host-attested Mycelium/OIDC projection; actor, device, teams, roles |
-| [`soil:view@1.0.0`](wit/soil-view.wit) | `soil:view`, optional `soil:view.capture` | WIT + Viewer state machine; host pending |
-| [`soil:time@1.1.0`](wit/soil-time.wit) | `soil:time` | WIT + monotonic/wall clocks and host ticks |
-| [`soil:storage@1.0.0`](wit/soil-storage.wit) | `soil:storage.read`, optional `soil:storage.write` | WIT; host pending |
-| [`soil:appdata@1.0.0`](wit/soil-appdata.wit) | `soil:appdata` | WIT + guest SDK + records-backed host |
-| [`soil:records@0.1.0`](wit/soil-records.wit) | `soil:records` read/write/sync | WIT + generic/contacts host + guest SDK |
-| [`soil:http@0.1.0`](wit/soil-http.wit) | `soil:http` | WIT + bounded host + direct transport proof |
-| [`soil:index@1.1.0`](wit/soil-index.wit) | `soil:index` | derived browse/search + explicit KNN; fast direct-child traversal |
-| [`soil:vfs@1.0.0`](wit/soil-vfs.wit) | `soil:vfs` | read-only workspace namespace |
-| [`soil:streams@0.1.0`](wit/soil-stream.wit) | `soil:stream` | host-issued WSS/Iroh/pipe byte sessions; `accept` is a poll, `read` is bounded |
-| [`soil:vfs-mut@0.1.0`](wit/soil-vfs-mut.wit) | `soil:vfs-mut` | separate write/mkdir/rmdir/rename grant; streaming writer for uploads |
-| [`soil:vfs-cid@0.1.0`](wit/soil-vfs-cid.wit) | `soil:vfs-cid` | content-id lookup inside the workspace namespace |
-| [`soil:git@0.1.0`](wit/soil-git.wit) | `soil:git` | repository status for a granted workspace path |
-| [`soil:creds@1.0.0`](wit/soil-creds.wit) | `soil:creds` | host-held signing and verification; no secret export |
-| [`soil:unibus@0.1.0`](wit/soil-unibus.wit) | `soil:unibus` observe/publish | bounded poll/publish over the host-owned bus |
-| [`soil:media@0.1.0`](wit/soil-media.wit) | `soil:media`, optional `soil:media-encoded` | host playback, encoded chunks, bounded image readback |
-| [`soil:surface-import@0.1.0`](wit/soil-surface-import.wit) | `soil:surface-import` | host-owned imported surfaces, damage events, normalized input |
-| [`soil:inference@0.3.0`](wit/soil-inference.wit) | `soil:inference` | WIT + models, tools, completion, embeddings, SSE stream resource |
-| [`soil:search@0.6.0`](wit/soil-search.wit) | `soil:search` | WIT + files/records/graph host composition + host-local application inventory + typed `@` mention resolver |
-| [`soil:spore@0.3.0`](wit/soil-spore.wit) | `soil:spore.catalog`, `soil:spore.launch` | installed-Spore catalog and host-owned launch; listing, running and install are separate intents |
-| [`soil:graph@0.1.0`](wit/soil-graph.wit) | `soil:graph` | read-only edge/reference queries over records |
-| [`soil:input@1.0.0`](wit/soil-input.wit) | — | shared normalized input types for Canvas, Terminal and imported surfaces |
-| [`soil:notify@1.1.0`](wit/soil-notify.wit) | `soil:notify`, `soil:notify/ringer` | WIT + host broker + notify Spore; ringer is an interface, not a package |
-| [`soil:agents@0.1.0`](wit/soil-agents.wit) | `soil:agents.observe`, `soil:agents.control` | WIT + fixture host; Operator and Pi adapters next |
-| [`fungos:actions@1.0.0`](wit/fungos-actions.wit) | exact action id/version grants | granted catalog + bounded invoke; Canvas uses the catalog projection |
-| [`soil:device@0.1.0`](wit/soil-device.wit) | `soil:device` | semantic battery/estimate/lid contracts; runtime uses core-Wasm lowering |
-| [`soil:ble@1.2.0`](wit/soil-ble.wit) | `soil:ble.observe`, `soil:ble.connect`, `soil:ble.write` | WIT + host + COLMI ring Spore |
-| [`soil:canvas@1.0.0`](wit/soil-canvas.wit) | `soil:canvas` | WIT + input normalizer + S22 runtime + Android JNI |
-| [`soil:scene@1.0.0`](wit/soil-scene.wit) | link `soil:scene` | scene payload negotiation: `supports` and `budget` |
-| [`soil:present@0.1.0`](wit/soil-present.wit) | link `soil:present` | texture/RGBA delivery for component and core-Wasm guests |
-| [`soil:terminal@0.1.0`](wit/soil-terminal.wit) | `soil:terminal` | host-rendered terminal surface; `terminal-host` |
-| [`soil:terminal-screen@0.1.0`](wit/soil-terminal-screen.wit) | `soil:terminal-screen` | bounded live terminal grid; the host owns the pty |
-| [`soil:desktops@0.1.0`](wit/soil-desktops.wit) | `soil:desktops` | which Desktops a window may bind to; no host paths |
-| [`soil:worktrees@0.1.0`](wit/soil-worktrees.wit) | `soil:worktrees` | checkouts a Desktop knows; read-only rows |
-| [`soil:metrics@0.1.0`](wit/soil-metrics.wit) | `soil:metrics` | one host registry per Spore, rendered as Prometheus text |
-| [`soil:net@0.1.0`](wit/soil-net.wit) | `soil:net` | bounded name resolution and TCP reachability |
-| [`soil:mycelium@0.1.0`](wit/soil-mycelium.wit) | `soil:mycelium` | directory and host-owned SSH/PTY session |
-| [`fungos:mycelium@0.1.0`](wit/fungos-mycelium.wit) | `fungos:mycelium.pulse` | Pulse control-plane bridge to myceliumd; host pending |
-| [`fungos:http-context@0.1.0`](wit/fungos-http-context.wit) | link `fungos:http-context` | host-attested invocation context for `wasi:http` handlers |
-| [`fungos:webhooks@0.1.0`](wit/fungos-webhooks.wit) | `fungos:webhooks.admin` | hook administration; the secret crosses the boundary once |
-| [`fungos:terminal-spore@0.1.0`](wit/terminal-spore.wit) | — | host world for the terminal Spore |
-| [`wasi:webgpu@0.3.0-rc.2`](wit/deps/wasi-webgpu-0.3.0-rc.2/package.wit) | link `wasi:webgpu` | upstream WIT + host + compute fixture |
-| [`wasi:audio@0.1.0`](wit/wasi-audio.wit) | link `wasi:audio` | draft WIT + cpal host + tone fixture |
+| Workspace namespace | `soil:vfs` | native |
+| Workspace mutation | `soil:vfs-mut` | native |
+| Durable records | `soil:records` | native |
+| Host event bus | `soil:unibus` | native |
+| Surface handoff | `soil:present` | contract |
+| Identity | `soil:principal` | native |
+| Host-held credentials | `soil:creds` | native |
+| Derived VFS index | `soil:index` | native |
 
-`cargo test -p soil-abi` parses every canonical package and asserts its reviewed
-name, interface and functions, so an accidental ABI change fails the build. See
-[`wit/README.md`](wit/README.md) for the canonical/contract/deferred split.
+First-party native plugins:
 
-Battery, estimate, lid and Canvas animation are semantic WIT but are lowered
-through a bounded core-Wasm ABI by the S22 runtime. See
-[`docs/abi-core-wasm.md`](docs/abi-core-wasm.md).
+| Capability | Crates | Status |
+|---|---|---|
+| BLE | `loam-ble-api`, `loam-ble-host`, `loam-ble-sim` | native |
+| Audio | `loam-audio` | native |
+| Codec | `loam-codec` | native |
+| Inference | `loam-inference`, `loam-inference-host` | native |
+| Text scrubbing | `loam-scrub` | internal to inference |
 
-## One runner
+The runtime also provides WASI p2 and `wasi:http` through Wasmtime:
 
-`soil` is one host and one binary. A Spore can run as a command, an HTTP
-service, a window or a browser bridge; the manifest's grants decide what it may
-call, not which executable started it.
-
-```sh
-soil spore run ./spore --mode command -- ingest --event '<json>'
-soil spore run ./spore --mode http
-soil spore run ./spore --mode ui
-soil spore run ./spore --mode web
+```text
+wasi:cli
+wasi:clocks
+wasi:filesystem
+wasi:io
+wasi:random
+wasi:sockets
+wasi:http
 ```
 
-The command path links VFS, VFS mutation, the derived index, records, Unibus,
-inference, HTTP, time and credentials in the same `WasiHost`. A Spore that
-imports an interface it was not granted still fails; linking is the host
-offering, grants are the Spore's authority.
+## What does not belong here
 
-See [docs/soil-shell.md](docs/soil-shell.md) for the modes and the host
-environment.
-
-The first host-backed capability is BLE: [`crates/soil-ble-host`](crates/soil-ble-host)
-runs the [COLMI ring Spore](https://github.com/ajmwagar/spores/tree/main/spores/colmi-ring)
-against a real radio on desktop. `SOIL_BLE_SIM=1` swaps the radio for
-[`crates/soil-ble-sim`](crates/soil-ble-sim), a deterministic virtual
-PineTime/Ring/OMI GATT backend with scripted faults and golden replays.
-[`crates/soil-dev-host`](crates/soil-dev-host) composes BLE with Records, an
-in-memory Unibus, and monotonic time so the first device Spores can run end to
-end on a laptop before the S22/fungOS-mobile radio path is ready.
-
-Canvas is the cross-platform owner; Spores never submit UI trees.
-[`crates/soil-runtime`](crates/soil-runtime) is the S22 reference host (wasmtime
-core runner, Canvas/battery/lid/estimate capabilities), and
-[`crates/soil-android`](crates/soil-android) is the JNI bridge used by the Canvas
-Android app. The portable
-WebGPU host is [`crates/soil-webgpu`](crates/soil-webgpu): raw
-`wasi:webgpu` components and real wgpu 29 programs both request a GPU
-adapter/device, run WGSL compute and render passes, read results back through
-`wgpu-core`, and hand a standard WebGPU texture to a host-owned Canvas frame
-through the narrow `soil:present` presentation bridge. See [`docs/soil-webgpu.md`](docs/soil-webgpu.md).
-The draft audio sink is [`crates/wasi-audio-wasmtime`](crates/wasi-audio-wasmtime):
-a real component pushes bounded PCM into a cpal host. See
-[`docs/wasi-audio.md`](docs/wasi-audio.md). Guest code uses the umbrella
-[`crates/soil-sdk`](crates/soil-sdk); its first feature, `audio`, provides
-`Output`, `write_all`, `tone` and `play_tone`. See
-[`docs/soil-sdk.md`](docs/soil-sdk.md). Lua guests can use the generated
-[`crates/soil-sdk-lua`](crates/soil-sdk-lua) bindings: `soil-sdk-lua` reads the
-canonical WIT and emits `soil.lua` plus a host signature manifest. The host
-installs one `__soil_call` dispatcher; the SDK never reimplements a capability.
-The CRM is a Spore over namespaced records, not a host: [`spores/crm`](spores/crm)
-reads `crm`, `contacts`, `calls` and `messages` namespaces, while the host maps
-those names to books and enforces grants. See [`docs/crm.md`](docs/crm.md).
-Personal contact editing and explicit first-name/token sharing live in a
-separate [`spores/contacts`](spores/contacts); see [`docs/contacts.md`](docs/contacts.md).
-The reusable WASI p2 profile is [`crates/soil-host`](crates/soil-host):
-`wasi:http` incoming/outgoing, `wasi:sockets` with per-use CIDR policy, clocks,
-random, filesystem preopens and a per-request store. `soil-wasi-http` serves a
-component's `wasi:http/incoming-handler` with a deny-by-default origin/network
-policy. See [`docs/wasi.md`](docs/wasi.md).
-Secrets are host-mediated: a Spore names a credential and gets an opaque handle,
-never the bytes. The backend is Geode; see [`docs/soil-creds.md`](docs/soil-creds.md).
-A Spore can opt into a name that any node running it answers on, by declaring an
-`[anycast]` claim in its manifest and publishing a short-lived lease; see
-[`docs/soil-anycast.md`](docs/soil-anycast.md).
-The portable Linux/Android/macOS input normalizer is
-[`crates/soil-canvas-input`](crates/soil-canvas-input);
-[`docs/soil-canvas.md`](docs/soil-canvas.md) records the decision and host
-obligations, [`docs/soil-canvas-s22.md`](docs/soil-canvas-s22.md) records the S22
-proving run, and [`docs/android.md`](docs/android.md) records the first Android
-JNI proof.
-
-## Device telemetry
-
-Wearable and edge-node data has a model, not just a stream:
-[`docs/device-telemetry.md`](docs/device-telemetry.md) defines identity, time,
-signal envelopes, fusion precedence, retention, privacy, and the boundary
-between `soil:records` for durable history and `soil:unibus` for live state.
-[`docs/device-profiles.md`](docs/device-profiles.md) records what the PineTime,
-COLMI Ring 2, OMI CV1, KZ AZ09, and CAT S22 actually expose today, including
-the limits that make a vendor-app-only device unsupported until its protocol is
-mapped.
-
-## Terminal in the browser
-
-[`crates/soil-terminal-web`](crates/soil-terminal-web) runs a real pty per
-session, feeds its bytes to `soil-vt`, and streams styled rows to a browser over
-SSE; keystrokes return as POSTs. It is the same emulator as the native terminal
-window, with the browser as a second presenter.
-
-One server hosts many sessions, so the page is a small multiplexer: a picker of
-targets — local shells, ssh hosts, and Mush desktops — plus tabs for the ones
-that are open. The catalog is `~/.config/fungos/terminal/targets.toml`;
-without it, the login shells, the `Host` aliases in `~/.ssh/config`, and the
-desktops under `~/.config/fungos/desktops/` are discovered.
-
-```sh
-# pick a shell, a host, or a desktop
-cargo run -p soil-terminal-web --bin soil-terminal-web
-
-# one target, no picker: a remote shell over ssh (normal host-key prompt)
-cargo run -p soil-terminal-web --bin soil-terminal-web -- --ssh aj@home-pi
-
-# one target, no picker: mush inside soil-vt
-cargo run -p soil-terminal-web --bin soil-terminal-web -- \
-  --command target/debug/mush --wasm spores/mush/module.wasm \
-  --root ~/.local/share/fungos/vfs
+```text
+layout, UI, scene graphs, canvas ownership
+terminal UI, media browser, notification policy
+Marbles, CRM, projects, tasks, agents
+LSP, formatter, linter, docs renderer, build tool
+the Soil reader, evaluator, compiler or REPL
+product workflows and provider integrations
 ```
 
-The Mycelium gateway serves it at `https://term.myc/` through one
-`routes.json` entry pointing at the server's loopback port.
+Those are Soil code, Spores, or plugins.
 
-The listener defaults to loopback; a non-loopback address requires `--token`.
-Prefer an SSH tunnel (`ssh -L 8790:127.0.0.1:8790 host`) over exposing the port.
-See [`crates/soil-terminal-web/README.md`](crates/soil-terminal-web/README.md).
-
-## Development
+## Commands
 
 ```sh
+loam run NAME [ARGS...]   # run an installed wasm command
+loam doctor               # print the linked capability profile
+loam help
+```
+
+Command packages live in the usual roots:
+
+```text
+~/.local/share/fungos/commands/
+~/.local/share/fungos/spores/
+```
+
+`loam run` is the virtual PATH. It does not compile or interpret Soil source.
+
+## Plugins
+
+`loam` is a linker. Core capabilities are linked natively. Everything else is discovered at runtime.
+
+Two plugin forms:
+
+1. **Wasm plugin** — a component exporting the capability WIT. `loam` links its exports directly.
+2. **Native sidecar** — a native process plus a generated wasm adapter that exports the same WIT and forwards over `loam:plugin/ipc`.
+
+No `loam` rebuild is needed to add a capability. The plugin package is signed and declares the WIT interfaces it provides and the grants it requires.
+
+See [`docs/architecture.md`](docs/architecture.md).
+
+## Repository layout
+
+```text
+crates/loam              runtime host and linker
+crates/loam-cli          the one `loam` binary
+crates/loam-command      command registry and wasm command runner
+crates/loam-spore        package identity, locks, signatures
+crates/loam-ble-*        first-party BLE plugin
+crates/loam-audio        first-party audio plugin
+crates/loam-codec        first-party codec plugin
+crates/loam-inference*   first-party inference plugin
+crates/loam-scrub        internal inference helper
+wit/                     canonical capability contracts
+```
+
+## Build
+
+```sh
+cargo check --workspace
 cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-cargo check -p viewer-spore --target wasm32-wasip2
-cargo check --manifest-path ../ajmwagar/spores/spores/colmi-ring/Cargo.toml \
-  --target wasm32-wasip2
+cargo build -p loam-cli
 ```
 
-### One build cache, one installed host
+The runnable binary is `target/debug/loam`.
 
-The hosts link Wasmtime. A private `target/` per worktree therefore costs several
-gigabytes each, and a machine running several worktrees at once fills its disk
-long before it runs out of source. Build once and share:
+## Principles
 
-```sh
-export CARGO_TARGET_DIR="$HOME/Library/Caches/soil/cargo-target"
-export CARGO_INCREMENTAL=0
-cargo install --path crates/soil-search-host --bin soil-search-web \
-  --root "$HOME/.local"
-```
-
-Agents and Spores then run `soil-search-web` from `~/.local/bin` against whatever
-`target/` the shared cache already holds. Rebuilding is a soil decision, not a
-Spore decision: the WIT packages and the hosts that implement them move together
-(`soil:search@0.6.0`, `soil:index@1.1.0`), so a change to `wit/` or a host crate
-means a rebuild and a reinstall, while work in `spores/` or a canvas worktree does
-not.
-
-The capability contracts parse as WIT, and the Viewer state machine has no host
-authority.
-
-## License
-
-Dual-licensed under either of
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-- MIT license ([LICENSE-MIT](LICENSE-MIT))
-
-at your option.
-
-Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
-dual licensed as above, without any additional terms or conditions.
-
-The threaded process lane is documented in [`docs/soil-process.md`](docs/soil-process.md). Ordinary cpal callback programs can run there with a guest-owned audio thread; the host device callback never enters Wasm. The only app line is `let host = cpal_soil::host();` on both native and threaded Wasm.
-
-The first CID-neutral content/index slice is [`crates/fungos-content`](crates/fungos-content). See [`docs/fungos-content.md`](docs/fungos-content.md).
-
-## Dependencies
-
-Builds use crates.io, public git revisions, and packages inside this checkout.
-No sibling worktrees are required. See [dependency policy](docs/dependencies.md).
-
-## Shell
-
-`soil shell` mounts a VFS through FUSE and starts an interactive shell. `soil rm` unlinks the namespace entry while retaining the content-addressed blob and history. See [Soil shell](docs/soil-shell.md).
-
-## Soil operator config
-
-Operator inference profiles and `unibus-mcp`/DCP routes resolve from one Soil config instead of scattered provider environment. See [Soil operator and inference config](docs/soil-config.md).
-
-## Scrubber
-
-`soil-scrub` is a local reversible redactor for prompts, tool calls, and tool output. It uses keyed session tokens, not hashes, and restores values only for explicitly scoped host tools. See [Scrubber](docs/scrubber.md).
-
-## CRM import
-
-`soil-crm-host` provides a deterministic mock CRM and a local team/private inspector; `soil-crm-espo` is the deferred EspoCRM importer. See [CRM](docs/crm.md) and [EspoCRM import](docs/crm-espo.md).
-
-## Mush
-
-`mush` is a shell over one VFS workspace. The command engine is a Wasm Spore
-over `soil:vfs`, `soil:index`, `soil:vfs-mut`, `soil:command`, `soil:http` and
-`soil:net`; the native host owns the workspace, the grants, the daemon and the
-overlay. Allowlisted host programs (`git`, `cargo`, `gh`, `fpl bob`) run against
-a materialized overlay, and builds route to the fleet through
-[`bob`](https://github.com/FuturePresentLabs/bob).
-
-- [Mush](docs/mush.md) — the shell: syntax, commands, config, doctor.
-- [Mush architecture](docs/mush-architecture.md) — where the pieces live,
-  repository by repository, and how a line is routed.
-- [Mush operator](docs/mush-operator.md) — running it for other people.
+- **No ambient authority.** A component reaches exactly what its signed grant names.
+- **One binary.** `loam` is the native front door; plugins are packages, not host forks.
+- **Wasmtime is the engine.** WASI is provided, not reimplemented.
+- **Soil is the userland.** Runtime code stays at the host boundary.
+- **Delete before abstracting.** A capability that can be Soil source should not become a Rust crate.
