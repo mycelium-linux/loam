@@ -13,6 +13,7 @@
 
     (list :nav
       (list
+        (list :start "Get started")
         (list :why "Why Soil")
         (list :substrate "Substrate")
         (list :learn "Learn")
@@ -28,7 +29,7 @@
         (list :title-prefix "A small Lisp for ")
         (list :title-accent "tools you can read.")
         (list :lede "Soil is a homoiconic Lisp with typed host capabilities. Code is data, macros are ordinary forms, and the boundary to the machine is explicit. The same program runs natively or in the browser.")
-        (list :primary-label "Read the guide")
+        (list :primary-label "Get started")
         (list :github-label "View on GitHub")
         (list :meta-prefix "In the Lisp family. ")
         (list :meta-link-label "lisp-lang.org")
@@ -132,6 +133,29 @@
         (list :body "Soil is free software. The core is small on purpose. Bring a spore, a capability, or a question that the current tools cannot answer.")
         (list :primary-label "GitHub")
         (list :secondary-label "Issues")))
+
+    (list :guide
+      (list
+        (list :kicker "GET STARTED")
+        (list :title "Get started with Soil")
+        (list :lede "Build the CLI, run a program, then try the examples.")
+        (list :build-title "1. Build")
+        (list :build-body "From the repository root:")
+        (list :build-code "cargo build -p soil-lang --bin soil-lang")
+        (list :run-title "2. Run a file")
+        (list :run-body "Create hello.soil:")
+        (list :hello-code "(defun main ()\n  (println \"hello from Soil\"))")
+        (list :run-code "cargo run -p soil-lang --bin soil-lang -- hello.soil")
+        (list :run-note "The interpreter runs the file directly. No host or manifest is needed for a plain command.")
+        (list :examples-title "3. Try the examples")
+        (list :examples-body "The examples cover the stdlib, UI, and Unibus events.")
+        (list :examples-site-label "Examples on soil-lang.org")
+        (list :examples-repo-label "examples/stdlib")
+        (list :next-title "Next")
+        (list :next-language-label "Language")
+        (list :next-architecture-label "LOAM")
+        (list :next-api-label "API docs")
+        (list :home-label "Home")))
 
     (list :footer
       (list

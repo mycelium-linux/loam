@@ -66,6 +66,7 @@
                   (el "span" (list (attr :class "logo-word")) (list (txt "Soil")))))
               (el "nav" (list (attr :class "nav-links"))
                 (list
+                  (a "getting-started.html" "" (list (txt (copy :nav :start))))
                   (a "#why" "" (list (txt (copy :nav :why))))
                   (a "#substrate" "" (list (txt (copy :nav :substrate))))
                   (a "#learn" "" (list (txt (copy :nav :learn))))
@@ -89,7 +90,7 @@
                     (list (txt (copy :hero :lede))))
                   (el "div" (list (attr :class "actions"))
                     (list
-                      (a "#learn" "btn primary" (list (txt (copy :hero :primary-label))))
+                      (a "getting-started.html" "btn primary" (list (txt (copy :hero :primary-label))))
                       (a "https://github.com/ajmwagar/soil" "btn" (list (txt (copy :hero :github-label))))))
                   (el "p" (list (attr :class "meta"))
                     (list

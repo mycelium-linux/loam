@@ -17,15 +17,26 @@ SOIL_UI_UPSTREAM=http://127.0.0.1:7882 SOIL_UI_PORT=7883 \
 open 'http://127.0.0.1:7883/?bare=1'
 ```
 
-The page is a static landscape: nav, hero, why, substrate, learn, spores,
-community, footer. It has no actions and no state. All editable prose lives in
-`sites/soil-lang/copy.soil`; `soil-lang.soil` owns the structure and CSS.
+The landing page is a static landscape: nav, hero, why, substrate, learn,
+spores, community, footer. `getting-started.html` is the local guide: build,
+run a file, and try the examples. It has no actions and no state. All editable
+prose lives in `sites/soil-lang/copy.soil`; `soil-lang.soil` owns the landing
+structure and CSS, and `getting-started.soil` owns the guide.
+
+Build and serve the static site locally:
+
+```sh
+./sites/soil-lang/serve.sh
+# open http://127.0.0.1:8000/
+# use SKIP_BUILD=1 ./sites/soil-lang/serve.sh after a build
+```
 
 Build the static page and every example through the Soil standard library:
 
 ```sh
 ./sites/soil-lang/build.sh
 # sites/soil-lang/dist/index.html
+# sites/soil-lang/dist/getting-started.html
 # sites/soil-lang/dist/examples/*.html
 ```
 

@@ -114,6 +114,8 @@ const server = http.createServer(async (request, response) => {
   let staticPath = null;
   if (pathname.startsWith("/examples/")) {
     staticPath = path.join(staticRoot, pathname);
+  } else if (pathname === "/getting-started.html") {
+    staticPath = path.join(staticRoot, pathname);
   } else if (
     pathname.startsWith("/docs/") ||
     pathname === "/llms.txt" ||

@@ -1,0 +1,105 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+; The soil-lang.org getting-started page.
+;
+; All wording comes from copy.soil. This file owns only structure and the
+; guide-specific CSS.
+
+(defun guide-styles ()
+  (str
+    (styles)
+    ".guide { max-width: 820px; margin: 0 auto; padding: clamp(44px, 7vw, 88px) 28px 24px; }\n"
+    ".guide h1 { margin: 0 0 16px; font-size: clamp(38px, 6vw, 64px); }\n"
+    ".guide h2 { margin: 42px 0 12px; font-size: 24px; letter-spacing: -.02em; }\n"
+    ".guide p, .guide li { color: var(--muted); max-width: 62ch; }\n"
+    ".guide .code { margin: 16px 0; }\n"
+    ".guide .actions { margin-top: 18px; }\n"
+    ".guide .next { margin-top: 56px; padding-top: 24px; border-top: 1px solid var(--line); }\n"
+    ".guide .next a { color: var(--ink); }\n"
+    ".guide .next li { margin: 6px 0; }\n"))
+
+(defun guide-header ()
+  (el "header" (list (attr :class "nav"))
+    (list
+      (el "div" (list (attr :class "nav-inner"))
+        (list
+          (a "/" "logo"
+            (list
+              (el "span" (list (attr :class "logo-mark")) (list (txt "S")))
+              (el "span" (list (attr :class "logo-word")) (list (txt "Soil")))))
+          (el "nav" (list (attr :class "nav-links"))
+            (list
+              (a "/" "" (list (txt (copy :guide :home-label))))
+              (a "/#examples" "" (list (txt (copy :nav :examples))))
+              (a "docs/" "" (list (txt (copy :nav :api))))
+          (a "https://github.com/ajmwagar/soil" "nav-cta"
+            (list (txt (copy :nav :github)))))))))))
+
+(defun guide-footer ()
+  (el "footer" (list (attr :class "footer"))
+    (list
+      (el "div" nil (list (txt (copy :footer :left))))
+      (el "div" (list (attr :class "footer-links"))
+        (list
+          (a "/" "" (list (txt (copy :guide :home-label))))
+          (a "/#examples" "" (list (txt (copy :nav :examples))))
+          (a "docs/" "" (list (txt (copy :nav :api))))))
+      (el "div" nil (list (txt (copy :footer :license)))))))
+
+(defun guide-view ()
+  (el "div" (list (attr :class "site"))
+    (list
+      (guide-header)
+      (el "main" (list (attr :class "guide"))
+        (list
+          (el "p" (list (attr :class "kicker")) (list (txt (copy :guide :kicker))))
+          (el "h1" nil (list (txt (copy :guide :title))))
+          (el "p" (list (attr :class "body")) (list (txt (copy :guide :lede))))
+
+          (el "h2" nil (list (txt (copy :guide :build-title))))
+          (el "p" (list (attr :class "body"))
+            (list (txt (copy :guide :build-body))))
+          (code-block (copy :guide :build-code))
+
+          (el "h2" nil (list (txt (copy :guide :run-title))))
+          (el "p" (list (attr :class "body"))
+            (list (txt (copy :guide :run-body))))
+          (code-block (copy :guide :hello-code))
+          (code-block (copy :guide :run-code))
+          (el "p" (list (attr :class "body"))
+            (list (txt (copy :guide :run-note))))
+
+          (el "h2" nil (list (txt (copy :guide :examples-title))))
+          (el "p" (list (attr :class "body"))
+            (list (txt (copy :guide :examples-body))))
+          (el "div" (list (attr :class "actions"))
+            (list
+              (a "/#examples" "btn primary"
+                (list (txt (copy :guide :examples-site-label))))
+              (a "https://github.com/ajmwagar/soil/tree/main/examples/stdlib" "btn"
+                (list (txt (copy :guide :examples-repo-label))))))
+
+          (el "section" (list (attr :class "next"))
+            (list
+              (el "h2" nil (list (txt (copy :guide :next-title))))
+              (el "ul" nil
+                (list
+                  (el "li" nil
+                    (list
+                      (a "https://github.com/ajmwagar/soil/tree/main/crates/soil-lang" ""
+                        (list (txt (copy :guide :next-language-label))))))
+                  (el "li" nil
+                    (list
+                      (a "https://github.com/ajmwagar/soil/blob/main/LOAM.md" ""
+                        (list (txt (copy :guide :next-architecture-label))))))
+                  (el "li" nil
+                    (list
+                      (a "docs/" ""
+                        (list (txt (copy :guide :next-api-label))))))))))))
+      (guide-footer))))
+
+(defun main ()
+  (println
+    (render-page
+      (copy :guide :title)
+      (guide-styles)
+      (guide-view))))

@@ -154,7 +154,7 @@ with open(os.path.join(root, "sites/soil-lang/dist/docs.json"), "w") as handle:
 
 # Routes crawlers expect. The llms.txt index is generated in Soil above.
 base = "https://soil-lang.org"
-urls = ["/", "/docs/"] + [
+urls = ["/", "/getting-started.html", "/docs/"] + [
     "/docs/%s.html" % slug for slug, _, _ in sources
 ]
 sitemap = [
