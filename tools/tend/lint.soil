@@ -1,0 +1,152 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+; Static checks over Soil source. This is deliberately conservative: it warns
+; only when a symbol is definitely a user definition. Dynamic apply/eval can
+; still reach a function that looks dead, so dead code is a warning, not an
+; error.
+
+(defun tend/count (values)
+  (if (nil? values) 0 (+ 1 (tend/count (rest values)))))
+
+(defun tend/member? (value values)
+  (cond
+    ((nil? values) #f)
+    ((= value (first values)) #t)
+    (else (tend/member? value (rest values)))))
+
+(defun tend/add (value values)
+  (if (tend/member? value values) values (cons value values)))
+
+(defun tend/definition (form)
+  (if (and (not (atom form)) (= (first form) 'defun))
+      (list
+        (list :name (nth 1 form))
+        (list :params (or-empty (nth 2 form)))
+        (list :body (drop 3 form)))
+      nil))
+
+(defun tend/defs (forms out)
+  (if (nil? forms)
+      (reverse out)
+      (let ((definition (tend/definition (first forms))))
+        (tend/defs (rest forms)
+          (if (nil? definition) out (cons definition out))))))
+
+(defun tend/find-def (name defs)
+  (if (nil? defs)
+      nil
+      (if (= name (field (first defs) :name))
+          (first defs)
+          (tend/find-def name (rest defs)))))
+
+(defun tend/def-names (defs)
+  (map (quote tend/def-name) defs))
+
+(defun tend/def-name (definition)
+  (field definition :name))
+
+(defun tend/symbols (value out)
+  (cond
+    ((nil? value) out)
+    ((symbol? value) (cons value out))
+    ((atom value) out)
+    (else
+      (tend/symbols (rest value) (tend/symbols (first value) out)))))
+
+(defun tend/defined-refs (values defs out)
+  (if (nil? values)
+      out
+      (let ((name (first values)))
+        (tend/defined-refs (rest values) defs
+          (if (nil? (tend/find-def name defs))
+              out
+              (tend/add name out))))))
+
+(defun tend/refs-of (definition defs)
+  (tend/defined-refs
+    (tend/symbols (field definition :body) nil)
+    defs nil))
+
+(defun tend/reachable (pending defs seen)
+  (if (nil? pending)
+      seen
+      (let ((name (first pending)))
+        (if (tend/member? name seen)
+            (tend/reachable (rest pending) defs seen)
+            (let ((definition (tend/find-def name defs)))
+              (tend/reachable
+                (append (rest pending)
+                        (if (nil? definition) nil (tend/refs-of definition defs)))
+                defs
+                (cons name seen)))))))
+
+(defun tend/dead (defs seen out)
+  (if (nil? defs)
+      (reverse out)
+      (let ((name (field (first defs) :name)))
+        (tend/dead (rest defs) seen
+          (if (tend/member? name seen) out (cons name out))))))
+
+(defun tend/duplicates (defs seen out)
+  (if (nil? defs)
+      (reverse out)
+      (let ((name (field (first defs) :name)))
+        (tend/duplicates (rest defs)
+          (tend/add name seen)
+          (if (tend/member? name seen) (tend/add name out) out)))))
+
+(defun tend/arity-warning (name expected got)
+  (list
+    (list :function name)
+    (list :expected expected)
+    (list :got got)))
+
+(defun tend/arity-value (value defs out)
+  (cond
+    ((nil? value) out)
+    ((atom value) out)
+    ((= (first value) 'quote) out)
+    (else
+      (let ((head (first value)))
+        (let ((out
+                (if (symbol? head)
+                    (let ((definition (tend/find-def head defs)))
+                      (if (nil? definition)
+                          out
+                          (let ((expected (tend/count (field definition :params)))
+                                (got (tend/count (rest value))))
+                            (if (= expected got)
+                                out
+                                (cons (tend/arity-warning head expected got) out)))))
+                    out)))
+          (tend/arity-value (first value) defs
+            (tend/arity-values (rest value) defs out)))))))
+
+(defun tend/arity-values (values defs out)
+  (if (nil? values)
+      out
+      (tend/arity-values (rest values) defs
+        (tend/arity-value (first values) defs out))))
+
+(defun tend/arity-one (definition defs)
+  (tend/arity-value (field definition :body) defs nil))
+
+(defun tend/flatten (lists out)
+  (if (nil? lists)
+      out
+      (tend/flatten (rest lists) (append out (first lists)))))
+
+(defun tend/arity-report (defs out)
+  (tend/flatten (map-with (quote tend/arity-one) defs defs) out))
+
+(defun tend/lint (source entries)
+  (let ((forms (read source)))
+    (if (nil? forms)
+        (tend/err "empty source")
+        (let ((defs (tend/defs forms nil)))
+          (let ((reachable (tend/reachable entries defs nil)))
+            (tend/ok
+              (list
+                (list :functions (tend/def-names defs))
+                (list :dead (tend/dead defs reachable nil))
+                (list :duplicates (tend/duplicates defs nil nil))
+                (list :arity (tend/arity-report defs nil)))))))))

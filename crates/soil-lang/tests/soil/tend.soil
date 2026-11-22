@@ -1,0 +1,55 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+
+(defun tend/sample ()
+  "(tend\n  (version 1)\n  (members \"crates/*\")\n  (test \"soil-lang\" (include \"crates/soil-lang/tests/soil/*.soil\") (prelude \"crates/soil-lang/stdlib/prelude.soil\"))\n  (bench \"runtime\" (include \"benches/*.soil\") (runs 100))\n  (dependency \"soil-spore\" (path \"crates/soil-spore\")))\n")
+
+(defun test/tend-manifest ()
+  (let ((result (tend/parse (tend/sample))))
+    (and (ok? result)
+         (= (field (value result) :version) 1)
+         (= (field (first (field (value result) :tests)) :name) "soil-lang")
+         (= (field (first (field (value result) :benches)) :runs) 100)
+         (= (field (first (field (value result) :dependencies)) :kind) "path"))))
+
+(defun test/tend-roundtrip ()
+  (let ((result (tend/parse (tend/sample))))
+    (and (ok? result)
+         (= (tend/emit (value result))
+            (str "(tend\n"
+                 "  (version 1)\n"
+                 "  (members \"crates/*\")\n"
+                 "  (test \"soil-lang\"\n"
+                 "    (include \"crates/soil-lang/tests/soil/*.soil\")\n"
+                 "    (prelude \"crates/soil-lang/stdlib/prelude.soil\")\n"
+                 "  )\n"
+                 "  (bench \"runtime\"\n"
+                 "    (include \"benches/*.soil\")\n"
+                 "    (runs 100)\n"
+                 "  )\n"
+                 "  (dependency \"soil-spore\" (path \"crates/soil-spore\"))\n"
+                 ")\n")))))
+
+(defun test/tend-refuses-unknown ()
+  (and (not (ok? (tend/parse "(tend (version 1) (members \"x\") (eval \"rm\"))")))
+       (not (ok? (tend/parse "(tend (members \"x\"))")))
+       (not (ok? (tend/parse "(tend (version 1) (members \"x\") (test \"t\"))")))))
+
+(defun lint/sample ()
+  "(defun main () (used 1))
+(defun used (x) x)
+(defun unused () 1)
+(defun bad () (used))")
+
+(defun test/tend-lint ()
+  (let ((result (tend/lint (lint/sample) (list 'main 'bad))))
+    (and (ok? result)
+         (= (field (value result) :dead) (list 'unused))
+         (= (tend/count (field (value result) :arity)) 1)
+         (= (field (first (field (value result) :arity)) :function) 'used)
+         (= (field (first (field (value result) :arity)) :expected) 1)
+         (= (field (first (field (value result) :arity)) :got) 0))))
+
+(defun test/tend-lint-duplicate ()
+  (let ((result (tend/lint "(defun main () 1)\n(defun main () 2)" (list 'main))))
+    (and (ok? result)
+         (= (field (value result) :duplicates) (list 'main)))))

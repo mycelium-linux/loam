@@ -1,0 +1,225 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+; tend.soil manifest reader and canonical writer.
+;
+; This is a schema reader, not an evaluator. It recognizes one data shape and
+; refuses unknown forms; reading a manifest never runs code or touches a host.
+
+(defun tend/ok (value) (list 'ok value))
+(defun tend/err (message) (list 'err message))
+
+(defun tend/quote (value)
+  (json-encode value))
+
+(defun tend/string-list (values)
+  (if (nil? values)
+      ""
+      (str " " (tend/quote (first values))
+           (tend/string-list (rest values)))))
+
+(defun tend/set (manifest key value)
+  (assoc key value manifest))
+
+(defun tend/parse-version (item manifest)
+  (let ((value (nth 1 item)))
+    (if (nil? value)
+        (tend/err "version needs a number")
+        (tend/ok (tend/set manifest :version value)))))
+
+(defun tend/parse-members (item manifest)
+  (let ((values (drop 1 item)))
+    (if (nil? values)
+        (tend/err "members needs at least one path")
+        (tend/ok (tend/set manifest :members values)))))
+
+(defun tend/test-with (name include prelude bindings)
+  (list
+    (list :name name)
+    (list :include include)
+    (list :prelude prelude)
+    (list :bindings bindings)))
+
+(defun tend/parse-test-opts (opts include prelude bindings)
+  (if (nil? opts)
+      (if (nil? include)
+          (tend/err "test needs an include")
+          (tend/ok (tend/test-with nil include prelude bindings)))
+      (let ((opt (first opts)))
+        (let ((key (first opt)))
+          (cond
+            ((= key 'include)
+              (tend/parse-test-opts (rest opts) (drop 1 opt) prelude bindings))
+            ((= key 'prelude)
+              (tend/parse-test-opts (rest opts) include (drop 1 opt) bindings))
+            ((= key 'bindings)
+              (tend/parse-test-opts (rest opts) include prelude (drop 1 opt)))
+            (else
+              (tend/err (str "unknown test option " key))))))))
+
+(defun tend/parse-test (item manifest)
+  (let ((name (nth 1 item))
+        (opts (drop 2 item)))
+    (let ((result (tend/parse-test-opts opts nil nil nil)))
+      (if (ok? result)
+          (let ((test (tend/test-with name
+                         (field (value result) :include)
+                         (field (value result) :prelude)
+                         (field (value result) :bindings)))
+                (tests (or-empty (field manifest :tests))))
+            (tend/ok (tend/set manifest :tests (append tests (list test)))))
+          result))))
+
+(defun tend/bench-with (name include runs)
+  (list
+    (list :name name)
+    (list :include include)
+    (list :runs runs)))
+
+(defun tend/parse-bench-opts (opts include runs)
+  (if (nil? opts)
+      (if (nil? include)
+          (tend/err "bench needs an include")
+          (tend/ok (tend/bench-with nil include runs)))
+      (let ((opt (first opts)))
+        (let ((key (first opt)))
+          (cond
+            ((= key 'include)
+              (tend/parse-bench-opts (rest opts) (drop 1 opt) runs))
+            ((= key 'runs)
+              (let ((value (nth 1 opt)))
+                (if (or (nil? value) (<= value 0))
+                    (tend/err "bench runs must be positive")
+                    (tend/parse-bench-opts (rest opts) include value))))
+            (else
+              (tend/err (str "unknown bench option " key))))))))
+
+(defun tend/parse-bench (item manifest)
+  (let ((name (nth 1 item))
+        (opts (drop 2 item)))
+    (let ((result (tend/parse-bench-opts opts nil 1)))
+      (if (ok? result)
+          (let ((bench (tend/bench-with name
+                          (field (value result) :include)
+                          (field (value result) :runs)))
+                (benches (or-empty (field manifest :benches))))
+            (tend/ok (tend/set manifest :benches (append benches (list bench)))))
+          result))))
+
+(defun tend/dependency-with (name kind path url rev)
+  (list
+    (list :name name)
+    (list :kind kind)
+    (list :path path)
+    (list :url url)
+    (list :rev rev)))
+
+(defun tend/parse-dependency (item manifest)
+  (let ((name (nth 1 item))
+        (source (nth 2 item)))
+    (let ((kind (first source)))
+      (cond
+        ((= kind 'path)
+          (let ((dependency (tend/dependency-with name "path" (nth 1 source) nil nil))
+                (dependencies (or-empty (field manifest :dependencies))))
+            (tend/ok (tend/set manifest :dependencies
+              (append dependencies (list dependency))))))
+        ((= kind 'git)
+          (let ((dependency (tend/dependency-with name "git" nil (nth 1 source) (nth 2 source)))
+                (dependencies (or-empty (field manifest :dependencies))))
+            (tend/ok (tend/set manifest :dependencies
+              (append dependencies (list dependency))))))
+        (else
+          (tend/err (str "unknown dependency source " kind)))))))
+
+(defun tend/parse-entry (item manifest)
+  (let ((key (first item)))
+    (cond
+      ((= key 'version) (tend/parse-version item manifest))
+      ((= key 'members) (tend/parse-members item manifest))
+      ((= key 'test) (tend/parse-test item manifest))
+      ((= key 'bench) (tend/parse-bench item manifest))
+      ((= key 'dependency) (tend/parse-dependency item manifest))
+      (else (tend/err (str "unknown tend key " key))))))
+
+(defun tend/parse-entries (entries manifest)
+  (if (nil? entries)
+      (tend/finish manifest)
+      (let ((result (tend/parse-entry (first entries) manifest)))
+        (if (ok? result)
+            (tend/parse-entries (rest entries) (value result))
+            result))))
+
+(defun tend/finish (manifest)
+  (cond
+    ((nil? (field manifest :version)) (tend/err "version is required"))
+    ((nil? (field manifest :members)) (tend/err "members is required"))
+    (else (tend/ok manifest))))
+
+(defun tend/parse (source)
+  (let ((forms (read source)))
+    (if (nil? forms)
+        (tend/err "empty tend.soil")
+        (if (not (nil? (rest forms)))
+            (tend/err "expected exactly one form")
+            (let ((form (first forms)))
+              (if (not (= (first form) 'tend))
+                  (tend/err "expected a (tend ...) form")
+                  (tend/parse-entries (rest form)
+                    (list
+                      (list :version nil)
+                      (list :members nil)
+                      (list :tests nil)
+                      (list :benches nil)
+                      (list :dependencies nil)))))))))
+
+(defun tend/emit-option (key values)
+  (if (nil? values)
+      ""
+      (str "    (" key (tend/string-list values) ")\n")))
+
+(defun tend/emit-test (test)
+  (str "  (test " (tend/quote (field test :name)) "\n"
+       (tend/emit-option "include" (field test :include))
+       (tend/emit-option "prelude" (field test :prelude))
+       (tend/emit-option "bindings" (field test :bindings))
+       "  )\n"))
+
+(defun tend/emit-tests (tests)
+  (if (nil? tests)
+      ""
+      (str (tend/emit-test (first tests)) (tend/emit-tests (rest tests)))))
+
+(defun tend/emit-bench (bench)
+  (str "  (bench " (tend/quote (field bench :name)) "\n"
+       (tend/emit-option "include" (field bench :include))
+       "    (runs " (field bench :runs) ")\n"
+       "  )\n"))
+
+(defun tend/emit-benches (benches)
+  (if (nil? benches)
+      ""
+      (str (tend/emit-bench (first benches)) (tend/emit-benches (rest benches)))))
+
+(defun tend/emit-dependency (dependency)
+  (let ((name (tend/quote (field dependency :name)))
+        (kind (field dependency :kind)))
+    (if (= kind "path")
+        (str "  (dependency " name
+             " (path " (tend/quote (field dependency :path)) "))\n")
+        (str "  (dependency " name
+             " (git " (tend/quote (field dependency :url))
+             " " (tend/quote (field dependency :rev)) "))\n"))))
+
+(defun tend/emit-dependencies (dependencies)
+  (if (nil? dependencies)
+      ""
+      (str (tend/emit-dependency (first dependencies))
+           (tend/emit-dependencies (rest dependencies)))))
+
+(defun tend/emit (manifest)
+  (str "(tend\n"
+       "  (version " (field manifest :version) ")\n"
+       "  (members" (tend/string-list (field manifest :members)) ")\n"
+       (tend/emit-tests (field manifest :tests))
+       (tend/emit-benches (field manifest :benches))
+       (tend/emit-dependencies (field manifest :dependencies))
+       ")\n"))
