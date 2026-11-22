@@ -183,6 +183,10 @@ mush project checkout fpl-suite --session auth-refactor --desktop fpl
 mush project status fpl-suite --session auth-refactor --desktop fpl
 mush project commit fpl-suite --session auth-refactor --desktop fpl -m "auth: retry"
 mush project push fpl-suite --session auth-refactor --desktop fpl
+mush project pr fpl-suite --session auth-refactor --desktop fpl \
+  --base main --title "auth: retry" --body "Retry the auth path."
+mush project publish my-soil-lib --session publish --desktop fpl \
+  --repo owner/my-soil-lib --public
 ```
 
 The checkout is idempotent: re-running it reuses existing worktrees and adds any
@@ -201,6 +205,17 @@ roots and different branches (`soil/<project>/<session>/<repo>`).
 `add-repo` is deliberately the only agent-facing mutation. Removing or
 re-pinning a repository is a project edit; an agent may request it, but doing it
 silently would delete or relocate worktrees it does not own.
+
+`pr` opens one pull request per repository through `gh`, reusing an existing open
+PR for the same head branch instead of creating a duplicate. `publish` is the
+create-from-nothing path: it requires a single-repository project, creates the
+GitHub repository from that checkout, and pushes it. An existing `origin` must
+already name the same `owner/name`; `publish` will not silently retarget a
+repository.
+
+Both commands return per-repository outcomes with the branch, commit, status,
+and URL. Credentials remain in `gh`/git's own host configuration; neither command
+writes a token into the project or the image.
 
 ### Origin
 

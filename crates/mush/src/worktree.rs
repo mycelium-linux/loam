@@ -206,6 +206,8 @@ struct RepoOutcome {
     branch: String,
     commit: String,
     status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
 }
 
 /// Reserved for the resource-anchored comment record.
@@ -814,6 +816,7 @@ impl State {
                         .trim()
                         .to_string(),
                     status: "unchanged".to_string(),
+                    url: None,
                 });
                 continue;
             }
@@ -827,6 +830,7 @@ impl State {
                 branch: repo.branch.clone(),
                 commit,
                 status: "committed".to_string(),
+                url: None,
             });
         }
         Ok(outcomes)
@@ -858,9 +862,135 @@ impl State {
                     .trim()
                     .to_string(),
                 status: "pushed".to_string(),
+                url: None,
             });
         }
         Ok(outcomes)
+    }
+
+    fn open_project_pr(
+        &mut self,
+        id: &str,
+        session: &str,
+        base: &str,
+        title: &str,
+        body: &str,
+        draft: bool,
+    ) -> Result<Vec<RepoOutcome>> {
+        let workspace = self.load_workspace(id, session)?;
+        let mut outcomes = Vec::new();
+        for repo in &workspace.repos {
+            let path = self.root.join(&repo.path);
+            let slug = crate::project::id(&path)
+                .filter(|slug| !slug.starts_with("path:"))
+                .ok_or_else(|| anyhow!("{} has no forge remote", path.display()))?;
+            let branch = git_stdout(&path, &["rev-parse", "--abbrev-ref", "HEAD"])?
+                .trim()
+                .to_string();
+            let commit = git_stdout(&path, &["rev-parse", "HEAD"])?
+                .trim()
+                .to_string();
+            let existing = gh_stdout(&[
+                "pr".into(),
+                "list".into(),
+                "--repo".into(),
+                slug.clone(),
+                "--head".into(),
+                branch.clone(),
+                "--state".into(),
+                "open".into(),
+                "--json".into(),
+                "url".into(),
+                "--jq".into(),
+                ".[0].url".into(),
+            ])?;
+            if !existing.is_empty() {
+                outcomes.push(RepoOutcome {
+                    name: repo.name.clone(),
+                    branch,
+                    commit,
+                    status: "existing".to_string(),
+                    url: Some(existing),
+                });
+                continue;
+            }
+            let url = gh_stdout(&pr_command(&slug, &branch, base, title, body, draft))?;
+            outcomes.push(RepoOutcome {
+                name: repo.name.clone(),
+                branch,
+                commit,
+                status: "opened".to_string(),
+                url: Some(url),
+            });
+        }
+        Ok(outcomes)
+    }
+
+    fn publish_project(
+        &mut self,
+        id: &str,
+        session: &str,
+        slug: &str,
+        private: bool,
+    ) -> Result<Vec<RepoOutcome>> {
+        if !slug.contains('/') || slug.starts_with('/') || slug.ends_with('/') {
+            bail!("publish needs an owner/name repository slug");
+        }
+        let workspace = self.load_workspace(id, session)?;
+        if workspace.repos.len() != 1 {
+            bail!(
+                "publish expects a single-repository project; got {}",
+                workspace.repos.len()
+            );
+        }
+        let repo = &workspace.repos[0];
+        let path = self.root.join(&repo.path);
+        let branch = git_stdout(&path, &["rev-parse", "--abbrev-ref", "HEAD"])?
+            .trim()
+            .to_string();
+        let commit = git_stdout(&path, &["rev-parse", "HEAD"])?
+            .trim()
+            .to_string();
+        let remote = git_stdout(&path, &["remote", "get-url", "origin"]).ok();
+        let (status, url) = match remote
+            .as_deref()
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+        {
+            Some(remote) => {
+                let current = crate::project::normalize_remote(remote);
+                if current.as_deref() != Some(slug) {
+                    bail!(
+                        "{} already has origin {remote}; expected {slug}",
+                        path.display()
+                    );
+                }
+                let output = Command::new("git")
+                    .arg("-C")
+                    .arg(&path)
+                    .args(["push", "-u", "origin", &branch])
+                    .output()
+                    .with_context(|| format!("run git push in {}", path.display()))?;
+                if !output.status.success() {
+                    bail!(
+                        "git push origin {branch}: {}",
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    );
+                }
+                ("pushed".to_string(), format!("https://github.com/{slug}"))
+            }
+            None => {
+                let url = gh_stdout(&publish_command(slug, &path.display().to_string(), private))?;
+                ("created".to_string(), url)
+            }
+        };
+        Ok(vec![RepoOutcome {
+            name: repo.name.clone(),
+            branch,
+            commit,
+            status,
+            url: Some(url),
+        }])
     }
 
     fn status(&mut self, id: &str) -> Result<WorktreeStatus> {
@@ -1180,8 +1310,53 @@ pub(crate) fn run_project(config: &crate::config::Config, mut args: Vec<String>)
             println!("{}", serde_json::to_string_pretty(&outcomes)?);
             Ok(())
         }
+        "pr" => {
+            let desktop_id = crate::desktop::selected(config, &mut args)
+                .ok_or_else(|| anyhow!("no Desktop selected; pass --desktop ID"))?;
+            let desktop = crate::desktop::load(&desktop_id)?;
+            let session = take_session(&mut args).ok_or_else(|| {
+                anyhow!("usage: mush project pr <project> --session <session> --title TITLE")
+            })?;
+            let base = take_option(&mut args, "--base").unwrap_or_else(|| "main".to_string());
+            let title = take_option(&mut args, "--title").ok_or_else(|| {
+                anyhow!("usage: mush project pr <project> --session <session> --title TITLE")
+            })?;
+            let body = take_option(&mut args, "--body").unwrap_or_default();
+            let draft = args.iter().any(|arg| arg == "--draft");
+            args.retain(|arg| arg != "--draft");
+            ensure_no_options(&args)?;
+            ensure_arity(&args, 1)?;
+            let mut state = open_project_state(&desktop)?;
+            let outcomes =
+                state.open_project_pr(&args[0], &session, &base, &title, &body, draft)?;
+            println!("{}", serde_json::to_string_pretty(&outcomes)?);
+            Ok(())
+        }
+        "publish" => {
+            let desktop_id = crate::desktop::selected(config, &mut args)
+                .ok_or_else(|| anyhow!("no Desktop selected; pass --desktop ID"))?;
+            let desktop = crate::desktop::load(&desktop_id)?;
+            let session = take_session(&mut args).ok_or_else(|| {
+                anyhow!(
+                    "usage: mush project publish <project> --session <session> --repo owner/name"
+                )
+            })?;
+            let slug = take_option(&mut args, "--repo").ok_or_else(|| {
+                anyhow!(
+                    "usage: mush project publish <project> --session <session> --repo owner/name"
+                )
+            })?;
+            let private = args.iter().any(|arg| arg == "--private");
+            args.retain(|arg| arg != "--private");
+            ensure_no_options(&args)?;
+            ensure_arity(&args, 1)?;
+            let mut state = open_project_state(&desktop)?;
+            let outcomes = state.publish_project(&args[0], &session, &slug, private)?;
+            println!("{}", serde_json::to_string_pretty(&outcomes)?);
+            Ok(())
+        }
         other => bail!(
-            "unknown project subcommand {other:?}; try define, checkout, status, commit, push"
+            "unknown project subcommand {other:?}; try define, checkout, status, commit, push, pr, publish"
         ),
     }
 }
@@ -1209,7 +1384,9 @@ fn project_help() -> Result<()> {
          mush project checkout <id> --session <session> --desktop <id>\n\
          mush project status <id> --session <session> --desktop <id>\n\
          mush project commit <id> --session <session> --message MSG --desktop <id>\n\
-         mush project push <id> --session <session> [--remote origin] --desktop <id>"
+         mush project push <id> --session <session> [--remote origin] --desktop <id>\n\
+         mush project pr <id> --session <session> --title TITLE [--base main] [--body TEXT] [--draft] --desktop <id>\n\
+         mush project publish <id> --session <session> --repo owner/name [--private] --desktop <id>"
     );
     Ok(())
 }
@@ -1705,6 +1882,61 @@ fn add_git_worktree(source: &Path, target: &Path, branch: &str, base: &str) -> R
     Ok(())
 }
 
+fn pr_command(
+    slug: &str,
+    branch: &str,
+    base: &str,
+    title: &str,
+    body: &str,
+    draft: bool,
+) -> Vec<String> {
+    let mut args = vec![
+        "pr".to_string(),
+        "create".to_string(),
+        "--repo".to_string(),
+        slug.to_string(),
+        "--head".to_string(),
+        branch.to_string(),
+        "--base".to_string(),
+        base.to_string(),
+        "--title".to_string(),
+        title.to_string(),
+        "--body".to_string(),
+        body.to_string(),
+    ];
+    if draft {
+        args.push("--draft".to_string());
+    }
+    args
+}
+
+fn publish_command(slug: &str, source: &str, private: bool) -> Vec<String> {
+    vec![
+        "repo".to_string(),
+        "create".to_string(),
+        slug.to_string(),
+        "--source".to_string(),
+        source.to_string(),
+        "--push".to_string(),
+        if private { "--private" } else { "--public" }.to_string(),
+    ]
+}
+
+fn gh_stdout(args: &[String]) -> Result<String> {
+    let output = Command::new("gh")
+        .args(args)
+        .output()
+        .with_context(|| format!("run gh {}", args.join(" ")))?;
+    if !output.status.success() {
+        bail!(
+            "gh {}: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 fn run_git(path: &Path, args: &[&str]) -> Result<()> {
     let output = Command::new("git")
         .arg("-C")
@@ -1874,6 +2106,52 @@ mod tests {
                 .unwrap();
             assert!(status.success(), "git {args:?}");
         }
+    }
+
+    #[test]
+    fn forge_commands_carry_the_repo_branch_and_visibility() {
+        assert_eq!(
+            pr_command("owner/repo", "soil/x", "main", "Title", "Body", true),
+            vec![
+                "pr",
+                "create",
+                "--repo",
+                "owner/repo",
+                "--head",
+                "soil/x",
+                "--base",
+                "main",
+                "--title",
+                "Title",
+                "--body",
+                "Body",
+                "--draft",
+            ]
+        );
+        assert_eq!(
+            publish_command("owner/repo", "/src/repo", false),
+            vec![
+                "repo",
+                "create",
+                "owner/repo",
+                "--source",
+                "/src/repo",
+                "--push",
+                "--public",
+            ]
+        );
+        assert_eq!(
+            publish_command("owner/repo", "/src/repo", true),
+            vec![
+                "repo",
+                "create",
+                "owner/repo",
+                "--source",
+                "/src/repo",
+                "--push",
+                "--private",
+            ]
+        );
     }
 
     #[test]
