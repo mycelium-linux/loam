@@ -1,0 +1,128 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+(define-package "soil:lora@0.1.0" :base "soil:lora" :version "0.1.0")
+
+(define-alias soil:lora/types.device-handle u32)
+(define-alias soil:lora/types.session u32)
+
+(define-record soil:lora/types.capability
+  (handle soil:lora/types.device-handle)
+  (name string)
+  (min-hz u64)
+  (max-hz u64)
+  (max-tx-power-dbm s8)
+  (max-packet-bytes u32)
+)
+
+(define-record soil:lora/types.config
+  (frequency-hz u64)
+  (bandwidth-hz u32)
+  (spreading-factor u8)
+  (coding-rate u8)
+  (preamble-symbols u16)
+  (sync-word u16)
+  (tx-power-dbm s8)
+  (crc bool)
+  (invert-iq bool)
+)
+
+(define-record soil:lora/types.packet
+  (payload (list u8))
+  (rssi-dbm (option s16))
+  (snr-db (option f32))
+  (time-on-air-ms u32)
+)
+
+(define-record soil:lora/types.receipt
+  (bytes u32)
+  (time-on-air-ms u32)
+)
+
+(define-enum soil:lora/error denied not-found leased invalid over-budget timeout unavailable io)
+
+(define-capability soil:lora/scan
+  :interface "soil:lora"
+  :function "scan"
+  :grant "soil:lora"
+  :version "0.1.0"
+  :params ((timeout-ms u32))
+  :result (result (list soil:lora/types.capability) soil:lora/error))
+
+(defun soil:lora/scan (timeout-ms)
+  (host-call "soil:lora" "scan" (list timeout-ms)))
+
+(define-capability soil:lora/open
+  :interface "soil:lora"
+  :function "open"
+  :grant "soil:lora"
+  :version "0.1.0"
+  :params ((device soil:lora/types.device-handle))
+  :result (result soil:lora/types.session soil:lora/error))
+
+(defun soil:lora/open (device)
+  (host-call "soil:lora" "open" (list device)))
+
+(define-capability soil:lora/configure
+  :interface "soil:lora"
+  :function "configure"
+  :grant "soil:lora"
+  :version "0.1.0"
+  :params ((session soil:lora/types.session) (config soil:lora/types.config))
+  :result (result soil:lora/types.config soil:lora/error))
+
+(defun soil:lora/configure (session config)
+  (host-call "soil:lora" "configure" (list session config)))
+
+(define-capability soil:lora/transmit
+  :interface "soil:lora"
+  :function "transmit"
+  :grant "soil:lora"
+  :version "0.1.0"
+  :params ((session soil:lora/types.session) (payload (list u8)) (timeout-ms u32))
+  :result (result soil:lora/types.receipt soil:lora/error))
+
+(defun soil:lora/transmit (session payload timeout-ms)
+  (host-call "soil:lora" "transmit" (list session payload timeout-ms)))
+
+(define-capability soil:lora/receive
+  :interface "soil:lora"
+  :function "receive"
+  :grant "soil:lora"
+  :version "0.1.0"
+  :params ((session soil:lora/types.session) (timeout-ms u32))
+  :result (result (option soil:lora/types.packet) soil:lora/error))
+
+(defun soil:lora/receive (session timeout-ms)
+  (host-call "soil:lora" "receive" (list session timeout-ms)))
+
+(define-capability soil:lora/cad
+  :interface "soil:lora"
+  :function "cad"
+  :grant "soil:lora"
+  :version "0.1.0"
+  :params ((session soil:lora/types.session) (timeout-ms u32))
+  :result (result bool soil:lora/error))
+
+(defun soil:lora/cad (session timeout-ms)
+  (host-call "soil:lora" "cad" (list session timeout-ms)))
+
+(define-capability soil:lora/state
+  :interface "soil:lora"
+  :function "state"
+  :grant "soil:lora"
+  :version "0.1.0"
+  :params ((session soil:lora/types.session))
+  :result (result soil:lora/types.config soil:lora/error))
+
+(defun soil:lora/state (session)
+  (host-call "soil:lora" "state" (list session)))
+
+(define-capability soil:lora/close
+  :interface "soil:lora"
+  :function "close"
+  :grant "soil:lora"
+  :version "0.1.0"
+  :params ((session soil:lora/types.session))
+  :result (result unit soil:lora/error))
+
+(defun soil:lora/close (session)
+  (host-call "soil:lora" "close" (list session)))

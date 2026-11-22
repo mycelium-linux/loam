@@ -1,0 +1,98 @@
+// Host-owned LoRa radio capability.
+//
+// The host owns the radio lease, chip timing, duty-cycle policy, region limits,
+// packet queue and TX timeout. A Spore sees opaque handles and bounded packets,
+// never a serial path, SPI device, GPIO line or modem command.
+//
+// MeshCore and LoRaWAN are protocols above this interface. They belong in a
+// Spore or a separate service adapter; they do not belong in this WIT.
+package soil:lora@0.1.0;
+
+interface types {
+  /// Soil-issued handle for one scanned radio. Opaque and short-lived.
+  type device-handle = u32;
+
+  /// Soil-issued handle for one live radio session. Not a hardware handle.
+  type session = u32;
+
+  record capability {
+    handle: device-handle,
+    name: string,
+    min-hz: u64,
+    max-hz: u64,
+    max-tx-power-dbm: s8,
+    max-packet-bytes: u32,
+  }
+
+  record config {
+    frequency-hz: u64,
+    bandwidth-hz: u32,
+    spreading-factor: u8,
+    coding-rate: u8,
+    preamble-symbols: u16,
+    sync-word: u16,
+    tx-power-dbm: s8,
+    crc: bool,
+    invert-iq: bool,
+  }
+
+  record packet {
+    payload: list<u8>,
+    rssi-dbm: option<s16>,
+    snr-db: option<f32>,
+    time-on-air-ms: u32,
+  }
+
+  record receipt {
+    bytes: u32,
+    time-on-air-ms: u32,
+  }
+}
+
+interface lora {
+  use types.{capability, config, device-handle, packet, receipt, session};
+
+  enum error {
+    denied,
+    not-found,
+    leased,
+    invalid,
+    over-budget,
+    timeout,
+    unavailable,
+    io,
+  }
+
+  /// Active scan for radios, bounded by `timeout-ms`.
+  scan: func(timeout-ms: u32) -> result<list<capability>, error>;
+
+  /// Take an exclusive lease on a scanned radio and return a session.
+  open: func(device: device-handle) -> result<session, error>;
+
+  /// Apply modulation and power settings. The host clamps or rejects values
+  /// against the radio's capability and regional policy.
+  configure: func(session: session, config: config) -> result<config, error>;
+
+  /// Transmit one bounded packet. The host owns retry policy and airtime.
+  transmit: func(session: session, payload: list<u8>, timeout-ms: u32) -> result<receipt, error>;
+
+  /// Wait up to `timeout-ms` for one received packet. `none` is a deadline,
+  /// not an error.
+  receive: func(session: session, timeout-ms: u32) -> result<option<packet>, error>;
+
+  /// Channel activity detection for the current configuration.
+  cad: func(session: session, timeout-ms: u32) -> result<bool, error>;
+
+  /// Current applied configuration.
+  state: func(session: session) -> result<config, error>;
+
+  close: func(session: session) -> result<_, error>;
+}
+
+world lora-host {
+  import lora;
+}
+
+world guest {
+  import lora;
+}
