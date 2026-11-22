@@ -32,7 +32,7 @@ backends. This is the language side of Soil; the host and capabilities live in
 
 ```sh
 TMP=$(mktemp -d)
-cargo run -p soil-lang --bin soil-lang -- \
+cargo run -p soil-lang --features native --bin soil-lang -- \
   --prelude crates/soil-lang/stdlib/prelude.soil \
   --records-root "$TMP" --book soil \
   crates/soil-lang/bindings/soil-records.soil \
@@ -67,7 +67,7 @@ after the config's `hub_endpoint`. `--repeat 0 --interval-ms N` runs the
 entry point continuously without recursing in the interpreter.
 
 ```sh
-cargo run -p soil-lang --bin soil-lang -- \
+cargo run -p soil-lang --features native --bin soil-lang -- \
   --records-root ~/.local/share/fungos/records --book home \
   --unibus-config ~/.config/unibus/frigate-home.json \
   --repeat 0 --interval-ms 2000 \
@@ -116,7 +116,11 @@ cargo run -p soil-lang --bin soil-c -- \
 ## Tests
 
 ```sh
-cargo test -p soil-lang
+# Fast core set: no native host, no Wasmtime.
+./scripts/test-fast.sh
+
+# Language plus the native host bridge and Wasmtime engine.
+./scripts/test-native.sh
 ```
 
 `tests/document.rs` pins top-level spans/comments/ids and canonical round-trip.

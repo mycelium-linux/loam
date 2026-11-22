@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
+
+#![cfg(feature = "native")]
 //! Worktree-scoped image provenance and VFS flush.
 
 use std::path::Path;

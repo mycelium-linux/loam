@@ -19,7 +19,7 @@ guest only names the handle `default`.
 ```sh
 export HUE_BRIDGE=http://192.168.1.10
 
-cargo run -p soil-lang --bin soil-lang -- \
+cargo run -p soil-lang --features native --bin soil-lang -- \
   --workspace-root . \
   --records-root /tmp/soil-records \
   --prelude crates/soil-lang/stdlib/prelude.soil \
@@ -119,7 +119,7 @@ and snapshot/restore without a real bridge.
 Press the physical link button on the bridge, then:
 
 ```sh
-cargo run -p soil-lang --bin soil-lang -- \
+cargo run -p soil-lang --features native --bin soil-lang -- \
   --workspace-root . --records-root /tmp/soil-records \
   --prelude crates/soil-lang/stdlib/prelude.soil \
   --allow "$HUE_BRIDGE" \

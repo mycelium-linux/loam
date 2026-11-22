@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
+
+#![cfg(feature = "native")]
 //! The native Soil Lisp host exposes the same bounded poll/publish contract
 //! as the Wasm host, so an automation script can be exercised without a hub.
 

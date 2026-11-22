@@ -214,7 +214,7 @@ function soilCommand(root: string): { command: string; prefix: string[] } {
 	}
 	return {
 		command: "cargo",
-		prefix: ["run", "-q", "-p", "soil-lang", "--bin", "soil-lang", "--"],
+		prefix: ["run", "-q", "-p", "soil-lang", "--features", "native", "--bin", "soil-lang", "--"],
 	};
 }
 

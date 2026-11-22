@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
+
+#![cfg(feature = "native")]
 use std::path::Path;
 
 use soil_lang::sexp::Value;

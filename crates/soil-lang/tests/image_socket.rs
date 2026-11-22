@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Session-scoped `soil-image` over a local Unix socket.
 
-#![cfg(unix)]
+#![cfg(all(unix, feature = "native"))]
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;

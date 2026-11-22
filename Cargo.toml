@@ -20,3 +20,16 @@ fungos-agents-event = { git = "https://github.com/mycelium-linux/records.git", r
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+
+# Dev and test builds keep line tables for the workspace and drop full debug
+# info for dependencies. The full DWARF for Wasmtime/wgpu/SQLite is most of the
+# link time and is rarely what we debug.
+[profile.dev]
+debug = "line-tables-only"
+incremental = true
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.test]
+debug = "line-tables-only"

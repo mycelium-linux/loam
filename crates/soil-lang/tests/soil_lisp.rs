@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
+
+#![cfg(feature = "native")]
 //! One Rust harness for tests written in Soil.
 //!
 //! Each `tests/soil/*.soil` file may define functions named `test/...`.

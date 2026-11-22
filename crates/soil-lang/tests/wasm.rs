@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
+
+#![cfg(feature = "engine")]
 use wasmtime::{Engine, Instance, Module, Store, Val};
 
 fn wasm(source: &str) -> Vec<u8> {

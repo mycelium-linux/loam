@@ -76,5 +76,8 @@ jobs:
       # `records_host` tests (upsert_get_scan_and_delete and two neighbours)
       # fail in every checkout today. That is a bug to fix, not a hole to widen
       # the gate around.
-      - name: Test
-        run: cargo test -p soil-agent-host -p soil-agentsd -p soil-abi -p soil-sdk-lua --locked
+      - name: Test (fast set)
+        run: scripts/test-fast.sh --locked
+
+      - name: Test (native language)
+        run: cargo test -p soil-lang --features native --test soil_lisp --test unibus_events --locked

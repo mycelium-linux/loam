@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
+
+#![cfg(feature = "native")]
 //! The native `soil:http` grant: origin policy, credential substitution, and
 //! the Value conversion the REPL uses.
 

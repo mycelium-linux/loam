@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
+
+#![cfg(feature = "engine")]
 use wasmtime::{Engine, Instance, Module, Store, Val};
 
 fn compiled() -> soil_lang::lisp::Compiled {
