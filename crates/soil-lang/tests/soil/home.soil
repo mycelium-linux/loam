@@ -1,0 +1,57 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+; Home snapshot and playback façade helpers.
+
+(defun test/playback-current-item ()
+  (let ((items
+          (list
+            (list (list :title "one") (list :current #f))
+            (list (list :title "two") (list :current #t)))))
+    (= (field (playback/current-item items) :title) "two")))
+
+(defun test/playback-playlist-shape ()
+  (let ((entry
+          (list
+            (list :owner "avery")
+            (list :playlist (list (list :name "Rap") (list :kind "Playlist"))))))
+    (and
+      (= (deadwax/playlist-owner entry) "avery")
+      (= (deadwax/playlist-name entry) "Rap")
+      (= (deadwax/playlist-kind entry) "Playlist"))))
+
+(defun test/playback-int-parses ()
+  (and
+    (= (value (playback/int "65")) 65)
+    (= (value (playback/int "0")) 0)
+    (not (ok? (playback/int "6x")))))
+
+(defun test/home-camera-placeholder ()
+  (let ((cameras
+          (home/cameras
+            (home/config "http://bridge.local" "default" "Living room"
+              "http://bridge.local"))))
+    (and
+      (= (length cameras) 1)
+      (= (field (first cameras) :status) "unavailable"))))
+
+(defun test/home-light-row-renders ()
+  (let ((light
+          (list
+            (list :id "3")
+            (list :name "Lamp")
+            (list :state
+              (list
+                (list :on #t)
+                (list :bri 160)
+                (list :colormode "xy"))))))
+    (and
+      (string-contains? (render-html (home/light-row light)) "Lamp")
+      (string-contains? (render-html (home/light-row light)) "bri 160"))))
+
+(defun test/playback-cli-global-source-parses ()
+  (let ((parsed
+          (cli-parse-argv (playback/cli-spec)
+            (list "--source" "http://bridge.local" "status"))))
+    (and
+      (cli-ok? parsed)
+      (= (cli-result-option (field parsed :ok) "source")
+         "http://bridge.local"))))

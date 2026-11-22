@@ -61,6 +61,43 @@ names the handle `default`.
 
 `spotify/device-id-by-name` turns a `devices` result into the id used above.
 
+## CLI
+
+`playback_cli.soil` is the command surface, in the same shape as the Hue and
+Marbles CLIs. `examples/playback/playback` is a thin host launcher; it supplies
+the deadwax origin and, when asked, an SSH tunnel to a loopback-only deadwax.
+
+```sh
+export DEADWAX_SSH=ajm@192.168.10.96     # home-pi's deadwax is 127.0.0.1:6601
+examples/playback/playback health
+examples/playback/playback status
+examples/playback/playback now
+examples/playback/playback queue
+examples/playback/playback playlists
+examples/playback/playback playlist avery "Rise ‘n Grind"
+examples/playback/playback search "board of canada"
+examples/playback/playback volume 65
+```
+
+The first command starts a persistent `ssh -f -N -L 6601:127.0.0.1:6601`
+tunnel and later commands reuse it. Set `DEADWAX_URL` when deadwax is already
+reachable; set `DEADWAX_LOCAL_PORT` to move the tunnel.
+
+`SPOTIFY_TOKEN` enables the `spotify-*` commands:
+
+```sh
+export SPOTIFY_TOKEN=...
+examples/playback/playback spotify-devices
+examples/playback/playback spotify-status
+examples/playback/playback --spotify --device <id> spotify-play spotify:album:...
+```
+
+The deadwax CLI never needs a credential. The token stays in the host process;
+the Soil program only names the opaque `default` handle.
+
+The fake-deadwax regression tests live in
+[`crates/soil-lang/tests/playback_cli.rs`](../../crates/soil-lang/tests/playback_cli.rs).
+
 ## Common verbs
 
 `playback/control` accepts the same verbs for both owners where they make sense:

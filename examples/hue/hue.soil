@@ -223,7 +223,7 @@
   (cond
     ((nil? entries) nil)
     ((= (field (nth 1 (first entries)) :name) name)
-      (first (first entries)))
+      (hue/key-text (first (first entries))))
     (else (hue/find-scene-id (rest entries) name))))
 
 (defun hue/scene (bridge target name)
@@ -775,3 +775,157 @@
 
 (defun hue/demo-focus (bridge group-id layout)
   (hue/demo-for bridge group-id "focus" layout 8000 500))
+
+;;; ---------------------------------------------------------------------------
+;;; Façade: resolve names, apply-and-verify, snapshot/restore
+;;; ---------------------------------------------------------------------------
+;;;
+;;; The functions below are the stable entry points for a program or a CLI.
+;;; They turn a room name into a group, fail on a bridge reply that parsed as
+;;; `[]`, and keep enough state to put a room back the way it was.
+
+(defun hue/lower-pairs (text pairs)
+  (if (nil? pairs)
+      text
+      (hue/lower-pairs
+        (string-replace text (first (first pairs)) (nth 1 (first pairs)))
+        (rest pairs))))
+
+;;; ASCII lower-case. The bridge names are user text; matching should not make
+;;; a person remember whether they typed "Living room" or "living room".
+(defun hue/lower (text)
+  (hue/lower-pairs text
+    (list
+      (list "A" "a") (list "B" "b") (list "C" "c") (list "D" "d")
+      (list "E" "e") (list "F" "f") (list "G" "g") (list "H" "h")
+      (list "I" "i") (list "J" "j") (list "K" "k") (list "L" "l")
+      (list "M" "m") (list "N" "n") (list "O" "o") (list "P" "p")
+      (list "Q" "q") (list "R" "r") (list "S" "s") (list "T" "t")
+      (list "U" "u") (list "V" "v") (list "W" "w") (list "X" "x")
+      (list "Y" "y") (list "Z" "z"))))
+
+;;; JSON object keys arrive as strings or keywords depending on the decoder
+;;; path; the bridge path wants the bare text in both cases.
+(defun hue/key-text (key)
+  (let ((text (str key)))
+    (let ((chars (string-chars text)))
+      (if (and (not (nil? chars)) (= (first chars) ":"))
+          (string-join (rest chars) "")
+          text))))
+
+(defun hue/find-group (entries wanted)
+  (cond
+    ((nil? entries) nil)
+    (else
+      (let ((entry (first entries))
+            (name (field (nth 1 (first entries)) :name)))
+        (if (and (not (nil? name)) (= (hue/lower name) wanted))
+            entry
+            (hue/find-group (rest entries) wanted))))))
+
+;;; Resolve a group name to `(:id ID :name NAME)`.
+(defun hue/room (bridge name)
+  (if (nil? name)
+      (list 'err "room: a name is required")
+      (let ((groups (hue/groups bridge)))
+        (if (ok? groups)
+            (let ((found (hue/find-group (value groups) (hue/lower name))))
+              (if (nil? found)
+                  (list 'err (str "room: no group named " name))
+                  (list 'ok
+                    (list
+                      (list :id (hue/key-text (first found)))
+                      (list :name (field (nth 1 found) :name))))))
+            groups))))
+
+(defun hue/room-lights (bridge room)
+  (hue/lights-in-group bridge (field room :id)))
+
+(defun hue/empty? (value)
+  (or (nil? value) (= (length value) 0)))
+
+(defun hue/reply-ok? (reply)
+  (and (ok? reply) (not (hue/empty? (value reply)))))
+
+(defun hue/replies-ok? (replies)
+  (if (or (nil? replies) (hue/empty? replies))
+      #f
+      (if (not (hue/reply-ok? (first replies)))
+          #f
+          (if (nil? (rest replies))
+              #t
+              (hue/replies-ok? (rest replies))))))
+
+(defun hue/first-error (replies)
+  (cond
+    ((or (nil? replies) (hue/empty? replies)) nil)
+    ((ok? (first replies)) (hue/first-error (rest replies)))
+    (else (first replies))))
+
+;;; The bridge answers `[]` when it silently ignores a write. A non-empty
+;;; success array is the only acceptable reply.
+(defun hue/apply-plan-verified (bridge plan)
+  (let ((replies (hue/apply-plan bridge plan)))
+    (let ((error (hue/first-error replies)))
+      (if (not (nil? error))
+          error
+          (if (hue/replies-ok? replies)
+              (list 'ok replies)
+              (list 'err "bridge: empty success reply"))))))
+
+;;; Plan and apply a named mood across a resolved room. Returns the plan and
+;;; the bridge replies so a caller can print or audit them.
+(defun hue/apply-room-mood (bridge room mood layout)
+  (let ((plan (hue/atmosphere-plan bridge (field room :id) mood layout)))
+    (if (ok? plan)
+        (let ((applied (hue/apply-plan-verified bridge (value plan))))
+          (if (ok? applied)
+              (list 'ok
+                (list
+                  (list :room (field room :id))
+                  (list :room-name (field room :name))
+                  (list :mood mood)
+                  (list :plan (value plan))
+                  (list :replies (value applied))))
+              applied))
+        plan)))
+
+(defun hue/snapshot-room (bridge room)
+  (let ((lights (hue/lights-in-group bridge (field room :id))))
+    (if (ok? lights)
+        (list 'ok
+          (list
+            (list :room (field room :id))
+            (list :room-name (field room :name))
+            (list :lights (value lights))))
+        lights)))
+
+(defun hue/restore-snapshot (bridge snapshot)
+  (let ((replies (hue/restore-lights bridge (field snapshot :lights))))
+    (let ((error (hue/first-error replies)))
+      (if (not (nil? error))
+          error
+          (if (hue/replies-ok? replies)
+              (list 'ok replies)
+              (list 'err "bridge: restore did not succeed"))))))
+
+(defun hue/mood-names ()
+  (list "aurora" "sunset" "ocean" "ember" "forest" "nebula"
+        "movie" "focus" "candle" "party" "sunrise"))
+
+;;; Bridge discovery is an unauthenticated GET. `hue discover` exposes it; the
+;;; host still has to allow the discovery origin before the program starts.
+(defun hue/discover ()
+  (let ((request
+          (list
+            (list :url "https://discovery.meethue.com/")
+            (list :method "get")
+            (list :headers (list (hue/header "accept" "application/json")))
+            (list :body nil)
+            (list :credential nil)
+            (list :max-bytes 1048576)
+            (list :timeout-ms 10000))))
+    (let ((response (soil:http/fetch request)))
+      (if (ok? response)
+          (hue/check (value response))
+          response))))

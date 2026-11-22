@@ -59,6 +59,61 @@ bridge JSON. Every write returns `(ok <bridge reply>)` or
 `(err "<description>")`, so a program can test with `ok?` instead of parsing
 prose.
 
+## CLI
+
+`hue_cli.soil` is the command surface. It is written in Soil in the same shape
+as `examples/marbles/mb.soil`: parse `wasi:cli` argv with `cli-parse-argv`,
+dispatch, and exit non-zero on a usage or bridge error. `examples/hue/hue` is a
+thin host launcher; it only supplies the origin allowlist and the Geode handle
+that the Soil host cannot set for itself.
+
+```sh
+export HUE_BRIDGE=http://192.168.1.10          # the exact origin the host allows
+examples/hue/hue status
+examples/hue/hue rooms
+examples/hue/hue plan sunset --room "Living room"   # no writes
+examples/hue/hue mood sunset --room "Living room"
+examples/hue/hue mood ocean --room "Living room" --json
+examples/hue/hue scene Relax --room "Living room"
+examples/hue/hue on --room "Living room"
+examples/hue/hue bri 120 --room "Living room"
+```
+
+`--room` is matched case-insensitively. `--group ID` is the escape hatch when
+two groups share a name or you already know the bridge id. Without either,
+the target is the bridge's all-lights group `0`. `--json` prints the bridge
+reply or the plan instead of the one-line summary.
+
+Snapshot and restore:
+
+```sh
+SNAP=$(examples/hue/hue snapshot --room "Living room")
+examples/hue/hue mood ocean --room "Living room"
+examples/hue/hue restore --snapshot-json "$SNAP"
+```
+
+`hue/apply-plan-verified` treats the bridge's silent `[]` reply as a failure.
+That is deliberate: the v1 bridge returns `[]` when it ignores a malformed
+write, and the old code reported that as success.
+
+The launcher reads:
+
+| variable | meaning |
+|---|---|
+| `HUE_BRIDGE` | bridge origin, e.g. `http://192.168.1.10` |
+| `HUE_GEODE_SOCKET` | default `$HOME/.geode/geode.sock` |
+| `HUE_GEODE_REFERENCE` | default `geode://home/hue/bridge` |
+| `HUE_GEODE_PURPOSE` | default `hue.control` |
+| `HUE_WORKSPACE` / `HUE_RECORDS` | host VFS/records roots |
+
+The key never enters argv or the Soil program. The host leases it from Geode
+and substitutes the `__CREDENTIAL__` path segment.
+
+The fake-bridge regression tests live in
+[`crates/soil-lang/tests/hue_cli.rs`](../../crates/soil-lang/tests/hue_cli.rs);
+they exercise apply-and-verify, the empty-reply failure, `plan` with no writes,
+and snapshot/restore without a real bridge.
+
 ## Pair once
 
 Press the physical link button on the bridge, then:
@@ -157,7 +212,11 @@ of individual light writes.
 
 ## What is not here yet
 
-- Bridge discovery (mDNS/SSDP) is still host work.
+- `discover` works without `HUE_BRIDGE`: the launcher allows the public
+  discovery origin. A native host still has to allow the bridge origin before a
+  status or mood call, which is why the launcher takes that origin from
+  `HUE_BRIDGE`.
+- mDNS/SSDP discovery is still host work.
 - The Room/light UI is still `spores/lights-view`; this library is the seam it
   will call once the view is ported.
 - `hue/pair` is the one call that intentionally has no credential: it is the

@@ -1,54 +1,77 @@
-# `soil-image` v1: worktree-scoped images and VFS flush
+# `soil-image`: session-scoped images and VFS flush
 
-Status: **v1 stdin server**, 2026-11-22.
+Status: **v2 Unix socket + stdin**, 2026-11-22.
 
 `soil-image` hosts more than one live Soil image in one process. The unit is a
-VFS worktree, not a host process:
+session, not a host process:
 
 ```text
 soil-image
-  ├─ image(w1)  definitions + globals + provenance
-  ├─ image(w2)
+  ├─ session(s1)  definitions + globals + provenance
+  ├─ session(s2)
   └─ shared prelude / reader / evaluator
 ```
 
 An image is attached to a VFS workspace root. Source is read and written through
 `soil:vfs`, never through an arbitrary host path.
 
-The workspace root is a **thread mount root**, not a Desktop and not a
+The workspace root is a **session mount root**, not a Desktop and not a
 repository. It is the directory that contains every repository worktree for one
-thread's project:
+session's project:
 
 ```text
-threads/<thread>/<project>/
+sessions/<session>/<project>/
   soil/
   spores/
   theseus/
 ```
 
-Subagents of that thread attach to the same mount root. A parallel thread gets a
+Subagents of that session attach to the same mount root. A parallel session gets a
 different mount root. The image does not know or care which repository a form
 came from; provenance records the VFS path, and that path is relative to the
-thread's mount root.
+session's mount root.
 
 ## Protocol
 
 One JSON request per line, one JSON response per line:
 
 ```json
-{"op":"attach","name":"w1","workspace":"/vfs/w1","records":"/records","book":"soil"}
-{"op":"load","name":"w1","path":"lib/example.soil"}
-{"op":"eval","name":"w1","source":"(defun f (x) (+ x 1))"}
-{"op":"status","name":"w1"}
-{"op":"reload","name":"w1"}
-{"op":"flush","name":"w1","dry_run":true}
-{"op":"flush","name":"w1"}
-{"op":"flush_new","name":"w1","path":"scratch.soil","names":["f"]}
+{"op":"attach","session":"s1","desktop":"fpl","project":"suite","workspace":"/vfs","records":"/records","book":"soil"}
+{"op":"load","session":"s1","path":"lib/example.soil"}
+{"op":"eval","session":"s1","source":"(defun f (x) (+ x 1))"}
+{"op":"status","session":"s1"}
+{"op":"reload","session":"s1"}
+{"op":"flush","session":"s1","dry_run":true}
+{"op":"flush","session":"s1"}
+{"op":"flush_new","session":"s1","path":"scratch.soil","names":["f"]}
 {"op":"list"}
-{"op":"detach","name":"w1"}
+{"op":"detach","session":"s1"}
 ```
 
 Responses are `{"ok":true,"result":...}` or `{"ok":false,"error":"..."}`.
+
+`name` is still accepted as a deprecated alias for `session` so the v1 stdin
+protocol keeps working.
+
+## Transport
+
+Stdin mode is the fallback:
+
+```sh
+soil-image
+```
+
+Socket mode is the long-lived form:
+
+```sh
+soil-image --socket ~/.local/share/soil/image.sock
+```
+
+The socket is local-only, created with mode `0600`, and accepts the same JSON
+lines. Several clients may attach to the same session. `attach` is idempotent
+for a live session: the second client joins the existing image instead of
+replacing its definitions. Requests are serialized by the image thread, so one
+session never evaluates two forms at once.
 
 ## Provenance
 
@@ -88,13 +111,14 @@ the changed files so origins point at the new source.
 `flush_new` appends unattached definitions to a chosen VFS path. This is the
 “I did too much in the REPL” path.
 
-## Limits in v1
+## Limits
 
 - top-level forms only
 - canonical form printing; comments inside a replaced form are not preserved
 - no form-level merge yet: a changed file is a conflict rather than a merge
-- no socket server yet; stdin JSON lines only
-- one evaluation at a time per process
+- one evaluation at a time across the process, not per session
+- no streaming eval events yet; a response is one JSON line
+- no session lease yet: one daemon owns its sessions
 
-The next step is a Unix-socket transport and per-session output, without changing
+The next step is per-session evaluation/streaming and a lease, without changing
 the image/flush semantics.

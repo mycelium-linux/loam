@@ -40,8 +40,13 @@ fn runtime(root: &Path) -> Runtime {
         "bindings/soil-time.soil",
         "bindings/soil-records.soil",
         "bindings/soil-http.soil",
+        "bindings/wasi-cli.soil",
         "../../examples/hue/hue.soil",
+        "../../examples/hue/hue_cli.soil",
         "../../examples/playback/playback.soil",
+        "../../examples/playback/playback_cli.soil",
+        "../../examples/home/home.soil",
+        "../../examples/home/ui.soil",
         "examples/frigate_automation.soil",
         "boot/boot.soil",
     ] {

@@ -275,3 +275,79 @@
       (spotify/control source verb value))
     (else
       (list 'err (str "playback: unknown source " (playback/kind source))))))
+
+;;; ---------------------------------------------------------------------------
+;;; Snapshot and small parsing helpers used by the CLI and the home library
+;;; ---------------------------------------------------------------------------
+
+(defun playback/current-item (items)
+  (cond
+    ((nil? items) nil)
+    ((field (first items) :current) (first items))
+    (else (playback/current-item (rest items)))))
+
+;;; Health, MPD status, the queue, and the current queue item in one bounded
+;;; record. A dashboard should not have to make three independent calls.
+(defun deadwax/snapshot (source)
+  (let ((health (deadwax/health source)))
+    (if (ok? health)
+        (let ((status (deadwax/status source)))
+          (if (ok? status)
+              (let ((queue (deadwax/queue source)))
+                (if (ok? queue)
+                    (list 'ok
+                      (list
+                        (list :health (value health))
+                        (list :status (value status))
+                        (list :queue (value queue))
+                        (list :current
+                          (playback/current-item
+                            (field (value queue) :items)))))
+                    queue))
+              status))
+        health)))
+
+(defun playback/snapshot (source)
+  (if (= (playback/kind source) "deadwax")
+      (deadwax/snapshot source)
+      (list 'ok (list (list :status (spotify/status source))))))
+
+(defun deadwax/playlist-owner (entry)
+  (field entry :owner))
+
+(defun deadwax/playlist (entry)
+  (field entry :playlist))
+
+(defun deadwax/playlist-name (entry)
+  (field (deadwax/playlist entry) :name))
+
+(defun deadwax/playlist-kind (entry)
+  (field (deadwax/playlist entry) :kind))
+
+(defun playback/digit (character)
+  (cond
+    ((= character "0") 0)
+    ((= character "1") 1)
+    ((= character "2") 2)
+    ((= character "3") 3)
+    ((= character "4") 4)
+    ((= character "5") 5)
+    ((= character "6") 6)
+    ((= character "7") 7)
+    ((= character "8") 8)
+    ((= character "9") 9)
+    (else nil)))
+
+(defun playback/digits (characters value)
+  (if (nil? characters)
+      (list 'ok value)
+      (let ((digit (playback/digit (first characters))))
+        (if (nil? digit)
+            (list 'err (str "not a number: " (string-join characters "")))
+            (playback/digits (rest characters) (+ (* value 10) digit))))))
+
+(defun playback/int (text)
+  (let ((characters (string-chars text)))
+    (if (nil? characters)
+        (list 'err "expected a number")
+        (playback/digits characters 0))))

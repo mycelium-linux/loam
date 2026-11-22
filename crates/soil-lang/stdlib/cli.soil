@@ -179,7 +179,9 @@
                      nil)))
     (cond
       (command
-        (cli-parse rest nil nil (str path " " token)
+        ;; Options parsed before the command belong to the same invocation;
+        ;; entering a command must not discard them.
+        (cli-parse rest options nil (str path " " token)
           (cli-inherit-options command (field spec :options))))
       ((cli-has-commands? spec)
         (cli-error (str "unknown command: " token)))

@@ -546,9 +546,10 @@ fn value_bytes(value: &Value) -> std::result::Result<Vec<u8>, String> {
 }
 
 fn text(value: Option<&Value>) -> Option<String> {
-    value.map(|value| match value {
-        Value::String(text) | Value::Symbol(text) | Value::Keyword(text) => text.clone(),
-        other => other.to_string(),
+    value.and_then(|value| match value {
+        Value::Nil => None,
+        Value::String(text) | Value::Symbol(text) | Value::Keyword(text) => Some(text.clone()),
+        other => Some(other.to_string()),
     })
 }
 
