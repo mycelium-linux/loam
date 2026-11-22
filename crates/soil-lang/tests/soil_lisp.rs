@@ -57,6 +57,7 @@ fn runtime(root: &Path) -> Runtime {
         "../../examples/playback/playback_cli.soil",
         "../../examples/home/home.soil",
         "../../examples/home/ui.soil",
+        "../../examples/compiler/core.soil",
         "examples/frigate_automation.soil",
         "boot/boot.soil",
     ] {

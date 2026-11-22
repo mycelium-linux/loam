@@ -1,0 +1,450 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+; A numeric-core compiler written in Soil. This is bootstrap stage 0: it runs
+; under the interpreter and emits WebAssembly text (WAT). The Rust compiler is
+; still the reference until this emits the same shapes and is itself compiled.
+
+; Bootstrap macros: these are expanded while the compiler is loaded into the
+; interpreter. Runtime source avoids macros because the compiler does not
+; expand macros yet.
+(defmacro wasm/i64-load () `(list 41))
+(defmacro wasm/i64-store () `(list 55))
+(defmacro wasm/i32-wrap () `(list 167))
+(defmacro wasm/i64-extend () `(list 173))
+(defmacro wasm/global-get () `(list 35))
+(defmacro wasm/global-set () `(list 36))
+
+(defun compiler/params (params)
+  (if (nil? params)
+      ""
+      (str " (param $" (first params) " i64)"
+           (compiler/params (rest params)))))
+
+(defun compiler/call-args (args)
+  (if (nil? args)
+      ""
+      (str (compiler/expr (first args))
+           (compiler/call-args (rest args)))))
+
+(defun compiler/binary-op (head)
+  (cond
+    ((= head "+") "i64.add")
+    ((= head "-") "i64.sub")
+    ((= head "*") "i64.mul")
+    ((= head "/") "i64.div_s")
+    ((= head "=") "i64.eq")
+    ((= head ">") "i64.gt_s")
+    ((= head "<") "i64.lt_s")
+    ((= head ">=") "i64.ge_s")
+    ((= head "<=") "i64.le_s")
+    ((= head "and") "i64.and")
+    ((= head "or") "i64.or")
+    (else nil)))
+
+(defun compiler/expr (expr)
+  (cond
+    ((symbol? expr)
+      (str "    local.get $" expr "\n"))
+    ((atom expr)
+      (str "    i64.const " expr "\n"))
+    ((= (str (first expr)) "begin")
+      (compiler/body (rest expr)))
+    ((= (str (first expr)) "if")
+      (str (compiler/expr (nth 1 expr))
+           "    i32.wrap_i64\n"
+           "    if (result i64)\n"
+           (compiler/expr (nth 2 expr))
+           "    else\n"
+           (compiler/expr (nth 3 expr))
+           "    end\n"))
+    ((= (str (first expr)) "not")
+      (str (compiler/expr (nth 1 expr))
+           "    i64.eqz\n"
+           "    i64.extend_i32_u\n"))
+    (else
+      (let ((head (str (first expr))))
+        (let ((op (compiler/binary-op head)))
+          (if (nil? op)
+              (str (compiler/call-args (rest expr))
+                   "    call $" head "\n")
+              (str (compiler/expr (nth 1 expr))
+                   (compiler/expr (nth 2 expr))
+                   "    " op "\n")))))))
+
+(defun compiler/body (forms)
+  (if (nil? forms)
+      ""
+      (str (compiler/expr (first forms))
+           (compiler/body (rest forms)))))
+
+(defun compiler/defun (form)
+  (let ((name (str (nth 1 form))))
+    (str "  (func $" name " (export \"" name "\")"
+         (compiler/params (nth 2 form))
+         " (result i64)\n"
+         (compiler/expr (nth 3 form))
+         "  )\n")))
+
+(defun compiler/forms (forms)
+  (if (nil? forms)
+      ""
+      (str (if (= (str (first (first forms))) "defun")
+               (compiler/defun (first forms))
+               "")
+           (compiler/forms (rest forms)))))
+
+(defun compiler/compile-source (source)
+  (str "(module\n" (compiler/forms (read source)) ")\n"))
+
+(defun compiler/compile-wat (source)
+  (compiler/compile-source source))
+
+(defun compiler/compile-wasm (source)
+  (wasm/compile-source source))
+
+; ---------------------------------------------------------------------------
+; Binary Wasm emitter (stage 1).
+;
+; This mirrors the Rust numeric-core compiler: one type per function, function
+; indices in source order, exports, then one code section.
+
+(defun wasm/cat (parts)
+  (if (nil? parts)
+      nil
+      (append (first parts) (wasm/cat (rest parts)))))
+
+(defun wasm/repeat (n value)
+  (if (<= n 0) nil (cons value (wasm/repeat (- n 1) value))))
+
+(defun wasm/div (n d)
+  (if (< n d) 0 (+ 1 (wasm/div (- n d) d))))
+
+(defun wasm/mod (n d)
+  (if (< n d) n (wasm/mod (- n d) d)))
+
+(defun wasm/floor-div (n d)
+  (if (>= n 0)
+      (wasm/div n d)
+      (- 0 (wasm/div (+ (- 0 n) (- d 1)) d))))
+
+(defun wasm/floor-mod (n d)
+  (- n (* d (wasm/floor-div n d))))
+
+(defun wasm/uleb (n)
+  (if (< n 128)
+      (list n)
+      (cons (+ 128 (wasm/mod n 128)) (wasm/uleb (wasm/div n 128)))))
+
+(defun wasm/sleb (n)
+  (let ((byte (wasm/floor-mod n 128))
+        (next (wasm/floor-div n 128)))
+    (cond
+      ((and (= next 0) (< byte 64)) (list byte))
+      ((and (= next -1) (>= byte 64)) (list byte))
+      (else (cons (+ byte 128) (wasm/sleb next))))))
+
+(defun wasm/vec (bytes)
+  (append (wasm/uleb (wasm/count bytes)) bytes))
+
+(defun wasm/name (text)
+  (wasm/vec (string->bytes text)))
+
+(defun wasm/int (value)
+  (append (list 66) (wasm/sleb value)))
+
+(defun wasm/count (value)
+  (if (nil? value) 0 (length value)))
+
+(defun wasm/atom-int (value)
+  (wasm/int (cond
+              ((= value #t) 1)
+              ((= value #f) 0)
+              (else value))))
+
+(defun wasm/local-get (index)
+  (append (list 32) (wasm/uleb index)))
+
+(defun wasm/local-set (index)
+  (append (list 33) (wasm/uleb index)))
+
+(defun wasm/section (id payload)
+  (append (list id) (wasm/vec payload)))
+
+(defun wasm/counted (count bytes)
+  (append (wasm/uleb count) bytes))
+
+(defun wasm/head (value)
+  (str (first value)))
+
+(defun wasm/defun? (form)
+  (and (not (atom form)) (= (wasm/head form) "defun")))
+
+(defun wasm/defuns (forms)
+  (cond
+    ((nil? forms) nil)
+    ((wasm/defun? (first forms))
+      (cons (first forms) (wasm/defuns (rest forms))))
+    (else (wasm/defuns (rest forms)))))
+
+(defun wasm/consts (forms)
+  (cond
+    ((nil? forms) nil)
+    ((and (not (atom (first forms))) (= (wasm/head (first forms)) "defconst"))
+      (cons (list (str (nth 1 (first forms))) (nth 2 (first forms)))
+            (wasm/consts (rest forms))))
+    (else (wasm/consts (rest forms)))))
+
+(defun wasm/env (params index)
+  (if (nil? params)
+      nil
+      (cons (list (str (first params)) index)
+            (wasm/env (rest params) (+ index 1)))))
+
+(defun wasm/lookup (name env)
+  (cond
+    ((nil? env) nil)
+    ((= name (first (first env))) (nth 1 (first env)))
+    (else (wasm/lookup name (rest env)))))
+
+(defun wasm/const-value (name consts)
+  (cond
+    ((nil? consts) nil)
+    ((= name (first (first consts))) (nth 1 (first consts)))
+    (else (wasm/const-value name (rest consts)))))
+
+(defun wasm/index-of (name names index)
+  (cond
+    ((nil? names) nil)
+    ((= name (str (first names))) index)
+    (else (wasm/index-of name (rest names) (+ index 1)))))
+
+(defun wasm/count-lets (expr)
+  (if (atom expr)
+      0
+      (+ (if (= (wasm/head expr) "let") (length (nth 1 expr)) 0)
+         (wasm/count-lets-list expr))))
+
+(defun wasm/count-lets-list (items)
+  (if (nil? items)
+      0
+      (+ (wasm/count-lets (first items))
+         (wasm/count-lets-list (rest items)))))
+
+(defun wasm/binop (head)
+  (cond
+    ((= head "+") (list 124))
+    ((= head "-") (list 125))
+    ((= head "*") (list 126))
+    ((= head "/") (list 127))
+    ((= head "=") (list 81 173))
+    ((= head ">") (list 85 173))
+    ((= head "<") (list 83 173))
+    ((= head ">=") (list 89 173))
+    ((= head "<=") (list 87 173))
+    ((= head "and") (list 131))
+    ((= head "or") (list 132))
+    (else nil)))
+
+(defun wasm/cond->if (clauses)
+  (if (nil? clauses)
+      (list "i64.const" 0)
+      (let ((clause (first clauses)))
+        (if (= (wasm/head clause) "else")
+            (nth 1 clause)
+            (list "if" (nth 0 clause) (nth 1 clause)
+                  (wasm/cond->if (rest clauses)))))))
+
+(defun wasm/void? (expr)
+  (and (not (atom expr))
+       (let ((head (wasm/head expr)))
+         (or (= head "i64.store") (= head "global.set")))))
+
+(defun wasm/emit-body (body env consts names locals out)
+  (if (nil? body)
+      (list out locals)
+      (let ((emitted (wasm/emit (first body) env consts names locals)))
+        (if (nil? (rest body))
+            (list (append out (first emitted)) (nth 1 emitted))
+            (wasm/emit-body (rest body) env consts names
+                            (nth 1 emitted)
+                            (if (wasm/void? (first body))
+                                (append out (first emitted))
+                                (append (append out (first emitted)) (list 26))))))))
+
+(defun wasm/emit-args (args env consts names locals out)
+  (if (nil? args)
+      (list out locals)
+      (let ((emitted (wasm/emit (first args) env consts names locals)))
+        (wasm/emit-args (rest args) env consts names
+                        (nth 1 emitted)
+                        (append out (first emitted))))))
+
+(defun wasm/emit-bindings (bindings env consts names locals out)
+  (if (nil? bindings)
+      (list out env locals)
+      (let ((binding (first bindings)))
+        (let ((emitted (wasm/emit (nth 1 binding) env consts names locals)))
+          (let ((local (nth 1 emitted)))
+            (wasm/emit-bindings
+              (rest bindings)
+              (cons (list (str (first binding)) local) env)
+              consts names
+              (+ local 1)
+              (append (append out (first emitted)) (wasm/local-set local))))))))
+
+(defun wasm/emit (expr env consts names locals)
+  (cond
+    ((symbol? expr)
+      (let ((local (wasm/lookup (str expr) env)))
+        (if (nil? local)
+            (list (wasm/int (wasm/const-value (str expr) consts)) locals)
+            (list (wasm/local-get local) locals))))
+    ((atom expr)
+      (list (wasm/atom-int expr) locals))
+    (else
+      (let ((head (wasm/head expr)))
+        (cond
+          ((= head "let")
+            (let ((bindings (wasm/emit-bindings (nth 1 expr) env consts names locals nil)))
+              (let ((body (wasm/emit (nth 2 expr) (nth 1 bindings) consts names (nth 2 bindings))))
+                (list (append (first bindings) (first body)) (nth 1 body)))))
+          ((= head "cond")
+            (wasm/emit (wasm/cond->if (rest expr)) env consts names locals))
+          ((= head "if")
+            (let ((condition (wasm/emit (nth 1 expr) env consts names locals)))
+              (let ((then (wasm/emit (nth 2 expr) env consts names (nth 1 condition))))
+                (let ((otherwise (wasm/emit (nth 3 expr) env consts names (nth 1 then))))
+                  (list
+                    (wasm/cat
+                      (list (first condition)
+                            (list 167 4 126)
+                            (first then)
+                            (list 5)
+                            (first otherwise)
+                            (list 11)))
+                    (nth 1 otherwise))))))
+          ((= head "not")
+            (let ((value (wasm/emit (nth 1 expr) env consts names locals)))
+              (list (append (first value) (list 80 173)) (nth 1 value))))
+          ((= head "begin")
+            (wasm/emit-body (rest expr) env consts names locals nil))
+          ((= head "i64.load")
+            (let ((address (wasm/emit (nth 1 expr) env consts names locals)))
+              (list (wasm/cat (list (first address) (wasm/i64-load) (list 3 0)))
+                    (nth 1 address))))
+          ((= head "i64.store")
+            (let ((address (wasm/emit (nth 1 expr) env consts names locals)))
+              (let ((value (wasm/emit (nth 2 expr) env consts names (nth 1 address))))
+                (list (wasm/cat (list (first address) (first value)
+                                      (wasm/i64-store) (list 3 0)))
+                      (nth 1 value)))))
+          ((= head "global.get")
+            (list (append (wasm/global-get) (wasm/uleb (nth 1 expr))) locals))
+          ((= head "global.set")
+            (let ((value (wasm/emit (nth 2 expr) env consts names locals)))
+              (list (wasm/cat (list (first value) (wasm/global-set) (wasm/uleb (nth 1 expr))))
+                    (nth 1 value))))
+          ((= head "i32.wrap_i64")
+            (let ((value (wasm/emit (nth 1 expr) env consts names locals)))
+              (list (append (first value) (wasm/i32-wrap)) (nth 1 value))))
+          ((= head "i64.extend_i32_u")
+            (let ((value (wasm/emit (nth 1 expr) env consts names locals)))
+              (list (append (first value) (wasm/i64-extend)) (nth 1 value))))
+          (else
+            (let ((op (wasm/binop head)))
+              (if (nil? op)
+                  (let ((args (wasm/emit-args (rest expr) env consts names locals nil)))
+                    (list (wasm/cat
+                            (list (first args)
+                                  (list 16)
+                                  (wasm/uleb (wasm/index-of head names 0))))
+                          (nth 1 args)))
+                  (let ((left (wasm/emit (nth 1 expr) env consts names locals)))
+                    (let ((right (wasm/emit (nth 2 expr) env consts names (nth 1 left))))
+                      (list (wasm/cat (list (first left) (first right) op)) (nth 1 right))))))))))))
+
+(defun wasm/type-entry (form)
+  (wasm/cat
+    (list (list 96)
+          (wasm/vec (wasm/repeat (wasm/count (nth 2 form)) 126))
+          (wasm/vec (list 126)))))
+
+(defun wasm/types (defuns)
+  (if (nil? defuns)
+      nil
+      (append (wasm/type-entry (first defuns)) (wasm/types (rest defuns)))))
+
+(defun wasm/indices (n)
+  (if (<= n 0) nil (cons (wasm/uleb (- n 1)) (wasm/indices (- n 1)))))
+
+(defun wasm/function-indices (n)
+  (wasm/cat (reverse (wasm/indices n))))
+
+(defun wasm/export-entry (form index)
+  (wasm/cat (list (wasm/name (str (nth 1 form))) (list 0) (wasm/uleb index))))
+
+(defun wasm/exports (defuns index)
+  (if (nil? defuns)
+      nil
+      (append (wasm/export-entry (first defuns) index)
+              (wasm/exports (rest defuns) (+ index 1)))))
+
+(defun wasm/body (form names consts)
+  (let ((params (nth 2 form)))
+    (let ((env (wasm/env params 0)))
+      (let ((count (wasm/count-lets (nth 3 form))))
+        (let ((emitted (wasm/emit (nth 3 form) env consts names (wasm/count params))))
+          (let ((locals (if (= count 0)
+                            (list 0)
+                            (wasm/cat (list (list 1) (wasm/uleb count) (list 126))))))
+            (let ((body (wasm/cat (list locals (first emitted) (list 11)))))
+              (append (wasm/uleb (length body)) body))))))))
+
+(defun wasm/bodies (defuns names consts)
+  (if (nil? defuns)
+      nil
+      (append (wasm/body (first defuns) names consts)
+              (wasm/bodies (rest defuns) names consts))))
+
+(defun wasm/memory-decl (forms)
+  (cond
+    ((nil? forms) nil)
+    ((and (not (atom (first forms))) (= (wasm/head (first forms)) "memory"))
+      (nth 1 (first forms)))
+    (else (wasm/memory-decl (rest forms)))))
+
+(defun wasm/global-decl (forms)
+  (cond
+    ((nil? forms) nil)
+    ((and (not (atom (first forms))) (= (wasm/head (first forms)) "global"))
+      (nth 1 (first forms)))
+    (else (wasm/global-decl (rest forms)))))
+
+(defun wasm/memory-section (forms)
+  (let ((pages (wasm/memory-decl forms)))
+    (if (nil? pages)
+        nil
+        (wasm/section 5 (list 1 0 pages)))))
+
+(defun wasm/global-section (forms)
+  (let ((value (wasm/global-decl forms)))
+    (if (nil? value)
+        nil
+        (wasm/section 6 (wasm/cat (list (list 1 126 1 66) (wasm/sleb value) (list 11)))))))
+
+(defun wasm/compile-source (source)
+  (let ((forms (read source)))
+    (let ((defuns (wasm/defuns forms)))
+      (let ((names (map (lambda (form) (str (nth 1 form))) defuns)))
+        (let ((consts (wasm/consts forms)))
+          (let ((types (wasm/counted (length defuns) (wasm/types defuns))))
+            (let ((indices (wasm/counted (length defuns) (wasm/function-indices (length defuns)))))
+              (let ((exports (wasm/counted (length defuns) (wasm/exports defuns 0))))
+                (let ((bodies (wasm/counted (length defuns) (wasm/bodies defuns names consts))))
+                  (wasm/cat
+                    (list (list 0 97 115 109 1 0 0 0)
+                      (wasm/section 1 types)
+                      (wasm/section 3 indices)
+                      (wasm/memory-section forms)
+                      (wasm/global-section forms)
+                      (wasm/section 7 exports)
+                      (wasm/section 10 bodies))))))))))))

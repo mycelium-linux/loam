@@ -1,0 +1,22 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+; Minimal Soil object runtime, compiled by the Soil compiler.
+; One page of linear memory; a mutable i64 heap pointer at global 0.
+
+(memory 1)
+(global 16)
+
+(defconst rt/nil 0)
+
+(defun rt/cons (car cdr)
+  (let ((ptr (global.get 0)))
+    (begin
+      (i64.store (i32.wrap_i64 ptr) car)
+      (i64.store (i32.wrap_i64 (+ ptr 8)) cdr)
+      (global.set 0 (+ ptr 16))
+      ptr)))
+
+(defun rt/car (cell)
+  (i64.load (i32.wrap_i64 cell)))
+
+(defun rt/cdr (cell)
+  (i64.load (i32.wrap_i64 (+ cell 8))))

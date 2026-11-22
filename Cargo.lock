@@ -7451,6 +7451,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "soil-compiler-wasm"
+version = "0.1.0"
+dependencies = [
+ "soil-lang",
+]
+
+[[package]]
 name = "soil-confluence"
 version = "0.1.0"
 dependencies = [

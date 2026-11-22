@@ -1,0 +1,23 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+; The numeric-core compiler written in Soil emits WAT.
+
+(defun test/selfhost-add ()
+  (let ((wat (compiler/compile-source "(defun add (a b) (+ a b))")))
+    (and
+      (string-contains? wat "(func $add")
+      (string-contains? wat "(export \"add\")")
+      (string-contains? wat "(param $a i64)")
+      (string-contains? wat "i64.add"))))
+
+(defun test/selfhost-if ()
+  (let ((wat (compiler/compile-source "(defun less (a b) (if (< a b) 1 0))")))
+    (and
+      (string-contains? wat "i64.lt_s")
+      (string-contains? wat "if (result i64)")
+      (string-contains? wat "else"))))
+
+(defun test/selfhost-call ()
+  (let ((wat (compiler/compile-source "(defun twice (x) (+ x x)) (defun four () (twice (twice 1)))")))
+    (and
+      (string-contains? wat "(func $twice")
+      (string-contains? wat "call $twice"))))
