@@ -42,6 +42,9 @@ truth. The projection lives in Soil:
 
 - `crates/soil-lang/stdlib/doc.soil` extracts comments and renders Markdown,
   `llms.txt`, and the human-readable HTML pages.
+- `sites/soil-lang/docs-copy.soil` owns only the page catalog: order, titles,
+  summaries, and manifest metadata. The entries on each page still come from
+  the `;;;` comments above their forms.
 - `sites/soil-lang/docs.sh` feeds the extractor stack-sized source windows and
   writes the generated files. `build.sh` runs it automatically.
 

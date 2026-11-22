@@ -1,6 +1,8 @@
 #!/usr/bin/env sh
 # Generate the API docs from Soil `;;;` doc comments.
 #
+# The page catalog (order, titles, summaries) lives in docs-copy.soil. The
+# entries on each page come from the `;;;` comments in the stdlib source.
 # Extraction runs in Soil. The evaluator is recursive and this machine's stack
 # is small, so the wrapper feeds it fixed-size source windows and joins the
 # entries; projection to Markdown, llms.txt, and HTML stays in docs.soil.
@@ -35,16 +37,7 @@ prelude = [
     "crates/soil-lang/stdlib/ui.soil",
     "crates/soil-lang/stdlib/highlight.soil",
     "crates/soil-lang/stdlib/doc.soil",
-]
-sources = [
-    ("prelude", "Prelude", "Lists, records, JSON, and the small helpers every Soil program uses."),
-    ("date", "Date", "UTC date/time formatting, parsing, day boundaries, and relative labels."),
-    ("url", "URL", "Percent encoding, query strings, joining, and validation."),
-    ("json", "JSON", "Object helpers, deep merge, path set, and pretty printing."),
-    ("events", "Events", "Unibus subscriptions, bounded polling, object publishing, and dedupe."),
-    ("ui", "UI forms", "Forms, escaping, HTML rendering, and the Soil component library."),
-    ("highlight", "Highlighter", "A small Soil tokenizer used by code blocks and the landing page."),
-    ("cli", "CLI", "A data-driven command spec, argv parser, help renderer, and man-page generator."),
+    "sites/soil-lang/docs-copy.soil",
 ]
 
 def chunks(text, limit=18):
@@ -74,6 +67,19 @@ def run_soil(extra):
     if not value:
         return None
     return json.loads(json.loads(value))
+
+def catalog():
+    with tempfile.TemporaryDirectory() as tmp:
+        app = os.path.join(tmp, "catalog.soil")
+        with open(app, "w") as handle:
+            handle.write("(defun main () (json-encode docs-copy))\n")
+        return run_soil([app])
+
+docs_copy = catalog()
+sources = [
+    (page["slug"], page["title"], page["summary"])
+    for page in docs_copy["pages"]
+]
 
 def extract(chunk):
     with tempfile.TemporaryDirectory() as tmp:
@@ -119,11 +125,11 @@ with tempfile.TemporaryDirectory() as tmp:
 # Andes manifest. Andes lives in its own repository; tend can consume it as a
 # git dependency and point `repoRoot` at this checkout.
 manifest = {
-    "name": "Soil",
-    "description": "The fungOS substrate: a small homoiconic Lisp with typed host capabilities.",
+    "name": docs_copy["name"],
+    "description": docs_copy["description"],
     "navigation": [{
-        "group": "API",
-        "audience": "public",
+        "group": docs_copy["nav-group"],
+        "audience": docs_copy["audience"],
         "pages": [
             {
                 "title": "Overview",
