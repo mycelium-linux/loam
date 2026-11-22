@@ -23,6 +23,7 @@ mkdir -p sites/soil-lang/dist/examples
   crates/soil-lang/stdlib/prelude.soil \
   crates/soil-lang/stdlib/ui.soil \
   crates/soil-lang/stdlib/highlight.soil \
+  sites/soil-lang/copy.soil \
   sites/soil-lang/soil-lang.soil \
   sites/soil-lang/build.soil \
   > sites/soil-lang/dist/index.html

@@ -4,6 +4,6 @@
 (defun main ()
   (println
     (render-page
-      "Soil — a substrate for tools that explain themselves"
+      (copy :site :title)
       (styles)
       (view #f))))
