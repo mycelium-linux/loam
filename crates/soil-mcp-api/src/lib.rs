@@ -127,7 +127,9 @@ impl Backend for Loopback {
 /// only host call; these wrappers give the agent readable names and docs.
 pub fn render_soil(backend: &mut dyn Backend) -> Result<String, Failure> {
     let servers = backend.servers()?;
-    let mut out = String::from("; SPDX-License-Identifier: MIT OR Apache-2.0\n; generated from MCP catalogs\n\n");
+    let mut out = String::from(
+        "; SPDX-License-Identifier: MIT OR Apache-2.0\n; generated from MCP catalogs\n\n",
+    );
     for server in servers {
         let tools = backend.tools(&server.id)?;
         for tool in tools {
@@ -151,7 +153,13 @@ fn soil_name(server: &str, tool: &str) -> String {
 fn segment(value: &str) -> String {
     let mut out: String = value
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     if out.is_empty() {
         out.push('_');
@@ -177,9 +185,7 @@ mod tests {
         assert_eq!(backend.servers().unwrap().len(), 1);
         let tools = backend.tools("loopback").unwrap();
         assert_eq!(tools[0].name, "echo");
-        let result = backend
-            .call("loopback", "echo", r#"{"x":1}"#)
-            .unwrap();
+        let result = backend.call("loopback", "echo", r#"{"x":1}"#).unwrap();
         assert!(result.contains("\"x\":1"));
     }
 
