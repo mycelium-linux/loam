@@ -1,21 +1,35 @@
 # Soil
 
-**Soil is the WASM runtime for fungOS apps.** Applications that run on Soil are
-called **Spores**: a Spore is a signed manifest (module CID, capabilities, target,
+**A small Lisp and WebAssembly runtime for tools you can read.**
+
+[![ci](https://github.com/ajmwagar/soil/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ajmwagar/soil/actions/workflows/ci.yml)
+[![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+[![rust](https://img.shields.io/badge/rust-2024%20edition-orange.svg)](https://www.rust-lang.org/)
+[![website](https://img.shields.io/badge/website-soil--lang.org-c8f169.svg)](https://soil-lang.org)
+[![stars](https://img.shields.io/github/stars/ajmwagar/soil?style=flat&logo=github&label=stars)](https://github.com/ajmwagar/soil/stargazers)
+
+Soil is the WASM runtime for fungOS apps. Applications that run on Soil are
+called **Spores**: a signed manifest (module CID, capabilities, target,
 engine version) plus its module bytes. Distribution is planned as the **Spore
 Store** — publish by CID, resolve by CID + target, revoke, never re-sign.
 
-Status: **early.** The full runtime host is not implemented; the first
-capability host (BLE) and one real Spore do run. Nothing here is a shipped
-product surface yet. Canonical capability contracts for `soil:view`,
-`soil:time`, `soil:storage`, `soil:ble` and `soil:canvas` live in [`wit/`](wit)
-and are enforced by `crates/soil-abi`. Canvas is the cross-platform owner;
-the spore-facing half is frozen as `soil:surface@1.1.0` in the spores repo, with
-Canvas's own crates still on `soil:canvas@1.0.0`. The broader design record lives in the `mycelium`
-repository (`docs/soil-capabilities.md`, PR pending) and covers the remaining
-capability boundary (`soil:gpu`, `soil:audio`, `soil:stream`),
-signed-Spore verification, and the target matrix (macOS, Linux, Android/Fire TV,
-CAT S22; tvOS is AOT-only because it forbids JIT).
+[Website](https://soil-lang.org) ·
+[API docs](https://soil-lang.org/docs/) ·
+[Why Soil](https://soil-lang.org/#why) ·
+[Examples](https://soil-lang.org/#examples) ·
+[Source](https://github.com/ajmwagar/soil)
+
+> **Status: early.** The full runtime host is not implemented; the first
+> capability host (BLE) and one real Spore do run. Nothing here is a shipped
+> product surface yet. Canonical capability contracts for `soil:view`,
+> `soil:time`, `soil:storage`, `soil:ble` and `soil:canvas` live in [`wit/`](wit)
+> and are enforced by `crates/soil-abi`. Canvas is the cross-platform owner;
+> the spore-facing half is frozen as `soil:surface@1.1.0` in the spores repo, with
+> Canvas's own crates still on `soil:canvas@1.0.0`. The broader design record
+> lives in the `mycelium` repository (`docs/soil-capabilities.md`) and covers the
+> remaining capability boundary (`soil:gpu`, `soil:audio`, `soil:stream`),
+> signed-Spore verification, and the target matrix (macOS, Linux, Android/Fire TV,
+> CAT S22; tvOS is AOT-only because it forbids JIT).
 
 The first concrete workload is the [Viewer Spore](docs/viewer-spore.md): one
 presentation viewer for web, signed Spores and retained scenes, with normalized
@@ -42,6 +56,15 @@ Principles:
   capabilities; wire formats and state machines ship as `.wasm`.
 - **Honest failure.** A rejected or unverifiable Spore fails loudly with a named
   reason, never silently degrades.
+
+## Start here
+
+- **Language** — [`crates/soil-lang`](crates/soil-lang/README.md): reader,
+  interpreter, typed core, Lisp stdlib, and Wasm backends.
+- **Runtime** — [One runner](#one-runner): one host binary, four modes.
+- **Capabilities** — [`wit/`](wit): the contracts a Spore can be granted.
+- **Site** — [soil-lang.org](https://soil-lang.org): examples and generated API
+  docs.
 
 ## Soil Lisp
 
@@ -253,19 +276,6 @@ not.
 The capability contracts parse as WIT, and the Viewer state machine has no host
 authority.
 
-## License
-
-Dual-licensed under either of
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-- MIT license ([LICENSE-MIT](LICENSE-MIT))
-
-at your option.
-
-Unless you explicitly state otherwise, any contribution intentionally submitted
-for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
-dual licensed as above, without any additional terms or conditions.
-
 The threaded process lane is documented in [`docs/soil-process.md`](docs/soil-process.md). Ordinary cpal callback programs can run there with a guest-owned audio thread; the host device callback never enters Wasm. The only app line is `let host = cpal_soil::host();` on both native and threaded Wasm.
 
 The first CID-neutral content/index slice is [`crates/fungos-content`](crates/fungos-content). See [`docs/fungos-content.md`](docs/fungos-content.md).
@@ -304,3 +314,25 @@ a materialized overlay, and builds route to the fleet through
 - [Mush architecture](docs/mush-architecture.md) — where the pieces live,
   repository by repository, and how a line is routed.
 - [Mush operator](docs/mush-operator.md) — running it for other people.
+
+## Repository
+
+Canonical source: <https://github.com/ajmwagar/soil>. The old
+`mycelium-linux/soil` URL redirects after the transfer.
+
+## Star history
+
+[![Star History Chart](https://api.star-history.com/svg?repos=ajmwagar/soil&type=Date)](https://star-history.com/#ajmwagar/soil&Date)
+
+## License
+
+Dual-licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
+dual licensed as above, without any additional terms or conditions.
