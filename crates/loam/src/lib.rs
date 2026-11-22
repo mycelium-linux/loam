@@ -56,6 +56,7 @@ mod command_service;
 pub mod context;
 #[cfg(feature = "wasi")]
 pub mod creds;
+pub mod edit;
 #[cfg(feature = "wasi")]
 mod gateway;
 #[cfg(feature = "wasi")]

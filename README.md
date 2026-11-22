@@ -73,6 +73,7 @@ Those are Soil code, Spores, or plugins.
 ```sh
 loam run NAME [ARGS...]        # run an installed wasm command
 loam surface FILE [--size WxH] # open a native winit + WebGPU surface
+loam edit <op> ... [--json]    # edit a personal source overlay
 loam doctor                    # print the linked capability profile
 loam help
 ```
@@ -85,6 +86,23 @@ Command packages live in the usual roots:
 ```
 
 `loam run` is the virtual PATH. It does not compile or interpret Soil source.
+
+## Editing
+
+A signed Spore is immutable. `loam edit` copies its `source/` into a personal
+session, checkpoints that work tree, saves full-file overlays, and applies them
+under the personal patch root:
+
+```sh
+loam edit open spores/marbles --json
+loam edit checkpoint acme:marbles/<base-digest> --message "first change" --json
+loam edit save acme:marbles/<base-digest> --message "overlay" --json
+loam edit apply acme:marbles/<base-digest> --json
+```
+
+Every command writes JSON to stdout. `build` is unsupported until a builder is
+configured; source-only overlays can still be saved. The signed package is never
+written to.
 
 ## Plugins
 

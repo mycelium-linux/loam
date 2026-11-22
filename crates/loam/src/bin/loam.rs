@@ -15,6 +15,7 @@ commands:
                                   open a native surface or capture one frame
   plugin [list|verify|roots|pack DIR]
                                   inspect or seal installed Spore capability exports
+  edit <op> ... [--json]          edit a Spore source overlay
   doctor                          print the linked capability profile
   help                            this message"#
 }
@@ -81,6 +82,7 @@ fn run() -> Result<()> {
             }
         }
         "plugin" => soil::command::plugin::cli(&args[1..]),
+        "edit" => std::process::exit(soil::edit::run(&args[1..])),
         "doctor" => {
             println!("loam {}", env!("CARGO_PKG_VERSION"));
             for capability in soil::WASI_PROFILE {
