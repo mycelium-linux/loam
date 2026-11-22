@@ -88,6 +88,18 @@ cargo run -p soil-lang --bin soil-witgen -- \
   wit/soil-records.wit --out crates/soil-lang/bindings/soil-records.soil
 ```
 
+Wasm typed dispatch table:
+
+```sh
+cargo run -p soil-lang --bin soil-witgen -- --rust-dispatch \
+  --bindings crate::wit --out crates/soil-lang/bindings/soil-dispatch.rs \
+  wit/soil-records.wit wit/soil-time.wit
+```
+
+The generated module turns `(host-call "soil:records" "query" ...)` into a
+typed call to the guest's `wit-bindgen` import. It is generated from canonical
+WIT, never hand-written.
+
 Wasm (numeric core or McCarthy Lisp core):
 
 ```sh
