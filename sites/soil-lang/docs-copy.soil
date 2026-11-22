@@ -1,0 +1,23 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+; Page-level copy for the generated API docs.
+;
+; Function entries come from `;;;` doc comments in the standard library.
+; This file only owns the catalog that is not attached to a form:
+; page order, titles, one-line summaries, and the manifest metadata.
+
+(defconst docs-copy
+  (list
+    (list :name "Soil")
+    (list :description "The fungOS substrate: a small homoiconic Lisp with typed host capabilities.")
+    (list :nav-group "API")
+    (list :audience "public")
+    (list :pages
+      (list
+        (list (list :slug "prelude") (list :title "Prelude") (list :summary "Lists, records, JSON, and the small helpers every Soil program uses."))
+        (list (list :slug "date") (list :title "Date") (list :summary "UTC date/time formatting, parsing, day boundaries, and relative labels."))
+        (list (list :slug "url") (list :title "URL") (list :summary "Percent encoding, query strings, joining, and validation."))
+        (list (list :slug "json") (list :title "JSON") (list :summary "Object helpers, deep merge, path set, and pretty printing."))
+        (list (list :slug "events") (list :title "Events") (list :summary "Unibus subscriptions, bounded polling, object publishing, and dedupe."))
+        (list (list :slug "ui") (list :title "UI forms") (list :summary "Forms, escaping, HTML rendering, and the Soil component library."))
+        (list (list :slug "highlight") (list :title "Highlighter") (list :summary "A small Soil tokenizer used by code blocks and the landing page."))
+        (list (list :slug "cli") (list :title "CLI") (list :summary "A data-driven command spec, argv parser, help renderer, and man-page generator."))))))
