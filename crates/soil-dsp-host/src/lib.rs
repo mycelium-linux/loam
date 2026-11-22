@@ -193,3 +193,97 @@ mod tests {
         assert_eq!(Window::Rectangular.coefficient(17, 64), 1.0);
     }
 }
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct IqSpectrum {
+    pub magnitudes: Vec<f32>,
+    pub bin_hz: f32,
+    pub peak_bin: u32,
+    pub peak_hz: f32,
+    pub rms: f32,
+}
+
+/// Complex IQ FFT, returned FFT-shifted so bin `n/2` is DC.
+pub fn iq_windowed_fft(
+    interleaved: &[f32],
+    sample_rate_hz: u32,
+    window: Window,
+) -> Result<IqSpectrum, DspError> {
+    if interleaved.len() % 2 != 0 {
+        return Err(DspError::Invalid);
+    }
+    let n = interleaved.len() / 2;
+    if n < MIN_FFT {
+        return Err(DspError::Invalid);
+    }
+    if n > MAX_FFT {
+        return Err(DspError::OverBudget);
+    }
+    if !n.is_power_of_two() || sample_rate_hz == 0 {
+        return Err(DspError::Invalid);
+    }
+    let mut real = vec![0.0f64; n];
+    let mut imag = vec![0.0f64; n];
+    let mut energy = 0.0f64;
+    for index in 0..n {
+        let coefficient = window.coefficient(index, n);
+        let i = f64::from(interleaved[index * 2]) * coefficient;
+        let q = f64::from(interleaved[index * 2 + 1]) * coefficient;
+        real[index] = i;
+        imag[index] = q;
+        energy += i * i + q * q;
+    }
+    let rms = (energy / n as f64).sqrt() as f32;
+    fft_in_place(&mut real, &mut imag);
+
+    // Shift negative frequencies below DC. Magnitude scale is 1/n for the
+    // complex transform; the full circle is retained.
+    let shift = n / 2;
+    let scale = 1.0 / n as f64;
+    let mut magnitudes = Vec::with_capacity(n);
+    let mut peak_bin = 0usize;
+    let mut peak = -1.0f64;
+    for output in 0..n {
+        let source = (output + shift) % n;
+        let magnitude = (real[source] * real[source] + imag[source] * imag[source]).sqrt() * scale;
+        if magnitude > peak {
+            peak = magnitude;
+            peak_bin = output;
+        }
+        magnitudes.push(magnitude as f32);
+    }
+    let bin_hz = sample_rate_hz as f32 / n as f32;
+    Ok(IqSpectrum {
+        magnitudes,
+        bin_hz,
+        peak_bin: peak_bin as u32,
+        peak_hz: (peak_bin as f32 - shift as f32) * bin_hz,
+        rms,
+    })
+}
+
+#[cfg(test)]
+mod iq_tests {
+    use super::*;
+
+    #[test]
+    fn finds_a_complex_tone_offset() {
+        let n = 1024;
+        let rate = 2_400_000u32;
+        let offset = -900_000.0f32;
+        let mut samples = Vec::with_capacity(n * 2);
+        for index in 0..n {
+            let angle = std::f32::consts::TAU * offset * index as f32 / rate as f32;
+            samples.push(angle.cos());
+            samples.push(angle.sin());
+        }
+        let spectrum = iq_windowed_fft(&samples, rate, Window::Hann).unwrap();
+        assert!((spectrum.peak_hz - offset).abs() <= spectrum.bin_hz);
+        assert_eq!(spectrum.magnitudes.len(), n);
+    }
+
+    #[test]
+    fn rejects_odd_iq() {
+        assert_eq!(iq_windowed_fft(&[1.0], 48_000, Window::Hann), Err(DspError::Invalid));
+    }
+}

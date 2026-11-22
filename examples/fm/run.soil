@@ -1,0 +1,79 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+; Offline FM broadcast scan: complex IQ -> FFT-shifted magnitudes -> stations.
+
+(defun fm/max2 (a b) (if (> a b) a b))
+
+(defun fm/max (values)
+  (if (nil? values) 0.0 (reduce 'fm/max2 (first values) (rest values))))
+
+(defun fm/peak? (all index max)
+  (let ((value (nth index all))
+        (next (nth (+ index 1) all)))
+    (if (or (nil? value) (nil? next))
+        #f
+        (let ((previous (if (= index 0) 0.0 (nth (- index 1) all))))
+          (and
+            (> value previous)
+            (> value next)
+            (> value (* max 0.20)))))))
+
+(defun fm/peak-event (value index count bin-hz center)
+  (let ((bin (- index (/ count 2))))
+    (list
+      (list :kind "fm.station")
+      (list :frequency-hz (+ center (* bin bin-hz)))
+      (list :offset-hz (* bin bin-hz))
+      (list :bin index)
+      (list :power value))))
+
+(defun fm/peaks (values previous index count max bin-hz center acc)
+  (if (nil? values)
+      (reverse acc)
+      (let ((value (first values))
+            (next (first (rest values))))
+        (if (nil? next)
+            (reverse acc)
+            (if (and (> value previous) (> value next) (> value (* max 0.20)))
+                (fm/peaks (rest values) value (+ index 1) count max bin-hz center
+                  (cons (fm/peak-event value index count bin-hz center) acc))
+                (fm/peaks (rest values) value (+ index 1) count max bin-hz center acc))))))
+
+(defun fm/scan (pipeline)
+  (let ((fixture (fm-fixture)))
+    (let ((stage (first (field pipeline :stages))))
+      (let ((options (field stage :options)))
+        (let ((response
+                (soil:dsp/iq-windowed-fft
+                  (list
+                    (list :samples (field fixture :samples))
+                    (list :sample-rate-hz (field fixture :sample_rate_hz))
+                    (list :window (field options :window))))))
+          (if (not (ok? response))
+              (list (list :kind "fm.error") (list :error (value response)))
+              (let ((spectrum (value response)))
+                (let ((magnitudes (field spectrum :magnitudes)))
+                  (fm/peaks
+                    magnitudes 0.0 0 (length magnitudes)
+                    (fm/max magnitudes)
+                    (field spectrum :bin-hz)
+                    (field fixture :center_hz)
+                    nil)))))))))
+
+(defun fm/print-event (event)
+  (println (json-encode event)))
+
+(defun main ()
+  (let ((pipeline
+          (pipeline/event
+            (pipeline/stage
+              (pipeline/source (pipeline/make "fm-broadcast") "iq"
+                nil)
+              "iq-windowed-fft"
+              (list (list :size 2048) (list :window "hann")))
+            "fm.station" "theseus.fm.station.v1")))
+    (let ((valid (pipeline/validate pipeline)))
+      (if (not (ok? valid))
+          (println (json-encode valid))
+          (let ((stations (fm/scan pipeline)))
+            (map 'fm/print-event stations)
+            (println (json-encode (list (list :kind "fm.done") (list :stations (length stations))))))))))

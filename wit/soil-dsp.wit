@@ -38,11 +38,32 @@ interface dsp {
     rms: f32,
   }
 
+  record iq-fft-request {
+    /// Interleaved I/Q: `[i0, q0, i1, q1, ...]`.
+    samples: list<f32>,
+    sample-rate-hz: u32,
+    window: window,
+  }
+
+  record iq-spectrum {
+    /// FFT-shifted magnitudes, centered at zero Hz. Index `n/2` is DC.
+    magnitudes: list<f32>,
+    bin-hz: f32,
+    peak-bin: u32,
+    /// Signed offset from the tuned center, in Hz.
+    peak-hz: f32,
+    rms: f32,
+  }
+
   /// Window the input, run a radix-2 FFT, and return magnitudes.
   ///
   /// The input length must be a power of two in `32..=65536`. The host rejects
   /// anything else rather than silently padding or truncating.
   windowed-fft: func(request: fft-request) -> result<spectrum, error>;
+
+  /// Complex IQ variant. The interleaved input must contain an even number of
+  /// floats and represent a power-of-two number of complex samples.
+  iq-windowed-fft: func(request: iq-fft-request) -> result<iq-spectrum, error>;
 }
 
 world dsp-host {

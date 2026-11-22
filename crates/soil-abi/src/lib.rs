@@ -135,7 +135,7 @@ pub const CONTRACTS: &[Contract] = &[
         file: "wit/soil-dsp.wit",
         source: include_str!("../../../wit/soil-dsp.wit"),
         package: "soil:dsp@0.1.0",
-        interfaces: &[("dsp", &["windowed-fft"])],
+        interfaces: &[("dsp", &["windowed-fft", "iq-windowed-fft"])],
     },
     Contract {
         file: "wit/soil-codec.wit",

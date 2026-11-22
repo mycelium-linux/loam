@@ -56,6 +56,7 @@
 (defun pipeline/valid-op? (op)
   (or
     (= op "windowed-fft")
+    (= op "iq-windowed-fft")
     (= op "fuse")
     (= op "detect")
     (= op "decode")
@@ -68,7 +69,7 @@
     (and
       (not (nil? op))
       (pipeline/valid-op? op)
-      (if (= op "windowed-fft")
+      (if (or (= op "windowed-fft") (= op "iq-windowed-fft"))
           (and
             (pipeline/valid-size? (field options :size))
             (pipeline/valid-window? (field options :window)))
