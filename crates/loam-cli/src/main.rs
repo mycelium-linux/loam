@@ -5,14 +5,15 @@
 //! through the command registry. The Soil language, REPL, compiler and tools
 //! live in the Soil repository, not in this runtime.
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 fn usage() -> &'static str {
-    "usage: loam <command>\n\
-     commands:\n\
-       run [OPTIONS] NAME [ARGS...]   run an installed wasm command\n\
-       doctor                         print the linked capability profile\n\
-       help                           this message"
+    r#"usage: loam <command>
+commands:
+  run [OPTIONS] NAME [ARGS...]    run an installed wasm command
+  surface FILE [--size WxH]       open a native winit + WebGPU surface
+  doctor                          print the linked capability profile
+  help                            this message"#
 }
 
 fn main() {
@@ -34,6 +35,30 @@ fn run() -> Result<()> {
                 std::process::exit(code);
             }
             Ok(())
+        }
+        "surface" => {
+            let mut path = None;
+            let mut size = None;
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--size" => {
+                        let value = args.get(i + 1).context("--size WxH")?;
+                        let (w, h) = value.split_once('x').context("--size expects WxH")?;
+                        size = Some((
+                            w.parse().context("surface width")?,
+                            h.parse().context("surface height")?,
+                        ));
+                        i += 2;
+                    }
+                    value => {
+                        path = Some(std::path::PathBuf::from(value));
+                        i += 1;
+                    }
+                }
+            }
+            let path = path.context("surface needs a component path")?;
+            loam_surface::run_window(&path, size)
         }
         "doctor" => {
             println!("loam {}", env!("CARGO_PKG_VERSION"));

@@ -9,7 +9,7 @@ soil:vfs              read-only workspace namespace
 soil:vfs-mut          explicit mutation grant
 soil:records          durable schema-tagged records
 soil:unibus           bounded host event bus
-soil:present          surface handoff
+soil:surface          surface handoff
 soil:principal        host-attested identity
 soil:creds            host-held signing and verification
 soil:index            derived VFS index

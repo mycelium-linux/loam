@@ -129,4 +129,10 @@ pub const WASI_PROFILE: &[&str] = &[
     "fungos:http-context",
     "soil:creds",
     "soil:unibus",
+    "soil:vfs",
+    "soil:vfs-mut",
+    "soil:records",
+    "soil:index",
+    "soil:principal",
+    "soil:surface",
 ];

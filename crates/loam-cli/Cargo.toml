@@ -16,5 +16,7 @@ anyhow = "1"
 soil = { package = "loam", path = "../loam" }
 soil-command = { package = "loam-command", path = "../loam-command" }
 
+loam-surface = { path = "../loam-surface" }
+
 [lints]
 workspace = true

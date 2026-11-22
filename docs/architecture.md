@@ -33,7 +33,6 @@ soil:vfs
 soil:vfs-mut
 soil:records
 soil:unibus
-soil:present        (surface contract)
 soil:principal
 soil:creds
 soil:index
@@ -58,6 +57,7 @@ wasi:http
 Bundled with `loam`, loaded through the same plugin path as third-party capabilities:
 
 ```text
+soil:surface
 soil:ble
 wasi:audio
 soil:codec

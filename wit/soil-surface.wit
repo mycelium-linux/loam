@@ -13,12 +13,12 @@
 // host, not a second contract:
 //
 // * a component host binds it directly through the canonical ABI
-//   (`soil-webgpu`, `canvas-winit`);
+//   (`loam-surface`);
 // * a core-Wasm host lowers the same functions by hand
-//   (`soil-runtime`, see `docs/abi-core-wasm.md`).
+//   (`soil-runtime`).
 //
 // A Spore targets `surface` once and runs against either.
-package soil:present@0.1.0;
+package soil:surface@0.1.0;
 
 interface types {
   /// Which deliveries the host can accept. A Spore asks once and picks the
@@ -97,7 +97,7 @@ interface input {
   }
 
   /// Pointer position in the presenter's surface space: the same units
-  /// `soil:present/surface.size` reports, origin top-left. A Spore that lays out
+  /// `soil:surface/surface.size` reports, origin top-left. A Spore that lays out
   /// against that size hit-tests with these numbers directly, at any device
   /// pixel ratio, without converting between logical and physical pixels itself.
   record pointer-move {

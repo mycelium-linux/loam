@@ -15,6 +15,7 @@ There is one command:
 
 ```sh
 loam run NAME [ARGS...]
+loam surface FILE [--size WxH]
 ```
 
 `loam` is not the compiler, the REPL, the formatter, the LSP, the package authoring tool, or the UI framework. Those live in the Soil repository.
@@ -29,7 +30,7 @@ First-party runtime capabilities:
 | Workspace mutation | `soil:vfs-mut` | native |
 | Durable records | `soil:records` | native |
 | Host event bus | `soil:unibus` | native |
-| Surface handoff | `soil:present` | contract |
+| Surface handoff | `soil:surface` | native |
 | Identity | `soil:principal` | native |
 | Host-held credentials | `soil:creds` | native |
 | Derived VFS index | `soil:index` | native |
@@ -38,6 +39,7 @@ First-party native plugins:
 
 | Capability | Crates | Status |
 |---|---|---|
+| Surface | `loam-surface` | native |
 | BLE | `loam-ble-api`, `loam-ble-host`, `loam-ble-sim` | native |
 | Audio | `loam-audio` | native |
 | Codec | `loam-codec` | native |
@@ -72,8 +74,9 @@ Those are Soil code, Spores, or plugins.
 ## Commands
 
 ```sh
-loam run NAME [ARGS...]   # run an installed wasm command
-loam doctor               # print the linked capability profile
+loam run NAME [ARGS...]        # run an installed wasm command
+loam surface FILE [--size WxH] # open a native winit + WebGPU surface
+loam doctor                    # print the linked capability profile
 loam help
 ```
 
@@ -106,6 +109,7 @@ crates/loam              runtime host and linker
 crates/loam-cli          the one `loam` binary
 crates/loam-command      command registry and wasm command runner
 crates/loam-spore        package identity, locks, signatures
+crates/loam-surface      winit + WebGPU surface host
 crates/loam-ble-*        first-party BLE plugin
 crates/loam-audio        first-party audio plugin
 crates/loam-codec        first-party codec plugin
