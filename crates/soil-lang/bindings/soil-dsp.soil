@@ -1,0 +1,30 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+(define-package "soil:dsp@0.1.0" :base "soil:dsp" :version "0.1.0")
+
+(define-enum soil:dsp/window rectangular hann hamming blackman)
+(define-enum soil:dsp/error denied invalid over-budget unsupported)
+
+(define-record soil:dsp/fft-request
+  (samples (list f32))
+  (sample-rate-hz u32)
+  (window soil:dsp/window)
+)
+
+(define-record soil:dsp/spectrum
+  (magnitudes (list f32))
+  (bin-hz f32)
+  (peak-bin u32)
+  (peak-hz f32)
+  (rms f32)
+)
+
+(define-capability soil:dsp/windowed-fft
+  :interface "soil:dsp"
+  :function "windowed-fft"
+  :grant "soil:dsp"
+  :version "0.1.0"
+  :params ((request soil:dsp/fft-request))
+  :result (result soil:dsp/spectrum soil:dsp/error))
+
+(defun soil:dsp/windowed-fft (request)
+  (host-call "soil:dsp" "windowed-fft" (list request)))

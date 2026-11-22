@@ -1,0 +1,54 @@
+// Bounded signal-processing kernels.
+//
+// The guest names a kernel and bounded input; the host owns the math, SIMD,
+// threading and (later) GPU placement. Samples never cross this boundary as a
+// raw socket or a device handle.
+package soil:dsp@0.1.0;
+
+interface dsp {
+  enum window {
+    rectangular,
+    hann,
+    hamming,
+    blackman,
+  }
+
+  enum error {
+    denied,
+    invalid,
+    over-budget,
+    unsupported,
+  }
+
+  record fft-request {
+    /// Time-domain samples, already scaled to f32.
+    samples: list<f32>,
+    sample-rate-hz: u32,
+    window: window,
+  }
+
+  record spectrum {
+    /// Magnitudes for bins `0..n/2`; the Nyquist bin is not returned.
+    magnitudes: list<f32>,
+    /// Frequency width of one bin in Hz.
+    bin-hz: f32,
+    peak-bin: u32,
+    peak-hz: f32,
+    /// RMS of the windowed input, before the FFT.
+    rms: f32,
+  }
+
+  /// Window the input, run a radix-2 FFT, and return magnitudes.
+  ///
+  /// The input length must be a power of two in `32..=65536`. The host rejects
+  /// anything else rather than silently padding or truncating.
+  windowed-fft: func(request: fft-request) -> result<spectrum, error>;
+}
+
+world dsp-host {
+  import dsp;
+}
+
+world guest {
+  import dsp;
+}

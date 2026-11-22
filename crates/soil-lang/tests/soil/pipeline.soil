@@ -1,0 +1,29 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+
+(defun test/pipeline-valid ()
+  (let ((pipeline
+          (pipeline/event
+            (pipeline/stage
+              (pipeline/source (pipeline/make "maritime") "iq"
+                (list (list :rate 2000000) (list :center 161975000)))
+              "windowed-fft"
+              (list (list :size 1024) (list :window "hann")))
+            "spectrum" "soil.dsp/spectrum@1")))
+    (ok? (pipeline/validate pipeline))))
+
+(defun test/pipeline-rejects-missing-source ()
+  (let ((pipeline
+          (pipeline/event
+            (pipeline/stage (pipeline/make "bad") "detect" nil)
+            "spectrum" "soil.dsp/spectrum@1")))
+    (err? (pipeline/validate pipeline))))
+
+(defun test/pipeline-rejects-bad-fft ()
+  (let ((pipeline
+          (pipeline/event
+            (pipeline/stage
+              (pipeline/source (pipeline/make "bad-fft") "iq" nil)
+              "windowed-fft"
+              (list (list :size 1000) (list :window "triangle")))
+            "spectrum" "soil.dsp/spectrum@1")))
+    (err? (pipeline/validate pipeline))))

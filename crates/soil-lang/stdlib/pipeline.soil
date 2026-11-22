@@ -1,0 +1,106 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+; Signal pipelines as data, not syntax.
+;
+; The first consumer is the DSP/fusion graph runner. Keeping the graph as
+; records means the linter, node editor, constrained decoder and deployment
+; plan all read the same object; no parser change is required to add a stage.
+
+(defun pipeline/make (id)
+  (list
+    (list :id id)
+    (list :version 1)
+    (list :source nil)
+    (list :stages nil)
+    (list :event nil)
+    (list :placement nil)))
+
+(defun pipeline/source (pipeline kind config)
+  (assoc :source
+    (list
+      (list :kind kind)
+      (list :config config))
+    pipeline))
+
+(defun pipeline/stage (pipeline op options)
+  (assoc :stages
+    (append (field pipeline :stages)
+      (list
+        (list
+          (list :op op)
+          (list :options options))))
+    pipeline))
+
+(defun pipeline/event (pipeline kind schema)
+  (assoc :event
+    (list
+      (list :kind kind)
+      (list :schema schema))
+    pipeline))
+
+(defun pipeline/placement (pipeline constraints)
+  (assoc :placement constraints pipeline))
+
+(defun pipeline/valid-window? (window)
+  (or
+    (= window "rectangular")
+    (= window "hann")
+    (= window "hamming")
+    (= window "blackman")))
+
+(defun pipeline/valid-size? (size)
+  (or
+    (= size 32) (= size 64) (= size 128) (= size 256)
+    (= size 512) (= size 1024) (= size 2048) (= size 4096)
+    (= size 8192) (= size 16384) (= size 32768) (= size 65536)))
+
+(defun pipeline/valid-op? (op)
+  (or
+    (= op "windowed-fft")
+    (= op "fuse")
+    (= op "detect")
+    (= op "decode")
+    (= op "judge")
+    (= op "event")))
+
+(defun pipeline/stage-valid? (stage)
+  (let ((op (field stage :op))
+        (options (field stage :options)))
+    (and
+      (not (nil? op))
+      (pipeline/valid-op? op)
+      (if (= op "windowed-fft")
+          (and
+            (pipeline/valid-size? (field options :size))
+            (pipeline/valid-window? (field options :window)))
+          #t))))
+
+(defun pipeline/valid-source? (source)
+  (and
+    (not (nil? source))
+    (not (nil? (field source :kind)))
+    (not (= (field source :kind) ""))))
+
+(defun pipeline/valid-event? (event)
+  (and
+    (not (nil? event))
+    (not (nil? (field event :kind)))
+    (not (nil? (field event :schema)))))
+
+(defun pipeline/validate (pipeline)
+  (let ((id (field pipeline :id))
+        (source (field pipeline :source))
+        (stages (field pipeline :stages))
+        (event (field pipeline :event)))
+    (cond
+      ((or (nil? pipeline) (nil? id) (= id ""))
+       (list 'err "pipeline: missing id"))
+      ((not (pipeline/valid-source? source))
+       (list 'err "pipeline: missing source"))
+      ((nil? stages)
+       (list 'err "pipeline: no stages"))
+      ((not (all? 'pipeline/stage-valid? stages))
+       (list 'err "pipeline: invalid stage"))
+      ((not (pipeline/valid-event? event))
+       (list 'err "pipeline: missing event"))
+      (else
+       (list 'ok pipeline)))))
