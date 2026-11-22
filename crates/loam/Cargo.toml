@@ -108,6 +108,7 @@ unibus = { git = "https://github.com/mycelium-linux/unibus.git", rev = "8bf8f79"
 unibus-sdk = { git = "https://github.com/mycelium-linux/unibus.git", rev = "8bf8f79", optional = true }
 url = { version = "2", optional = true }
 ureq = { version = "2", features = ["json"] }
+wasm-compose = "0.261"
 wasmtime = { version = "50", default-features = false, features = [
     "anyhow",
     "cache",

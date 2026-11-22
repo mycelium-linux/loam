@@ -15,6 +15,10 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use wasm_compose::{
+    composer::ComponentComposer,
+    config::{Config, Dependency, Instantiation, InstantiationArg},
+};
 use wasmtime::{
     Engine, Store,
     component::{
@@ -303,6 +307,40 @@ impl PluginRegistry {
     }
 }
 
+/// Compose one provider component into a root component at install/build time.
+///
+/// `import` is the canonical WIT instance import the provider satisfies.
+pub fn compose_provider(root: &Path, provider: &Path, import: &str, out: &Path) -> Result<()> {
+    let dir = root.parent().unwrap_or_else(|| Path::new("."));
+    let mut config = Config {
+        dir: dir.to_path_buf(),
+        ..Config::default()
+    };
+    let name = "logger";
+    config.dependencies.insert(
+        name.to_string(),
+        Dependency {
+            path: provider.to_path_buf(),
+        },
+    );
+    let mut instantiation = Instantiation::default();
+    instantiation.dependency = Some(name.to_string());
+    instantiation.arguments.insert(
+        import.to_string(),
+        InstantiationArg {
+            instance: name.to_string(),
+            export: Some(import.to_string()),
+        },
+    );
+    config.instantiations.insert("root".to_string(), instantiation);
+    let bytes = ComponentComposer::new(root, &config).compose()?;
+    if let Some(parent) = out.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(out, bytes)?;
+    Ok(())
+}
+
 fn has_signature(package: &Path) -> bool {
     let Ok(directory) = std::fs::read_dir(package.join("signatures")) else {
         return false;
@@ -413,6 +451,19 @@ pub fn cli(args: &[String]) -> Result<()> {
         }
     }
     let command = positional.first().map(String::as_str).unwrap_or("list");
+    if command == "compose" {
+        let root = PathBuf::from(positional.get(1).context("plugin compose ROOT")?);
+        let provider = PathBuf::from(positional.get(2).context("plugin compose ROOT PROVIDER")?);
+        let import = positional.get(3).context("plugin compose ROOT PROVIDER IMPORT")?;
+        let out = PathBuf::from(
+            positional
+                .get(4)
+                .context("plugin compose ROOT PROVIDER IMPORT OUT")?,
+        );
+        compose_provider(&root, &provider, import, &out)?;
+        println!("{}", out.display());
+        return Ok(());
+    }
     if command == "pack" {
         let package = PathBuf::from(positional.get(1).context("plugin pack DIR")?);
         let manifest = crate::spore::Manifest::load(&package)?;
@@ -588,6 +639,20 @@ mod tests {
             .get_typed_func::<(), (u32,)>(&mut store, "run")
             .unwrap();
         assert_eq!(run.call(&mut store, ()).unwrap(), (7,));
+    }
+
+    #[test]
+    fn composes_a_resource_provider() {
+        let engine = engine();
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/composition/resource/root.wat");
+        let provider = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/composition/resource/logger.wat");
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("composed.wasm");
+        compose_provider(&root, &provider, "example:service/logging@0.1.0", &out)
+            .expect("compose resource provider");
+        Component::from_file(&engine, &out).expect("composed component");
     }
 
     #[test]
