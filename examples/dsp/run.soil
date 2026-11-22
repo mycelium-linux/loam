@@ -1,0 +1,81 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+; Offline: recorded IQ -> windows -> FFT -> events. No live stream yet.
+
+(defun dsp/clamp (value low high)
+  (if (< value low) low (if (> value high) high value)))
+
+(defun dsp/window (samples offset size)
+  (take size (drop offset samples)))
+
+(defun dsp/add (total value) (+ total value))
+
+(defun dsp/band-energy (magnitudes low high)
+  (let ((band (take (- high low) (drop low magnitudes))))
+    (if (nil? band) 0.0 (reduce 'dsp/add 0.0 band))))
+
+(defun dsp/peak-energy (spectrum)
+  (let ((magnitudes (field spectrum :magnitudes)))
+    (if (nil? magnitudes) 0.0 (reduce 'dsp/add 0.0 magnitudes))))
+
+(defun dsp/event (pipeline window-index spectrum)
+  (list
+    (list :kind "dsp.window")
+    (list :pipeline (field pipeline :id))
+    (list :window window-index)
+    (list :peak-hz (field spectrum :peak-hz))
+    (list :peak-bin (field spectrum :peak-bin))
+    (list :rms (field spectrum :rms))
+    (list :energy (dsp/peak-energy spectrum))
+    (list :mode "offline")))
+
+(defun dsp/windows (samples offset size hop window-name pipeline events)
+  (let ((window (dsp/window samples offset size)))
+    (if (or (nil? window) (< (length window) size))
+        (reverse events)
+        (let ((response
+                (soil:dsp/windowed-fft
+                  (list
+                    (list :samples window)
+                    (list :sample-rate-hz (field (dsp-fixture) :sample_rate))
+                    (list :window window-name)))))
+          (if (ok? response)
+              (dsp/windows samples (+ offset hop) size hop window-name pipeline
+                (cons (dsp/event pipeline (/ offset hop) (value response)) events))
+              (begin
+                (println (json-encode (list (list :kind "dsp.error") (list :error (value response)))))
+                (reverse events)))))))
+
+(defun dsp/run (pipeline)
+  (let ((fixture (dsp-fixture)))
+    (let ((stage (first (field pipeline :stages))))
+      (let ((options (field stage :options)))
+        (dsp/windows
+          (field fixture :samples)
+          0
+          (field options :size)
+          (field fixture :hop)
+          (field options :window)
+          pipeline
+          nil)))))
+
+(defun dsp/count (xs)
+  (if (nil? xs) 0 (length xs)))
+
+(defun dsp/print-event (event)
+  (println (json-encode event)))
+
+(defun main ()
+  (let ((pipeline
+          (pipeline/event
+            (pipeline/stage
+              (pipeline/source (pipeline/make "maritime-offline") "iq"
+                (list (list :fixture "recorded-ais-6000hz")))
+              "windowed-fft"
+              (list (list :size 64) (list :window "hann")))
+            "dsp.window" "theseus.dsp.window.v1")))
+    (let ((valid (pipeline/validate pipeline)))
+      (if (ok? valid)
+          (let ((events (dsp/run pipeline)))
+            (map 'dsp/print-event events)
+            (println (json-encode (list (list :kind "dsp.done") (list :windows (dsp/count events))))))
+          (println (json-encode valid))))))

@@ -1,0 +1,33 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+
+(defun test/fusion-score-orders-evidence ()
+  (< (fusion/score (list (list :ble 0.05) (list :imu 0.02) (list :hr 0.0) (list :gps 0.0)))
+     (fusion/score (list (list :ble 0.86) (list :imu 0.72) (list :hr 0.6) (list :gps 0.3)))))
+
+(defun test/fusion-calibrates ()
+  (let ((episodes
+          (list
+            (list
+              (list :id "empty") (list :label 0) (list :ble 0.05)
+              (list :imu 0.02) (list :hr 0.0) (list :gps 0.0))
+            (list
+              (list :id "present") (list :label 1) (list :ble 0.86)
+              (list :imu 0.72) (list :hr 0.6) (list :gps 0.3)))))
+    (let ((report (fusion/calibrate episodes)))
+      (and
+        (= (field report :episodes) 2)
+        (>= (field report :brier) 0.0)))))
+
+(defun test/fusion-shadow-has-no-action ()
+  (let ((events
+          (fusion/shadow-events
+            (list
+              (list
+                (list :id "present") (list :label 1) (list :ble 0.86)
+                (list :imu 0.72) (list :hr 0.6) (list :gps 0.3)))
+            0.55 nil)))
+    (and
+      (= (length events) 1)
+      (= (field (first events) :mode) "shadow")
+      (= (field (first events) :predicted) #t)
+      (= (field (first events) :correct) #t))))

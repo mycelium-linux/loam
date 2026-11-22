@@ -43,6 +43,7 @@ fn runtime(root: &Path) -> Runtime {
         "bindings/soil-dsp.soil",
         "bindings/soil-http.soil",
         "../../examples/hue/hue.soil",
+        "../../examples/fusion/fusion.soil",
         "../../examples/playback/playback.soil",
         "boot/boot.soil",
     ] {
