@@ -13,7 +13,7 @@ use wasmtime::component::{HasSelf, Linker};
 mod namespaced;
 pub use namespaced::{Namespace, NamespacedRecordsHost};
 
-wasmtime::component::bindgen!({ path: "wit/records", world: "records-host" });
+wasmtime::component::bindgen!({ path: "../../wit/soil-records.wit", world: "records-host" });
 
 pub use self::soil::records::records;
 
@@ -28,8 +28,6 @@ fn store_error(context: &str, error: anyhow::Error) -> records::Error {
     eprintln!("records host: {context}: {error:#}");
     records::Error::Io
 }
-
-
 
 /// Records one `scan` call may return.
 ///
@@ -382,7 +380,9 @@ impl records::Host for RecordsBookHost {
                 .map_err(|error| store_error("records store", error))?;
         }
 
-        let record = store.get(&self.book, &id).map_err(|error| store_error("records store", error))?;
+        let record = store
+            .get(&self.book, &id)
+            .map_err(|error| store_error("records store", error))?;
         drop(store);
         Ok(records::CasResult {
             applied: true,
@@ -488,8 +488,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use self::soil::records::records::Host as _;
+    use super::*;
 
     #[test]
     fn packed_page_frames_id_revision_and_body() {

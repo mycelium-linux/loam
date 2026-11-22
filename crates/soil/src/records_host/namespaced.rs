@@ -77,6 +77,8 @@ impl Namespace {
 pub struct NamespacedRecordsHost {
     store: Mutex<Store>,
     namespaces: BTreeMap<String, Namespace>,
+    /// Native REPL mode: a collection name is a scope inside one book.
+    dynamic_book: Option<String>,
 }
 
 impl NamespacedRecordsHost {
@@ -98,6 +100,23 @@ impl NamespacedRecordsHost {
         Ok(Self {
             store: Mutex::new(store),
             namespaces: map,
+            dynamic_book: None,
+        })
+    }
+
+    /// Open one book where every collection name the caller asks for is a
+    /// namespace inside that book. This is for the in-process REPL, not for a
+    /// wasm grant: a Spore still gets an explicit namespace list.
+    pub fn open_dynamic(
+        root: impl AsRef<std::path::Path>,
+        book: impl Into<String>,
+    ) -> anyhow::Result<Self> {
+        let root = root.as_ref();
+        let store = Store::open(root, &root.join("device_id")).context("open fungos-records")?;
+        Ok(Self {
+            store: Mutex::new(store),
+            namespaces: BTreeMap::new(),
+            dynamic_book: Some(book.into()),
         })
     }
 
@@ -105,12 +124,26 @@ impl NamespacedRecordsHost {
         self.namespaces.values()
     }
 
-    fn namespace(&self, name: &str, write: bool) -> Result<&Namespace, records::Error> {
+    fn namespace(&mut self, name: &str, write: bool) -> Result<Namespace, records::Error> {
+        if !self.namespaces.contains_key(name)
+            && let Some(book) = &self.dynamic_book
+        {
+            self.namespaces.insert(
+                name.to_string(),
+                Namespace {
+                    name: name.to_string(),
+                    book: book.clone(),
+                    collection: name.to_string(),
+                    read: true,
+                    write: true,
+                },
+            );
+        }
         let namespace = self.namespaces.get(name).ok_or(records::Error::Denied)?;
         if !namespace.read || (write && !namespace.write) {
             return Err(records::Error::Denied);
         }
-        Ok(namespace)
+        Ok(namespace.clone())
     }
 
     /// Store ids are scoped by collection: a book's primary key is
@@ -143,7 +176,7 @@ impl NamespacedRecordsHost {
         records::Entry {
             key: records::Key {
                 collection: namespace.name.clone(),
-                id: Self::unscoped(namespace, &record.entity_id),
+                id: Self::unscoped(&namespace, &record.entity_id),
             },
             schema: record.schema_id,
             revision: record.updated_hlc,
@@ -168,10 +201,10 @@ impl records::Host for NamespacedRecordsHost {
         let record = {
             let store = self.store.lock().expect("records store poisoned");
             store
-                .get(&namespace.book, &Self::scoped(namespace, &key.id))
+                .get(&namespace.book, &Self::scoped(&namespace, &key.id))
                 .map_err(|_| records::Error::NotFound)?
         };
-        Ok(Self::entry(namespace, record))
+        Ok(Self::entry(&namespace, record))
     }
 
     fn scan(
@@ -207,7 +240,7 @@ impl records::Host for NamespacedRecordsHost {
                 if !entity_id.starts_with(&prefix) {
                     continue;
                 }
-                entries.push(Self::entry(namespace, record));
+                entries.push(Self::entry(&namespace, record));
                 if entries.len() > limit as usize {
                     entries.truncate(limit as usize);
                     return Ok(records::Page {
@@ -264,17 +297,17 @@ impl records::Host for NamespacedRecordsHost {
         store
             .put_record(
                 &namespace.book,
-                &Self::scoped(namespace, &entry.key.id),
+                &Self::scoped(&namespace, &entry.key.id),
                 &entry.schema,
                 1,
                 value,
             )
             .map_err(|_| records::Error::Io)?;
         let record = store
-            .get(&namespace.book, &Self::scoped(namespace, &entry.key.id))
+            .get(&namespace.book, &Self::scoped(&namespace, &entry.key.id))
             .map_err(|_| records::Error::Io)?;
         drop(store);
-        Ok(Self::entry(namespace, record))
+        Ok(Self::entry(&namespace, record))
     }
 
     fn compare_and_swap(
@@ -307,11 +340,11 @@ impl records::Host for NamespacedRecordsHost {
         };
 
         let mut store = self.store.lock().expect("records store poisoned");
-        let scoped = Self::scoped(namespace, &key.id);
+        let scoped = Self::scoped(&namespace, &key.id);
         let current = store.get(&namespace.book, &scoped).ok();
         let current_entry = current
             .as_ref()
-            .map(|record| Self::entry(namespace, record.clone()));
+            .map(|record| Self::entry(&namespace, record.clone()));
         let matches = match (&expected, &current) {
             (None, None) => true,
             // A tombstone is absent for create-if-absent semantics.
@@ -363,7 +396,7 @@ impl records::Host for NamespacedRecordsHost {
         drop(store);
         Ok(records::CasResult {
             applied: true,
-            entry: Self::entry(namespace, record),
+            entry: Self::entry(&namespace, record),
         })
     }
 
@@ -373,7 +406,7 @@ impl records::Host for NamespacedRecordsHost {
             return Err(records::Error::Invalid);
         }
         let mut store = self.store.lock().expect("records store poisoned");
-        let scoped = Self::scoped(namespace, &key.id);
+        let scoped = Self::scoped(&namespace, &key.id);
         let schema = store
             .get(&namespace.book, &scoped)
             .map(|record| record.schema_id)
@@ -417,7 +450,7 @@ impl records::Host for NamespacedRecordsHost {
         Ok(records::Page {
             entries: entries
                 .into_iter()
-                .map(|record| Self::entry(namespace, record))
+                .map(|record| Self::entry(&namespace, record))
                 .collect(),
             next,
         })
@@ -431,9 +464,9 @@ impl records::Host for NamespacedRecordsHost {
             applied: 0,
             skipped: 0,
         };
-        let mut store = self.store.lock().expect("records store poisoned");
         for entry in entries {
             let namespace = self.namespace(&entry.key.collection, true)?;
+            let mut store = self.store.lock().expect("records store poisoned");
             if entry.key.id.is_empty() || entry.schema.is_empty() {
                 return Err(records::Error::Invalid);
             }
@@ -447,7 +480,7 @@ impl records::Host for NamespacedRecordsHost {
                 }
                 value
             };
-            let entity_id = Self::scoped(namespace, &entry.key.id);
+            let entity_id = Self::scoped(&namespace, &entry.key.id);
             let applied = store
                 .apply_entry(
                     &namespace.book,
@@ -551,24 +584,28 @@ mod tests {
         decision.body = serde_json::to_vec(&serde_json::json!({"action": "publish"})).unwrap();
         host.upsert(decision).unwrap();
 
-        let body = |entry: records::Entry| serde_json::from_slice::<serde_json::Value>(&entry.body).unwrap();
+        let body = |entry: records::Entry| {
+            serde_json::from_slice::<serde_json::Value>(&entry.body).unwrap()
+        };
         assert_eq!(
-            body(host
-                .get(records::Key {
+            body(
+                host.get(records::Key {
                     collection: "raw".into(),
                     id: "m1".into()
                 })
-                .unwrap())["body"],
+                .unwrap()
+            )["body"],
             "hello",
             "the raw message survives the decision"
         );
         assert_eq!(
-            body(host
-                .get(records::Key {
+            body(
+                host.get(records::Key {
                     collection: "decisions".into(),
                     id: "m1".into()
                 })
-                .unwrap())["action"],
+                .unwrap()
+            )["action"],
             "publish"
         );
 

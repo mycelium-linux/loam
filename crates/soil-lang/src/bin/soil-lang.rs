@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 use soil_lang::sexp::Value;
-use soil_lang::{FakeHost, Host, HostChain, NativeHost, Runtime, SoilRecordsHost, SystemTimeHost};
+use soil_lang::{FakeHost, Host, NativeHost, Runtime};
 
 fn run() -> Result<()> {
     let mut files: Vec<PathBuf> = Vec::new();
@@ -181,14 +181,8 @@ fn run() -> Result<()> {
             Box::new(native)
         }
         (Some(_), None) => bail!("--workspace-root requires --records-root"),
-        (None, Some(records)) => Box::new(HostChain::new(vec![
-            Box::new(SystemTimeHost),
-            Box::new(SoilRecordsHost::open(records, book)?),
-        ])),
-        (None, None) => Box::new(HostChain::new(vec![
-            Box::new(SystemTimeHost),
-            Box::new(FakeHost::new()),
-        ])),
+        (None, Some(records)) => Box::new(NativeHost::open(".", records, book)?),
+        (None, None) => Box::new(FakeHost::new()),
     };
     let mut runtime = Runtime::new(host);
     runtime.set_args(program_args);
@@ -264,10 +258,9 @@ fn run_repl(runtime: &mut Runtime) -> Result<()> {
                 ":time" => {
                     let started = std::time::Instant::now();
                     match runtime.load(rest) {
-                        Ok(value) => println!(
-                            "{value}  ({ms} ms)",
-                            ms = started.elapsed().as_millis()
-                        ),
+                        Ok(value) => {
+                            println!("{value}  ({ms} ms)", ms = started.elapsed().as_millis())
+                        }
                         Err(error) => eprintln!("{error:#}"),
                     }
                 }
@@ -287,7 +280,9 @@ fn run_repl(runtime: &mut Runtime) -> Result<()> {
                         ms = started.elapsed().as_millis()
                     );
                 }
-                _ => eprintln!("unknown REPL command {command}; try :stats, :time FORM, :bench N FORM, :reset, :quit"),
+                _ => eprintln!(
+                    "unknown REPL command {command}; try :stats, :time FORM, :bench N FORM, :reset, :quit"
+                ),
             }
             buffer.clear();
             continue;

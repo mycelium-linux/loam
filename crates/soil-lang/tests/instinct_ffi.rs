@@ -2,15 +2,14 @@
 use std::path::Path;
 
 use soil_lang::sexp::Value;
-use soil_lang::{HostChain, Runtime, SoilRecordsHost, SystemTimeHost};
+use soil_lang::{NativeHost, Runtime};
 
 #[test]
 fn instinct_runs_as_soil_over_the_records_wit() {
     let root = tempfile::tempdir().unwrap();
-    let host = HostChain::new(vec![
-        Box::new(SystemTimeHost),
-        Box::new(SoilRecordsHost::open(root.path(), "soil").unwrap()),
-    ]);
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let host = NativeHost::open(&workspace, root.path(), "soil").unwrap();
     let mut runtime = Runtime::new(Box::new(host));
 
     let dir = Path::new(env!("CARGO_MANIFEST_DIR"));

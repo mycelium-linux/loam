@@ -28,8 +28,29 @@ fn monotonic_epoch() -> Instant {
     *EPOCH.get_or_init(Instant::now)
 }
 
-fn monotonic_ms() -> u64 {
+pub fn monotonic_ms() -> u64 {
     u64::try_from(monotonic_epoch().elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+/// Standalone clock host for native adapters that do not need the whole
+/// `WasiHost` (the Soil Lisp REPL, for example).
+pub struct SystemTimeHost;
+
+impl api::Host for SystemTimeHost {
+    fn monotonic_ms(&mut self) -> std::result::Result<u64, api::Error> {
+        Ok(monotonic_ms())
+    }
+
+    fn wall_clock(&mut self) -> std::result::Result<api::DateTime, api::Error> {
+        wall_clock()
+    }
+
+    fn tick(&mut self, timeout_ms: u32) -> std::result::Result<Option<u64>, api::Error> {
+        if timeout_ms > 0 {
+            std::thread::sleep(Duration::from_millis(u64::from(timeout_ms.min(50))));
+        }
+        Ok(Some(monotonic_ms()))
+    }
 }
 
 impl api::Host for WasiHost {
@@ -55,7 +76,7 @@ impl api::Host for WasiHost {
 
 /// The current wall-clock instant, resolved in the host's timezone.
 #[cfg(unix)]
-fn wall_clock() -> std::result::Result<api::DateTime, api::Error> {
+pub fn wall_clock() -> std::result::Result<api::DateTime, api::Error> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| api::Error::NotReady)?;
@@ -97,7 +118,7 @@ fn wall_clock() -> std::result::Result<api::DateTime, api::Error> {
 
 /// No wall clock off Unix — report `not-ready` rather than fabricate one.
 #[cfg(not(unix))]
-fn wall_clock() -> std::result::Result<api::DateTime, api::Error> {
+pub fn wall_clock() -> std::result::Result<api::DateTime, api::Error> {
     Err(api::Error::NotReady)
 }
 
