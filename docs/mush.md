@@ -402,7 +402,7 @@ tools are `mush_exec`, `mush_job` and `mush_cancel`. A command that outlives its
 background threshold returns `state=background` with a job id and keeps running
 in the daemon — poll it, do not re-run it. Job state is in memory, so a daemon
 restart drops the record and kills the child. The tool contract is written out
-in [integrations/pi/README.md](../integrations/pi/README.md#mcp-for-muse).
+in [integrations/pi/mush/README.md](../integrations/pi/mush/README.md#mcp-for-muse).
 
 ## Deadlines and servers
 

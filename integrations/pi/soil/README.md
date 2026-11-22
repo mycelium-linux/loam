@@ -10,14 +10,14 @@ then writes atomically.
 Run directly while developing:
 
 ```sh
-pi --extension /path/to/soil/extensions/pi/index.ts
+pi --extension /path/to/soil/integrations/pi/soil/index.ts
 ```
 
 Install persistently by symlinking the extension directory:
 
 ```sh
 mkdir -p ~/.pi/agent/extensions
-ln -sfn /path/to/soil/extensions/pi ~/.pi/agent/extensions/soil
+ln -sfn /path/to/soil/integrations/pi/soil ~/.pi/agent/extensions/soil
 ```
 
 Restart Pi or run `/reload`.

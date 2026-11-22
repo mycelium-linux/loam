@@ -24,7 +24,7 @@ a signed manifest plus a Wasm module.
 [Get started](https://soil-lang.org/getting-started.html) ·
 [API docs](https://soil-lang.org/docs/) ·
 [Examples](https://soil-lang.org/#examples) ·
-[Architecture](LOAM.md) ·
+[Architecture](docs/loam.md) ·
 [Source](https://github.com/ajmwagar/soil)
 
 > **Status:** early. The interpreter, stdlib, native CLI, and Wasm path run today.
@@ -32,14 +32,14 @@ a signed manifest plus a Wasm module.
 ## Language
 
 The reader, interpreter, typed core, stdlib, and Wasm backends live in
-[`crates/soil-lang`](crates/soil-lang/README.md). [LOAM.md](LOAM.md) shows where
+[`crates/soil-lang`](crates/soil-lang/README.md). [docs/loam.md](docs/loam.md) shows where
 the language ends and the runtime begins.
 
 ## LOAM VM
 
 Soil runs in the browser or in the **LOAM VM**: a Rust host built on Wasmtime
 and Cranelift, with wgpu for GPU surfaces. Execution is near-native. See
-[LOAM.md](LOAM.md) for the language/runtime split and capability contracts.
+[docs/loam.md](docs/loam.md) for the language/runtime split and capability contracts.
 
 ## Star history
 

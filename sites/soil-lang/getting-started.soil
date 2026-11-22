@@ -89,7 +89,7 @@
                         (list (txt (copy :guide :next-language-label))))))
                   (el "li" nil
                     (list
-                      (a "https://github.com/ajmwagar/soil/blob/main/LOAM.md" ""
+                      (a "https://github.com/ajmwagar/soil/blob/main/docs/loam.md" ""
                         (list (txt (copy :guide :next-architecture-label))))))
                   (el "li" nil
                     (list

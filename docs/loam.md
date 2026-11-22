@@ -42,5 +42,5 @@ manifest, the module, and the imports it is allowed to link.
 
 ## Capability contracts
 
-The full package/grant table lives in [CAPABILITIES.md](CAPABILITIES.md). The
-canonical WIT is in [`wit/`](wit) and is checked by `cargo test -p soil-abi`.
+The full package/grant table lives in [capabilities.md](capabilities.md). The
+canonical WIT is in [`wit/`](../wit) and is checked by `cargo test -p soil-abi`.

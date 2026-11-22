@@ -68,7 +68,7 @@ model_args=()
 [ -n "${AGENT_MODEL:-}" ] && model_args=(--model "$AGENT_MODEL")
 MUSH_ROOT="$vfs" MUSH_BIN="$mush" "${pi_bin}" -p --no-session \
   --no-builtin-tools --no-extensions --no-mcp --no-skills \
-  --extension "$root/integrations/pi/mush.ts" \
+  --extension "$root/integrations/pi/mush/mush.ts" \
   "${model_args[@]}" \
   --tools 'mush,vfs_read,vfs_write,vfs_edit,vfs_grep,vfs_find,vfs_ls,vfs_diff,vfs_json' \
   --append-system-prompt "The shell and file tools are Mush's; paths are VFS-absolute." \

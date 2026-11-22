@@ -15,7 +15,7 @@ that gives an agent a prompt over both.
 | Net host | [`crates/mush/src/net.rs`](../crates/mush/src/net.rs) | `soil:net`: bounded resolve and TCP probe |
 | Contracts | [`wit/`](../wit) | `soil-vfs`, `soil-vfs-mut`, `soil-http`, `soil-net`, `soil-index`, `soil-command`, `soil-principal` |
 | Spore dependencies | [`spores/mush/wit/deps`](../spores/mush/wit/deps) | the vendored copies the guest compiles against |
-| Pi integration | [`integrations/pi`](../integrations/pi) | the Pi extension, the MCP contract, the harness and agent test |
+| Pi integration | [`integrations/pi/mush`](../integrations/pi/mush) | the Pi extension, the MCP contract, the harness and agent test |
 | Shell docs | [`docs/mush.md`](mush.md) | the user surface: syntax, commands, config, doctor |
 | Operator docs | [`docs/mush-operator.md`](mush-operator.md) | running it for other people, service accounts |
 

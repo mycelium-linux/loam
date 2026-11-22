@@ -8,7 +8,7 @@
  * to the real binary against a scratch root, then calls the tools and checks
  * what came back.
  *
- *   bun integrations/pi/harness.ts
+ *   bun integrations/pi/mush/harness.ts
  *
  * Exits 0 when the binary is missing, so a checkout without Mush still tests
  * clean. Requires Bun and a Pi install (for `typebox`).
