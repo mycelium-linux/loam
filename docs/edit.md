@@ -5,6 +5,8 @@ Spore and never adds a WIT capability.
 
 ```sh
 loam edit open <package-dir> [--build-command PROGRAM] --json
+loam edit read <session> <relative-path> --json
+loam edit list <session> --json
 loam edit checkpoint <session> [--message TEXT] --json
 loam edit build <session> [--build-command PROGRAM] --json
 loam edit save <session> [--message TEXT] --json
@@ -46,6 +48,10 @@ The session directory is:
     overlay/
     signatures/       optional signing hook
 ```
+
+`read` returns `{ "ok": true, "path", "text", "digest", "bytes" }` from
+`work/`; `list` returns the work-tree files with digests and sizes. Both reject
+absolute paths, `..`, and symlinks.
 
 `open` requires `spore.soil`, `spore.lock`, and a source directory. A package
 whose distribution is `binary` fails with `source-unavailable`. The signed

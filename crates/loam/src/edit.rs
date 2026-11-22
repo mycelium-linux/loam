@@ -203,6 +203,17 @@ fn dispatch(args: &[String]) -> Result<Value> {
             positional.first().map(String::as_str),
             build_command,
         ),
+        "read" => {
+            let session = require_session(&roots, positional.first())?;
+            let path = positional
+                .get(1)
+                .ok_or_else(|| EditError::new("usage", "read needs a relative path"))?;
+            read(&roots, &session, path)
+        }
+        "list" => {
+            let session = require_session(&roots, positional.first())?;
+            list(&roots, &session)
+        }
         "checkpoint" => {
             let session = require_session(&roots, positional.first())?;
             checkpoint(&roots, &session, message.as_deref())
@@ -232,7 +243,7 @@ fn dispatch(args: &[String]) -> Result<Value> {
 }
 
 fn usage() -> &'static str {
-    "usage: loam edit <open|checkpoint|build|save|apply|discard> ... --json"
+    "usage: loam edit <open|read|list|checkpoint|build|save|apply|discard> ... --json"
 }
 
 fn require_session(roots: &Roots, value: Option<&String>) -> Result<String> {
@@ -360,6 +371,53 @@ fn open(roots: &Roots, package: Option<&str>, build_command: Option<String>) -> 
     };
     write_session(&directory, &session)?;
     Ok(session_json(&session, false))
+}
+
+fn read(roots: &Roots, session_id: &str, relative: &str) -> Result<Value> {
+    let directory = session_dir(roots, session_id)?;
+    let session = read_session(&directory)?;
+    validate_base(&session)?;
+    let (relative, full) = work_file(&session.work, relative)?;
+    let bytes = fs::read(&full).map_err(io_error)?;
+    if bytes.len() > 16 * 1024 * 1024 {
+        return Err(EditError::new("over-budget", "file is larger than 16 MiB"));
+    }
+    let text = String::from_utf8(bytes).map_err(|_| {
+        EditError::new(
+            "invalid-utf8",
+            format!("{} is not UTF-8 text", relative.display()),
+        )
+    })?;
+    let digest = hex(&Sha256::digest(text.as_bytes()));
+    Ok(json!({
+        "ok": true,
+        "session": session.session,
+        "path": relative.to_string_lossy().replace('\\', "/"),
+        "text": text,
+        "digest": digest,
+        "bytes": text.len(),
+    }))
+}
+
+fn list(roots: &Roots, session_id: &str) -> Result<Value> {
+    let directory = session_dir(roots, session_id)?;
+    let session = read_session(&directory)?;
+    validate_base(&session)?;
+    let files = tree_digests(&session.work)?;
+    let files: Vec<Value> = files
+        .into_iter()
+        .map(|(path, digest)| {
+            let size = fs::metadata(session.work.join(&path))
+                .map(|metadata| metadata.len())
+                .unwrap_or(0);
+            json!({"path": path, "digest": digest, "bytes": size})
+        })
+        .collect();
+    Ok(json!({
+        "ok": true,
+        "session": session.session,
+        "files": files,
+    }))
 }
 
 fn checkpoint(roots: &Roots, session_id: &str, _message: Option<&str>) -> Result<Value> {
@@ -910,6 +968,40 @@ fn safe_relative(value: &str) -> Result<PathBuf> {
     Ok(out)
 }
 
+fn work_file(work: &Path, relative: &str) -> Result<(PathBuf, PathBuf)> {
+    let relative = safe_relative(relative)?;
+    let root = fs::canonicalize(work).map_err(|error| {
+        EditError::new("session-invalid", format!("{}: {error}", work.display()))
+    })?;
+    let full = work.join(&relative);
+    let metadata = fs::symlink_metadata(&full).map_err(|_| {
+        EditError::new(
+            "not-found",
+            format!("{} is not in the session", relative.display()),
+        )
+    })?;
+    if metadata.file_type().is_symlink() {
+        return Err(EditError::new(
+            "unsafe-path",
+            format!("{} is a symlink", relative.display()),
+        ));
+    }
+    if !metadata.is_file() {
+        return Err(EditError::new(
+            "not-file",
+            format!("{} is not a regular file", relative.display()),
+        ));
+    }
+    let canonical = fs::canonicalize(&full).map_err(io_error)?;
+    if !canonical.starts_with(&root) {
+        return Err(EditError::new(
+            "unsafe-path",
+            format!("{} escapes the work tree", relative.display()),
+        ));
+    }
+    Ok((relative, canonical))
+}
+
 fn copy_tree(source: &Path, target: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(source).map_err(io_error)?;
     if metadata.file_type().is_symlink() {
@@ -1109,6 +1201,57 @@ mod tests {
         let package = package(temp.path(), "binary", false);
         let error = open(&roots(temp.path()), package.to_str(), None).unwrap_err();
         assert_eq!(error.code, "source-unavailable");
+    }
+
+    #[test]
+    fn read_and_list_work_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let package = package(temp.path(), "both", true);
+        let roots = roots(temp.path());
+        let opened = open(&roots, package.to_str(), None).unwrap();
+        let session = opened["session"].as_str().unwrap().to_string();
+        let opened_file = read(&roots, &session, "mb.soil").unwrap();
+        assert!(opened_file["text"].as_str().unwrap().contains("main"));
+        let listed = list(&roots, &session).unwrap();
+        assert!(
+            listed["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|file| file["path"] == "mb.soil")
+        );
+        assert_eq!(
+            read(&roots, &session, "../spore.lock").unwrap_err().code,
+            "unsafe-path"
+        );
+        assert_eq!(
+            read(&roots, &session, "/etc/passwd").unwrap_err().code,
+            "unsafe-path"
+        );
+        assert_eq!(
+            read(&roots, &session, "missing.soil").unwrap_err().code,
+            "not-found"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_refuses_a_work_symlink() {
+        let temp = tempfile::tempdir().unwrap();
+        let package = package(temp.path(), "both", true);
+        let roots = roots(temp.path());
+        let opened = open(&roots, package.to_str(), None).unwrap();
+        let session = opened["session"].as_str().unwrap().to_string();
+        let work = roots
+            .edit
+            .join("acme:marbles")
+            .join("a".repeat(64))
+            .join("work");
+        std::os::unix::fs::symlink("mb.soil", work.join("link.soil")).unwrap();
+        assert_eq!(
+            read(&roots, &session, "link.soil").unwrap_err().code,
+            "unsafe-path"
+        );
     }
 
     #[test]

@@ -95,6 +95,8 @@ under the personal patch root:
 
 ```sh
 loam edit open spores/marbles --json
+loam edit read acme:marbles/<base-digest> mb.soil --json
+loam edit list acme:marbles/<base-digest> --json
 loam edit checkpoint acme:marbles/<base-digest> --message "first change" --json
 loam edit save acme:marbles/<base-digest> --message "overlay" --json
 loam edit apply acme:marbles/<base-digest> --json
