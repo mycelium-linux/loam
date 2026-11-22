@@ -760,9 +760,39 @@
   (if (nil? issues) stats
       (stats-all (rest issues) (stats-project (first issues) stats))))
 
+(defun stats-add-group (row stats)
+  (let ((values (field row :values))
+        (count (field row :count)))
+    (let ((project (nth 0 values))
+          (status (nth 1 values)))
+      (let ((entry (field stats (keyword project)))
+            (stats (if (nil? stats) (list) stats)))
+        (let ((entry
+                (if (nil? entry)
+                    (list (list :by_status (list (list (keyword status) count)))
+                          (list :total count))
+                    (let ((by (field entry :by_status)))
+                      (list
+                        (list :by_status
+                          (assoc (keyword status)
+                            (+ (or (field by status) 0) count)
+                            by))
+                        (list :total (+ (or (field entry :total) 0) count)))))))
+          (assoc (keyword project) entry stats))))))
+
+(defun stats-add-groups (rows stats)
+  (if (nil? rows) stats
+      (stats-add-groups (rest rows) (stats-add-group (first rows) stats))))
+
 (defun stats-command ()
-  (let ((stats (stats-all (field-bodies "issue/" (list "project" "status")) nil)))
-    (if (nil? stats) (json-object) stats)))
+  (let ((spec (json-encode
+                (list (list :prefix "issue/")
+                      (list :group_by (list "project" "status"))))))
+    (let ((result (soil:records/aggregate "" spec)))
+      (if (not (ok? result))
+          (mb-fail (str "aggregate failed: " (field result :err)))
+          (let ((stats (stats-add-groups (value result) nil)))
+            (if (nil? stats) (json-object) stats))))))
 
 ; ---------------------------------------------------------------------------
 ; Admin, supersession, and sweeps
@@ -1185,28 +1215,107 @@
       (cons (burndown-point d issues total start now days)
             (burndown-points (+ d 1) issues total start now days))))
 
+(defun bucket-count-until (t rows)
+  (if (nil? rows) 0
+      (let ((values (field (first rows) :values)))
+        (if (nil? (first values))
+            (bucket-count-until t (rest rows))
+        (let ((bucket (int (json-decode (first values)))))
+          (if (<= bucket t)
+              (+ (field (first rows) :count)
+                 (bucket-count-until t (rest rows)))
+              0))))))
+
+(defun buckets-total (rows)
+  (if (nil? rows) 0
+      (if (nil? (first (field (first rows) :values)))
+          (buckets-total (rest rows))
+          (+ (field (first rows) :count) (buckets-total (rest rows))))))
+
+(defun burndown-spec (project field)
+  (let ((filters (if (nil? project)
+                     (list)
+                     (list (list (list :field "project")
+                                 (list :op "eq")
+                                 (list :value project))))))
+    (json-encode
+      (list (list :prefix "issue/")
+            (list :filters filters)
+            (list :bucket (list (list :field field) (list :seconds 86400)))))))
+
+(defun burndown-buckets (project field)
+  (let ((result (soil:records/aggregate "" (burndown-spec project field))))
+    (if (not (ok? result))
+        (mb-fail (str "burndown aggregate failed: " (field result :err)))
+        (value result))))
+
+(defun burndown-point-agg (d created closed start now days total)
+  (let ((t (min (+ start (* d 86400)) now)))
+    (let ((scope (bucket-count-until t created))
+          (done (bucket-count-until t closed)))
+      (list
+        (list :date (date-string t))
+        (list :scope scope)
+        (list :done done)
+        (list :remaining (max 0 (- scope done)))
+        (list :ideal_remaining
+          (max 0 (int (round (* total (- 1.0 (/ d days)))))))))))
+
+(defun burndown-points-agg (d created closed start now days total)
+  (if (> d days) nil
+      (cons (burndown-point-agg d created closed start now days total)
+            (burndown-points-agg (+ d 1) created closed start now days total))))
+
+(defun burndown-command-aggregate (result project now)
+  (let ((days (max 1 (or (option-int result "days") 30))))
+    (let ((created (burndown-buckets project "created_at"))
+          (closed (burndown-buckets project "closed_at")))
+      (let ((total (buckets-total created))
+            (start (- now (* days 86400))))
+        (let ((done-start (bucket-count-until start closed))
+              (done-now (bucket-count-until now closed)))
+          (let ((elapsed (/ (- now start) 86400.0)))
+            (let ((burn (if (and (> elapsed 0.0) (> done-now done-start))
+                            (/ (- done-now done-start) elapsed)
+                            nil)))
+              (let ((remaining (max 0 (- total done-now))))
+                (list
+                  (list :days days)
+                  (list :scope total)
+                  (list :done done-now)
+                  (list :remaining remaining)
+                  (list :burn_per_day burn)
+                  (list :projected_days_to_zero
+                    (if (and (not (nil? burn)) (> burn 0.0)) (/ remaining burn) nil))
+                  (list :points
+                    (burndown-points-agg 0 created closed start now days total)))))))))))
+
 (defun burndown-command (result project now)
-  (let ((days (or (option-int result "days") 30)))
-    (let ((days (max 1 days)))
-      (let ((issues (or-empty (burndown-scope result project))))
-        (let ((total (length issues))
-              (start (- now (* days 86400))))
-          (let ((done-start (count-with 'closed-by? start issues))
-                (done-now (count-with 'closed-by? now issues)))
-            (let ((elapsed (/ (- now start) 86400.0)))
-              (let ((burn (if (and (> elapsed 0.0) (> done-now done-start))
-                              (/ (- done-now done-start) elapsed)
-                              nil)))
-                (let ((remaining (max 0 (- total done-now))))
-                  (list
-                    (list :days days)
-                    (list :scope total)
-                    (list :done done-now)
-                    (list :remaining remaining)
-                    (list :burn_per_day burn)
-                    (list :projected_days_to_zero
-                      (if (and (not (nil? burn)) (> burn 0.0)) (/ remaining burn) nil))
-                    (list :points (burndown-points 0 issues total start now days))))))))))))
+  (let ((goal (cli-result-option result "goal"))
+        (epic (cli-result-option result "epic")))
+    (if (or (nil? goal) (nil? epic))
+        (burndown-command-aggregate result project now)
+        (let ((days (max 1 (or (option-int result "days") 30))))
+          (let ((issues (or-empty (burndown-scope result project))))
+            (let ((total (length issues))
+                  (start (- now (* days 86400))))
+              (let ((done-start (count-with 'closed-by? start issues))
+                    (done-now (count-with 'closed-by? now issues)))
+                (let ((elapsed (/ (- now start) 86400.0)))
+                  (let ((burn (if (and (> elapsed 0.0) (> done-now done-start))
+                                  (/ (- done-now done-start) elapsed)
+                                  nil)))
+                    (let ((remaining (max 0 (- total done-now))))
+                      (list
+                        (list :days days)
+                        (list :scope total)
+                        (list :done done-now)
+                        (list :remaining remaining)
+                        (list :burn_per_day burn)
+                        (list :projected_days_to_zero
+                          (if (and (not (nil? burn)) (> burn 0.0)) (/ remaining burn) nil))
+                        (list :points
+                          (burndown-points 0 issues total start now days)))))))))))))
 
 ; ---------------------------------------------------------------------------
 ; Plans (JSON specs; TOML is native-only for now)

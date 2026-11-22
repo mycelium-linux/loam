@@ -26,6 +26,11 @@
   (next (option string))
 )
 
+(define-record soil:records/aggregate-group
+  (values (list string))
+  (count u64)
+)
+
 (define-record soil:records/apply-result
   (applied u32)
   (skipped u32)
@@ -75,6 +80,17 @@
 
 (defun soil:records/scan-query (collection field value cursor limit)
   (host-call "soil:records" "scan-query" (list collection field value cursor limit)))
+
+(define-capability soil:records/aggregate
+  :interface "soil:records"
+  :function "aggregate"
+  :grant "soil:records"
+  :version "0.1.0"
+  :params ((collection string) (spec string))
+  :result (result (list soil:records/aggregate-group) soil:records/error))
+
+(defun soil:records/aggregate (collection spec)
+  (host-call "soil:records" "aggregate" (list collection spec)))
 
 (define-capability soil:records/scan-fields
   :interface "soil:records"

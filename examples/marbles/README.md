@@ -137,8 +137,8 @@ so source edits hot-reload. Actions are intentionally no-ops for now.
 - **Plan** — Gantt rows, estimates, critical path, concurrency.
 - **Queue** — ready/in-flight/review/blocked lanes and recently closed.
 
-The remaining work is performance, not record shape: whole-store projections
-such as `stats`, `doctor`, `plan`, and `portfolio` decode every issue in Soil
-today, so they are much slower than project-scoped `list`/`ready`. Promote
-`scan-query`/`compare-and-swap` into canonical WIT for a wasm build, and add a
-host-side projection/aggregation for whole-store reports.
+`stats` and project/all-scoped `burndown` now use the host-side `aggregate`
+pushdown, so they return group counts instead of every issue body. `doctor`,
+`plan`, and `portfolio` still materialize issues in Soil and remain slower on a
+large book. Promote `scan-query`, `scan-fields`, `aggregate`, and
+`compare-and-swap` into canonical WIT for a wasm build.

@@ -58,6 +58,31 @@ The native `--repl` accepts:
 The REPL keeps one `Runtime`, so `:stats` after repeated work shows cumulative
 evaluator and host counters until `:reset`.
 
+## Records aggregate pushdown
+
+`soil:records/aggregate` takes a small JSON spec and returns grouped counts:
+
+```soil
+(soil:records/aggregate "" (json-encode
+  (list (list :prefix "issue/")
+        (list :group_by (list "project" "status")))))
+```
+
+It supports exact/prefix/exists filters and an optional numeric time bucket:
+
+```json
+{
+  "prefix": "issue/",
+  "filters": [{"field": "project", "op": "eq", "value": "marbles"}],
+  "group_by": ["status"],
+  "bucket": {"field": "created_at", "seconds": 86400}
+}
+```
+
+`mb stats` uses it directly. `mb burndown` uses it for project/all scopes; a
+goal/epic-scoped burndown still needs descendant ids and falls back to the issue
+list. SQL remains inside the records host; the Spore sees typed groups.
+
 ## Why both counters
 
 A records command can be slow because it evaluates a large list or because it

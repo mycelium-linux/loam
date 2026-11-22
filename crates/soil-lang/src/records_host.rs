@@ -5,6 +5,7 @@
 //! collection shape and scopes entity ids by collection. Devices, signals,
 //! presence, and schemas live in `.soil`.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::sexp::Value;
@@ -218,6 +219,99 @@ impl SoilRecordsHost {
         Self::entry_value(collection, record)
     }
 
+    /// Count records grouped by body fields and/or a numeric time bucket.
+    ///
+    /// This is the host-side half of report pushdown: the guest sends a small
+    /// JSON spec and receives one row per group. SQL stays in the records
+    /// backend; Soil never sees a table or a query language.
+    fn aggregate(
+        &self,
+        collection: &str,
+        spec: &str,
+    ) -> std::result::Result<Value, String> {
+        let spec: serde_json::Value =
+            serde_json::from_str(spec).map_err(|error| format!("aggregate spec: {error}"))?;
+        let prefix = spec
+            .get("prefix")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let group_by = spec
+            .get("group_by")
+            .and_then(serde_json::Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let filters = spec
+            .get("filters")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let bucket = spec.get("bucket").and_then(serde_json::Value::as_object);
+        let bucket_field = bucket
+            .and_then(|bucket| bucket.get("field"))
+            .and_then(serde_json::Value::as_str);
+        let bucket_seconds = bucket
+            .and_then(|bucket| bucket.get("seconds"))
+            .and_then(serde_json::Value::as_i64)
+            .filter(|seconds| *seconds > 0);
+
+        let prefix = if collection.is_empty() {
+            prefix.to_string()
+        } else {
+            format!("{collection}:{prefix}")
+        };
+        let mut groups: BTreeMap<Vec<String>, u64> = BTreeMap::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let page = self
+                .store
+                .scan_records(&self.book, cursor.as_deref(), 512)
+                .map_err(|error| error.to_string())?;
+            if page.is_empty() {
+                break;
+            }
+            let page_len = page.len();
+            for record in page {
+                let entity = record.entity_id.clone();
+                cursor = Some(entity.clone());
+                if !entity.starts_with(&prefix) || !filters_match(&record.fields, &filters) {
+                    continue;
+                }
+                let mut key = group_by
+                    .iter()
+                    .map(|field| json_text(json_path(&record.fields, field)))
+                    .collect::<Vec<_>>();
+                if let (Some(field), Some(seconds)) = (bucket_field, bucket_seconds)
+                    && let Some(value) = json_path(&record.fields, field).and_then(|value| value.as_i64())
+                {
+                    key.push((value.div_euclid(seconds) * seconds).to_string());
+                }
+                *groups.entry(key).or_default() += 1;
+            }
+            if page_len < 512 {
+                break;
+            }
+        }
+        let rows = groups
+            .into_iter()
+            .map(|(values, count)| {
+                Value::List(vec![
+                    pair(
+                        "values",
+                        Value::List(values.into_iter().map(Value::String).collect()),
+                    ),
+                    pair("count", Value::Int(count as i64)),
+                ])
+            })
+            .collect();
+        Ok(ok(Value::List(rows)))
+    }
+
     fn get_entry(&self, collection: &str, id: &str) -> std::result::Result<Option<Value>, String> {
         self.store
             .get_optional(&self.book, &Self::scoped(collection, id))
@@ -300,6 +394,7 @@ impl Host for SoilRecordsHost {
                 "scan"
                     | "scan-query"
                     | "scan-fields"
+                    | "aggregate"
                     | "get"
                     | "upsert"
                     | "delete"
@@ -340,6 +435,11 @@ impl Host for SoilRecordsHost {
                 });
                 let limit = args.get(4).and_then(Value::as_f64).unwrap_or(50.0) as usize;
                 Ok(ok(self.scan_query_page(&collection, &field, &value, cursor, limit)?))
+            }
+            "aggregate" => {
+                let collection = args.first().map(value_text).unwrap_or_default();
+                let spec = args.get(1).map(value_text).unwrap_or_default();
+                self.aggregate(&collection, &spec)
             }
             "scan-fields" => {
                 let collection = args.first().map(value_text).unwrap_or_default();
@@ -433,6 +533,42 @@ impl Host for SoilRecordsHost {
             other => Err(format!("unknown soil:records function `{other}`")),
         }
     }
+}
+
+fn json_path<'a>(value: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
+    path.split('.')
+        .try_fold(value, |current, part| current.get(part))
+}
+
+fn json_text(value: Option<&serde_json::Value>) -> String {
+    match value {
+        Some(serde_json::Value::String(text)) => text.clone(),
+        Some(value) => value.to_string(),
+        None => String::new(),
+    }
+}
+
+fn filters_match(fields: &serde_json::Value, filters: &[serde_json::Value]) -> bool {
+    filters.iter().all(|filter| {
+        let field = filter.get("field").and_then(serde_json::Value::as_str).unwrap_or("");
+        let op = filter.get("op").and_then(serde_json::Value::as_str).unwrap_or("eq");
+        let wanted = filter.get("value");
+        let actual = json_path(fields, field);
+        match op {
+            "exists" => actual.is_some(),
+            "prefix" => actual
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|text| text.starts_with(&json_text(wanted))),
+            "contains" => actual
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|text| text.contains(&json_text(wanted))),
+            _ => match (actual, wanted) {
+                (Some(actual), Some(wanted)) => actual == wanted || json_text(Some(actual)) == json_text(Some(wanted)),
+                (None, None) => true,
+                _ => false,
+            },
+        }
+    })
 }
 
 fn truthy(value: &Value) -> bool {
