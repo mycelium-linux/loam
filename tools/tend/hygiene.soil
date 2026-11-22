@@ -1,0 +1,18 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+; Repository hygiene checks that belong to the build tool, not the host.
+
+(defun tend/license-marker () "SPDX-License-Identifier:")
+
+(defun tend/license-line? (source)
+  (string-starts-with? source (str "; " (tend/license-marker))))
+
+(defun tend/license-check (source)
+  (if (tend/license-line? source)
+      (tend/ok #t)
+      (tend/err "missing SPDX license line at the start of the file")))
+
+(defun tend/source-check (source)
+  (let ((license (tend/license-check source)))
+    (if (ok? license)
+        (tend/ok (list (list :license #t)))
+        license)))

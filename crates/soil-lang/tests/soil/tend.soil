@@ -53,3 +53,18 @@
   (let ((result (tend/lint "(defun main () 1)\n(defun main () 2)" (list 'main))))
     (and (ok? result)
          (= (field (value result) :duplicates) (list 'main)))))
+
+(defun doc/sample ()
+  ";;; # Module\n;;; A module doc.\n(defun foo () 1)\n;;; Foo docs.\n;;; - item\n(defun bar () 2)\n")
+
+(defun test/tend-doc ()
+  (let ((result (tend/doc (doc/sample))))
+    (and (ok? result)
+         (= (field (value result) :module) "# Module\nA module doc.")
+         (= (field (first (field (value result) :functions)) :name) 'foo)
+         (= (field (nth 1 (field (value result) :functions)) :name) 'bar)
+         (= (field (nth 1 (field (value result) :functions)) :markdown) "Foo docs.\n- item"))))
+
+(defun test/tend-license ()
+  (and (ok? (tend/license-check "; SPDX-License-Identifier: MIT OR Apache-2.0\n"))
+       (not (ok? (tend/license-check "(defun foo () 1)\n")))))

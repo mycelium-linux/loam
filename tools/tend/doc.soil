@@ -1,0 +1,74 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+; Documentation extraction from `;;;` comments.
+;
+; Comment text is preserved as Markdown. This module does not reflow or strip
+; Markdown syntax; rendering is a separate step so the source of truth stays
+; the comment block itself.
+
+(defun tend/doc-line? (comment)
+  (string-starts-with? comment ";;;"))
+
+(defun tend/doc-text (comment)
+  (let ((text (string-replace comment ";;; " "")))
+    (if (= text comment)
+        (string-replace comment ";;;" "")
+        text)))
+
+(defun tend/doc-lines (comments out)
+  (if (nil? comments)
+      (reverse out)
+      (let ((comment (field (first comments) :text)))
+        (tend/doc-lines (rest comments)
+          (if (tend/doc-line? comment)
+              (cons (tend/doc-text comment) out)
+              out)))))
+
+(defun tend/doc-markdown (comments)
+  (let ((lines (tend/doc-lines comments nil)))
+    (if (nil? lines)
+        nil
+        (tend/join-lines lines ""))))
+
+(defun tend/join-lines (lines out)
+  (if (nil? lines)
+      out
+      (tend/join-lines (rest lines)
+        (if (= out "") (first lines) (str out "\n" (first lines))))))
+
+(defun tend/form-name (form)
+  (let ((value (field form :value)))
+    (if (and (not (atom value)) (= (first value) 'defun))
+        (nth 1 value)
+        nil)))
+
+(defun tend/doc-function (form)
+  (let ((name (tend/form-name form))
+        (markdown (tend/doc-markdown (field form :comments))))
+    (if (and (not (nil? name)) (not (nil? markdown)))
+        (list
+          (list :name name)
+          (list :kind "function")
+          (list :start (field form :start))
+          (list :markdown markdown))
+        nil)))
+
+(defun tend/docs (forms out)
+  (if (nil? forms)
+      (reverse out)
+      (let ((doc (tend/doc-function (first forms))))
+        (tend/docs (rest forms)
+          (if (nil? doc) out (cons doc out))))))
+
+(defun tend/doc (source)
+  (let ((document (read-document source)))
+    (tend/ok
+      (list
+        (list :module
+          (tend/doc-markdown
+            (if (nil? (first (field document :forms)))
+                (field document :trailing-comments)
+                (field (first (field document :forms)) :comments))))
+        (list :functions (tend/docs (field document :forms) nil))))))
+
+(defun tend/doc-markdown-page (doc)
+  (str "# " (field doc :name) "\n\n" (field doc :markdown) "\n"))

@@ -43,3 +43,31 @@ evaluation can reach a function that a static call graph does not see.
 The linter intentionally does not try to replace the reader. Parenthesis and
 syntax balance are already the reader's job; `tend` reports that failure rather
 than pretending to recover from it.
+
+## Documentation
+
+Top-level `;;;` comments are documentation and stay Markdown. The reader
+preserves their raw text and source span; `tools/tend/doc.soil` extracts them
+without reflowing the Markdown.
+
+```lisp
+;;; # Claim
+;;;
+;;; `tend claim <id>` checks the current version first.
+(defun claim (ctx)
+  ...)
+```
+
+Comments before the first form are the module documentation. Documentation
+rendering and `tend doc --open` are separate from the extraction step.
+
+## Hygiene
+
+`tools/tend/hygiene.soil` checks the license header required by the repository:
+
+```lisp
+; SPDX-License-Identifier: MIT OR Apache-2.0
+```
+
+This is intentionally a separate check from parsing. A missing license line is
+reported even when the file parses.

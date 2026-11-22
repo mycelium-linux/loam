@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::time::Instant;
 
-use crate::sexp::{Value, parse_all, parse_document};
+use crate::sexp::{Comment, Form, Value, parse_all, parse_document};
 use anyhow::{Context, Result, anyhow, bail};
 
 #[derive(Clone)]
@@ -866,6 +866,14 @@ impl Runtime {
                             .ok_or_else(|| anyhow!("read expects a string"))?;
                         Ok(Value::List(parse_all(source)?))
                     }
+                    "read-document" => {
+                        let source = self.eval(require(items, 1, "read-document")?, env)?;
+                        let source = source
+                            .as_str()
+                            .ok_or_else(|| anyhow!("read-document expects a string"))?;
+                        document_value(parse_document(source)?)
+                            .map_err(|error| anyhow!("read-document: {error}"))
+                    }
                     "eval" => {
                         let form = self.eval(require(items, 1, "eval")?, env)?;
                         self.eval(&form, env)
@@ -1061,6 +1069,18 @@ impl Runtime {
                             bail!("string-contains? expects a string");
                         };
                         Ok(Value::Bool(haystack.contains(needle)))
+                    }
+                    "string-starts-with?" => {
+                        let text = self.eval(require(items, 1, "string-starts-with?")?, env)?;
+                        let prefix =
+                            self.eval(require(items, 2, "string-starts-with?")?, env)?;
+                        let Some(text) = text.as_str() else {
+                            bail!("string-starts-with? expects a string");
+                        };
+                        let Some(prefix) = prefix.as_str() else {
+                            bail!("string-starts-with? expects a prefix string");
+                        };
+                        Ok(Value::Bool(text.starts_with(prefix)))
                     }
                     "string-replace" => {
                         let text = self.eval(require(items, 1, "string-replace")?, env)?;
@@ -1474,6 +1494,47 @@ fn is_json_object(items: &[Value]) -> bool {
     matches!(items, [Value::Symbol(name)] if name == JSON_OBJECT_MARKER)
 }
 
+
+/// Turn a parsed document into the record shape the linter and doc tools read.
+///
+/// Forms retain their source byte span and leading comments. The raw comment
+/// text is preserved so `;;;` blocks remain Markdown rather than being
+/// reflowed by the reader.
+fn document_value(document: crate::sexp::Document) -> Result<Value> {
+    Ok(Value::List(vec![
+        pair("source", Value::String(document.source)),
+        pair(
+            "forms",
+            Value::List(document.forms.into_iter().map(form_value).collect()),
+        ),
+        pair(
+            "trailing-comments",
+            Value::List(document.trailing_comments.into_iter().map(comment_value).collect()),
+        ),
+    ]))
+}
+
+fn form_value(form: Form) -> Value {
+    Value::List(vec![
+        pair("id", Value::String(form.id)),
+        pair("start", Value::Int(form.span.start as i64)),
+        pair("end", Value::Int(form.span.end as i64)),
+        pair("value", form.value),
+        pair(
+            "comments",
+            Value::List(form.comments.into_iter().map(comment_value).collect()),
+        ),
+    ])
+}
+
+fn comment_value(comment: Comment) -> Value {
+    Value::List(vec![
+        pair("text", Value::String(comment.text)),
+        pair("start", Value::Int(comment.span.start as i64)),
+        pair("end", Value::Int(comment.span.end as i64)),
+    ])
+}
+
 /// Decode a JSON value into the record/list shape Soil uses.
 ///
 /// JSON objects become lists of `(keyword value)` pairs, matching
@@ -1844,4 +1905,41 @@ fn err(code: &str) -> Value {
         Value::Symbol("err".to_string()),
         Value::Symbol(code.to_string()),
     ])
+}
+
+#[cfg(test)]
+mod document_tests {
+    use super::*;
+
+    #[test]
+    fn read_document_keeps_spans_and_doc_comments() {
+        let mut runtime = Runtime::new(Box::new(FakeHost::default()));
+        let value = runtime
+            .load(
+                "(read-document \";;; A markdown doc\\n;;;\\n;;; - detail\\n(defun foo () 1)\\n\")",
+            )
+            .expect("read-document");
+        let forms = field_value(&value, &Value::Keyword("forms".into()));
+        let forms = forms.as_list().expect("forms");
+        assert_eq!(forms.len(), 1);
+        let form = &forms[0];
+        assert_eq!(
+            field_value(form, &Value::Keyword("value".into())).as_list().unwrap()[1]
+                .as_symbol(),
+            Some("foo")
+        );
+        let comments = field_value(form, &Value::Keyword("comments".into()));
+        let comments = comments.as_list().expect("comments");
+        assert_eq!(comments.len(), 3);
+        assert_eq!(
+            field_value(&comments[0], &Value::Keyword("text".into())).as_str(),
+            Some(";;; A markdown doc")
+        );
+        assert!(
+            field_value(form, &Value::Keyword("start".into()))
+                .as_f64()
+                .unwrap()
+                > 0.0
+        );
+    }
 }
