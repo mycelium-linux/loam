@@ -41,6 +41,20 @@ cargo run -p soil-lang --bin soil-lang -- \
 ((:devices (("az09:1" (:in-use 0.85)) ...)) (:person (:present 0.9)))
 ```
 
+## Build features
+
+- default: native CLI + WIT generator + REPL bridge
+- `--no-default-features`: wasm-buildable interpreter core
+- `native`: native `soil` host bridge and `soil-lang` CLI
+- `witgen`: WIT -> `.soil` binding generator
+
+The core has no dependency on `soil`, `fungos-records`, or `wit-parser` when
+built with `--no-default-features`.
+
+```sh
+cargo check -p soil-lang --no-default-features --target wasm32-wasip2
+```
+
 ## Run a bus automation
 
 `--unibus-config` grants the native host the same bounded `soil:unibus` poll

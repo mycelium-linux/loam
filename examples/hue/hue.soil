@@ -264,7 +264,9 @@
   (if (< value low) low (if (> value high) high value)))
 
 (defun hue/clamp-bri (value)
-  (round (hue/clamp value 1 254)))
+  ;; The Hue v1 bridge silently ignores a PUT whose bri is a JSON float, so
+  ;; round and coerce before the value reaches json-encode.
+  (int (round (hue/clamp value 1 254))))
 
 (defun hue/count (xs)
   (if (nil? xs) 0 (length xs)))

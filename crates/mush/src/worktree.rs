@@ -9,14 +9,15 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
+    process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use ::soil::records_host::{RecordsBookHost, records};
 use anyhow::{Context, Result, anyhow, bail};
 use fungos_vfs::{ApplyOutcome, ContentId, Expect, Vfs, pull_over_ssh};
 use rand::Rng;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use ::soil::records_host::{RecordsBookHost, records};
 
 const THREAD_SCHEMA: &str = "fungos.thread/v1";
 const TURN_SCHEMA: &str = "fungos.turn/v1";
@@ -25,6 +26,8 @@ const TREE_SCHEMA: &str = "fungos.tree/v1";
 const REF_SCHEMA: &str = "fungos.ref/v1";
 const CHECKOUT_SCHEMA: &str = "fungos.checkout/v1";
 const WORKTREE_STATE_SCHEMA: &str = "fungos.worktree-state/v1";
+const PROJECT_SCHEMA: &str = "fungos.project/v1";
+const WORKSPACE_SCHEMA: &str = "fungos.workspace/v1";
 
 /// The only collection in the device-local book.
 const LOCAL_COLLECTION: &str = "local";
@@ -38,6 +41,8 @@ const SCHEMAS: &[(&str, &str)] = &[
     ("ref", REF_SCHEMA),
     ("checkout", CHECKOUT_SCHEMA),
     ("worktree-state", WORKTREE_STATE_SCHEMA),
+    ("project", PROJECT_SCHEMA),
+    ("workspace", WORKSPACE_SCHEMA),
     ("comment", COMMENT_SCHEMA),
 ];
 
@@ -145,6 +150,62 @@ struct Checkout {
     path: String,
     tree: String,
     created_at_ms: u64,
+}
+
+/// One repository in a project. The source is where this device keeps the
+/// checkout the project was defined from; `base` is the branch the thread
+/// worktree forks from.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ProjectRepo {
+    name: String,
+    source: String,
+    base: String,
+}
+
+/// A project is a named set of repositories, not a repository.
+///
+/// The durable identity is the project id plus its repo names and sources. The
+/// thread worktrees and their branches are local materializations, recorded in
+/// [`Workspace`], so two devices can check out the same project without
+/// pretending they have the same paths.
+#[derive(Debug, Serialize, Deserialize)]
+struct Project {
+    id: String,
+    title: String,
+    desktop: String,
+    repos: Vec<ProjectRepo>,
+    created_at_ms: u64,
+}
+
+/// One repository's worktree inside a thread mount root.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WorkspaceRepo {
+    name: String,
+    path: String,
+    branch: String,
+    worktree: String,
+}
+
+/// This device's materialization of a project for one thread.
+///
+/// The root is `threads/<thread>/<project>` under the Desktop VFS root. A
+/// workspace is not a durable top-level object: it is the thread's mount root,
+/// and it can be removed and recreated from the project plus the book.
+#[derive(Debug, Serialize, Deserialize)]
+struct Workspace {
+    project: String,
+    thread: String,
+    root: String,
+    repos: Vec<WorkspaceRepo>,
+    created_at_ms: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct RepoOutcome {
+    name: String,
+    branch: String,
+    commit: String,
+    status: String,
 }
 
 /// Reserved for the resource-anchored comment record.
@@ -486,12 +547,7 @@ impl State {
     ///
     /// A copy is a reflink where the filesystem has one and a real copy where it
     /// does not: `mush project add` already makes the same trade.
-    fn ensure_worktree(
-        &mut self,
-        name: &str,
-        thread: &str,
-        from: Option<&str>,
-    ) -> Result<PathBuf> {
+    fn ensure_worktree(&mut self, name: &str, thread: &str, from: Option<&str>) -> Result<PathBuf> {
         validate_worktree_id(name)?;
         let relative = normalize_path(&format!("worktrees/{name}"))?;
         let dir = self.root.join(&relative);
@@ -543,8 +599,8 @@ impl State {
         let mut files = 0;
         let mut stack = vec![source.to_path_buf()];
         while let Some(dir) = stack.pop() {
-            for entry in std::fs::read_dir(&dir)
-                .with_context(|| format!("read {}", dir.display()))?
+            for entry in
+                std::fs::read_dir(&dir).with_context(|| format!("read {}", dir.display()))?
             {
                 let entry = entry?;
                 let path = entry.path();
@@ -561,8 +617,8 @@ impl State {
                     .map(|rest| rest.to_string_lossy().replace('\\', "/"))
                     .unwrap_or_default();
                 let vpath = format!("{target}/{relative}");
-                let bytes = std::fs::read(&path)
-                    .with_context(|| format!("read {}", path.display()))?;
+                let bytes =
+                    std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
                 let id = ContentId::from_bytes(&bytes);
                 if let Some(existing) = self.vfs.file(&vpath)?
                     && existing.content_id == id
@@ -577,6 +633,234 @@ impl State {
             }
         }
         Ok(files)
+    }
+
+    fn define_project(
+        &mut self,
+        desktop: &str,
+        id: &str,
+        title: &str,
+        sources: Vec<String>,
+    ) -> Result<Project> {
+        validate_worktree_id(id)?;
+        if sources.is_empty() {
+            bail!("a project needs at least one --repo");
+        }
+        let mut repos = Vec::new();
+        let mut names = BTreeSet::new();
+        for source in sources {
+            let source = crate::config::expand_home(&source);
+            let root = crate::project::checkout_root(&source)
+                .with_context(|| format!("{} is not a git checkout", source.display()))?;
+            let name = root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty())
+                .ok_or_else(|| anyhow!("cannot name repository {}", root.display()))?
+                .to_string();
+            if !names.insert(name.clone()) {
+                bail!("duplicate repository name {name:?}");
+            }
+            let facts = crate::project::facts(&root);
+            let base = facts.branch.unwrap_or_else(|| "HEAD".to_string());
+            repos.push(ProjectRepo {
+                name,
+                source: root.display().to_string(),
+                base,
+            });
+        }
+        let project = Project {
+            id: id.to_string(),
+            title: title.to_string(),
+            desktop: desktop.to_string(),
+            repos,
+            created_at_ms: now_ms(),
+        };
+        self.put(project_record(id), PROJECT_SCHEMA, &project)?;
+        Ok(project)
+    }
+
+    /// Add one repository to an existing project.
+    ///
+    /// Add-only on purpose: an agent may request that a project include another
+    /// checkout, but removing a repo is a project edit a human should make with
+    /// the project manifest in front of them. Re-adding the same name and
+    /// source is idempotent.
+    fn add_project_repo(&mut self, id: &str, source: &str) -> Result<Project> {
+        let mut project = self
+            .get::<Project>(&project_record(id))?
+            .with_context(|| format!("project {id} not found"))?;
+        let source = crate::config::expand_home(source);
+        let root = crate::project::checkout_root(&source)
+            .with_context(|| format!("{} is not a git checkout", source.display()))?;
+        let name = root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| anyhow!("cannot name repository {}", root.display()))?
+            .to_string();
+        if let Some(existing) = project.repos.iter().find(|repo| repo.name == name) {
+            if Path::new(&existing.source) == root {
+                return Ok(project);
+            }
+            bail!("project {id} already has a repo named {name:?}");
+        }
+        let facts = crate::project::facts(&root);
+        project.repos.push(ProjectRepo {
+            name,
+            source: root.display().to_string(),
+            base: facts.branch.unwrap_or_else(|| "HEAD".to_string()),
+        });
+        self.put(project_record(id), PROJECT_SCHEMA, &project)?;
+        Ok(project)
+    }
+
+    fn checkout_project(&mut self, id: &str, thread: &str) -> Result<Workspace> {
+        validate_thread_id(thread)?;
+        let project = self
+            .get::<Project>(&project_record(id))?
+            .with_context(|| format!("project {id} not found"))?;
+        let root = normalize_path(&format!("threads/{thread}/{id}"))?;
+        std::fs::create_dir_all(self.root.join(&root))
+            .with_context(|| format!("create {}", self.root.join(&root).display()))?;
+
+        let previous = self.get_local::<Workspace>(&workspace_record(thread, id))?;
+        let mut repos = Vec::new();
+        for repo in &project.repos {
+            let target_relative = normalize_path(&format!("{root}/{}", repo.name))?;
+            let target = self.root.join(&target_relative);
+            let prior = previous
+                .as_ref()
+                .and_then(|workspace| workspace.repos.iter().find(|row| row.name == repo.name));
+            let branch = prior
+                .map(|row| row.branch.clone())
+                .unwrap_or_else(|| project_branch(&project.id, thread, &repo.name));
+            let existed = target.join(".git").exists();
+            if !existed {
+                if target.exists() {
+                    bail!("{} exists but is not a git worktree", target.display());
+                }
+                add_git_worktree(Path::new(&repo.source), &target, &branch, &repo.base)?;
+            }
+
+            let worktree = match prior {
+                Some(row) if existed && Path::new(&row.path) == Path::new(&target_relative) => {
+                    row.worktree.clone()
+                }
+                _ => {
+                    // The host git worktree is what agents edit. The VFS tree and
+                    // worktree record are the portable snapshot of that directory,
+                    // so ingest it before recording it.
+                    let files = self.ingest(&target, &target_relative)?;
+                    if files == 0 {
+                        bail!("nothing to record under {}", target.display());
+                    }
+                    self.create_worktree(
+                        &target_relative,
+                        thread,
+                        None,
+                        Some(&format!("{id}/{thread}/{}", repo.name)),
+                    )?
+                    .id
+                }
+            };
+            repos.push(WorkspaceRepo {
+                name: repo.name.clone(),
+                path: target_relative,
+                branch,
+                worktree,
+            });
+        }
+
+        let workspace = Workspace {
+            project: project.id.clone(),
+            thread: thread.to_string(),
+            root,
+            repos,
+            created_at_ms: now_ms(),
+        };
+        self.put_local(
+            workspace_record(thread, &project.id),
+            WORKSPACE_SCHEMA,
+            &workspace,
+        )?;
+        Ok(workspace)
+    }
+
+    fn load_workspace(&mut self, id: &str, thread: &str) -> Result<Workspace> {
+        self.get_local(&workspace_record(thread, id))?
+            .with_context(|| format!("project {id} has no workspace for thread {thread}"))
+    }
+
+    fn commit_project(
+        &mut self,
+        id: &str,
+        thread: &str,
+        message: &str,
+    ) -> Result<Vec<RepoOutcome>> {
+        let workspace = self.load_workspace(id, thread)?;
+        let mut outcomes = Vec::new();
+        for repo in &workspace.repos {
+            let path = self.root.join(&repo.path);
+            run_git(&path, &["add", "-A"])?;
+            let dirty = !git_stdout(&path, &["status", "--porcelain"])?
+                .trim()
+                .is_empty();
+            if !dirty {
+                outcomes.push(RepoOutcome {
+                    name: repo.name.clone(),
+                    branch: repo.branch.clone(),
+                    commit: git_stdout(&path, &["rev-parse", "HEAD"])?
+                        .trim()
+                        .to_string(),
+                    status: "unchanged".to_string(),
+                });
+                continue;
+            }
+            run_git(&path, &["commit", "-m", message])?;
+            let commit = git_stdout(&path, &["rev-parse", "HEAD"])?
+                .trim()
+                .to_string();
+            self.snapshot_worktree(&repo.worktree, Some(&repo.path))?;
+            outcomes.push(RepoOutcome {
+                name: repo.name.clone(),
+                branch: repo.branch.clone(),
+                commit,
+                status: "committed".to_string(),
+            });
+        }
+        Ok(outcomes)
+    }
+
+    fn push_project(&mut self, id: &str, thread: &str, remote: &str) -> Result<Vec<RepoOutcome>> {
+        let workspace = self.load_workspace(id, thread)?;
+        let mut outcomes = Vec::new();
+        for repo in &workspace.repos {
+            let path = self.root.join(&repo.path);
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(&path)
+                .args(["push", "-u", remote, &repo.branch])
+                .output()
+                .with_context(|| format!("run git push in {}", path.display()))?;
+            if !output.status.success() {
+                bail!(
+                    "git push {} {}: {}",
+                    remote,
+                    repo.branch,
+                    String::from_utf8_lossy(&output.stderr).trim()
+                );
+            }
+            outcomes.push(RepoOutcome {
+                name: repo.name.clone(),
+                branch: repo.branch.clone(),
+                commit: git_stdout(&path, &["rev-parse", "HEAD"])?
+                    .trim()
+                    .to_string(),
+                status: "pushed".to_string(),
+            });
+        }
+        Ok(outcomes)
     }
 
     fn status(&mut self, id: &str) -> Result<WorktreeStatus> {
@@ -678,6 +962,255 @@ impl State {
     }
 }
 
+/// `mush project define|checkout|status|commit|push`
+///
+/// This is the hierarchy the Desktop document describes: a Project is a named
+/// set of repositories, a Thread gets a mount root under `threads/<thread>/`,
+/// and each repository in that root is a real git worktree plus a portable VFS
+/// worktree record. The image attaches to the mount root, not to the Desktop.
+pub(crate) fn run_project(config: &crate::config::Config, mut args: Vec<String>) -> Result<()> {
+    let Some(subcommand) = args.first().cloned() else {
+        return project_help();
+    };
+    args.remove(0);
+    match subcommand.as_str() {
+        "help" | "--help" | "-h" => return project_help(),
+        "define" => {
+            let desktop_id = crate::desktop::selected(config, &mut args)
+                .ok_or_else(|| anyhow!("no Desktop selected; pass --desktop ID"))?;
+            let desktop = crate::desktop::load(&desktop_id)?;
+            let title = take_option(&mut args, "--title").unwrap_or_default();
+            let mut sources = Vec::new();
+            while let Some(source) = take_option(&mut args, "--repo") {
+                sources.push(source);
+            }
+            ensure_no_options(&args)?;
+            ensure_arity(&args, 1)?;
+            let id = &args[0];
+            let title = if title.trim().is_empty() {
+                id.clone()
+            } else {
+                title
+            };
+            let mut state = open_project_state(&desktop)?;
+            let project = state.define_project(&desktop.id, id, &title, sources)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "ok": true,
+                    "project": project.id,
+                    "desktop": project.desktop,
+                    "repos": project.repos.iter().map(|repo| serde_json::json!({
+                        "name": repo.name,
+                        "source": repo.source,
+                        "base": repo.base,
+                    })).collect::<Vec<_>>(),
+                }))?
+            );
+            Ok(())
+        }
+        "add-repo" => {
+            let desktop_id = crate::desktop::selected(config, &mut args)
+                .ok_or_else(|| anyhow!("no Desktop selected; pass --desktop ID"))?;
+            let desktop = crate::desktop::load(&desktop_id)?;
+            let source = take_option(&mut args, "--repo").ok_or_else(|| {
+                anyhow!("usage: mush project add-repo <project> --repo PATH --desktop ID")
+            })?;
+            ensure_no_options(&args)?;
+            ensure_arity(&args, 1)?;
+            let mut state = open_project_state(&desktop)?;
+            let project = state.add_project_repo(&args[0], &source)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "ok": true,
+                    "project": project.id,
+                    "repos": project.repos.iter().map(|repo| serde_json::json!({
+                        "name": repo.name,
+                        "source": repo.source,
+                        "base": repo.base,
+                    })).collect::<Vec<_>>(),
+                }))?
+            );
+            Ok(())
+        }
+        "list" => {
+            let desktop_id = crate::desktop::selected(config, &mut args)
+                .ok_or_else(|| anyhow!("no Desktop selected; pass --desktop ID"))?;
+            let desktop = crate::desktop::load(&desktop_id)?;
+            ensure_no_options(&args)?;
+            ensure_arity(&args, 0)?;
+            let mut state = open_project_state(&desktop)?;
+            let mut projects = state.scan::<Project>("project/")?;
+            projects.sort_by(|a, b| a.id.cmp(&b.id));
+            for project in projects {
+                println!(
+                    "{}\t{}\t{} repos\t{}",
+                    project.id,
+                    project.title,
+                    project.repos.len(),
+                    project
+                        .repos
+                        .iter()
+                        .map(|repo| repo.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                );
+            }
+            Ok(())
+        }
+        "show" => {
+            let desktop_id = crate::desktop::selected(config, &mut args)
+                .ok_or_else(|| anyhow!("no Desktop selected; pass --desktop ID"))?;
+            let desktop = crate::desktop::load(&desktop_id)?;
+            ensure_no_options(&args)?;
+            ensure_arity(&args, 1)?;
+            let mut state = open_project_state(&desktop)?;
+            let project = state
+                .get::<Project>(&project_record(&args[0]))?
+                .with_context(|| format!("project {} not found", args[0]))?;
+            println!("{}", serde_json::to_string_pretty(&project)?);
+            Ok(())
+        }
+        "checkout" => {
+            let desktop_id = crate::desktop::selected(config, &mut args)
+                .ok_or_else(|| anyhow!("no Desktop selected; pass --desktop ID"))?;
+            let desktop = crate::desktop::load(&desktop_id)?;
+            let thread = take_option(&mut args, "--thread").ok_or_else(|| {
+                anyhow!("usage: mush project checkout <project> --thread <thread>")
+            })?;
+            ensure_no_options(&args)?;
+            ensure_arity(&args, 1)?;
+            let mut state = open_project_state(&desktop)?;
+            let workspace = state.checkout_project(&args[0], &thread)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "ok": true,
+                    "project": workspace.project,
+                    "thread": workspace.thread,
+                    "root": state.root.join(&workspace.root).display().to_string(),
+                    "repos": workspace.repos.iter().map(|repo| serde_json::json!({
+                        "name": repo.name,
+                        "path": repo.path,
+                        "branch": repo.branch,
+                        "worktree": repo.worktree,
+                    })).collect::<Vec<_>>(),
+                }))?
+            );
+            Ok(())
+        }
+        "status" => {
+            let desktop_id = crate::desktop::selected(config, &mut args)
+                .ok_or_else(|| anyhow!("no Desktop selected; pass --desktop ID"))?;
+            let desktop = crate::desktop::load(&desktop_id)?;
+            let thread = take_option(&mut args, "--thread")
+                .ok_or_else(|| anyhow!("usage: mush project status <project> --thread <thread>"))?;
+            ensure_no_options(&args)?;
+            ensure_arity(&args, 1)?;
+            let mut state = open_project_state(&desktop)?;
+            let workspace = state.load_workspace(&args[0], &thread)?;
+            let mut rows = Vec::new();
+            for repo in &workspace.repos {
+                let path = state.root.join(&repo.path);
+                let branch = git_stdout(&path, &["rev-parse", "--abbrev-ref", "HEAD"])?
+                    .trim()
+                    .to_string();
+                let commit = git_stdout(&path, &["rev-parse", "HEAD"])?
+                    .trim()
+                    .to_string();
+                let dirty = !git_stdout(&path, &["status", "--porcelain"])?
+                    .trim()
+                    .is_empty();
+                rows.push(serde_json::json!({
+                    "name": repo.name,
+                    "path": repo.path,
+                    "branch": branch,
+                    "commit": commit,
+                    "dirty": dirty,
+                    "worktree": repo.worktree,
+                }));
+            }
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "ok": true,
+                    "project": workspace.project,
+                    "thread": workspace.thread,
+                    "root": workspace.root,
+                    "repos": rows,
+                }))?
+            );
+            Ok(())
+        }
+        "commit" => {
+            let desktop_id = crate::desktop::selected(config, &mut args)
+                .ok_or_else(|| anyhow!("no Desktop selected; pass --desktop ID"))?;
+            let desktop = crate::desktop::load(&desktop_id)?;
+            let thread = take_option(&mut args, "--thread").ok_or_else(|| {
+                anyhow!("usage: mush project commit <project> --thread <thread> --message MSG")
+            })?;
+            let message = take_option(&mut args, "--message")
+                .or_else(|| take_option(&mut args, "-m"))
+                .ok_or_else(|| {
+                    anyhow!("usage: mush project commit <project> --thread <thread> --message MSG")
+                })?;
+            ensure_no_options(&args)?;
+            ensure_arity(&args, 1)?;
+            let mut state = open_project_state(&desktop)?;
+            let outcomes = state.commit_project(&args[0], &thread, &message)?;
+            println!("{}", serde_json::to_string_pretty(&outcomes)?);
+            Ok(())
+        }
+        "push" => {
+            let desktop_id = crate::desktop::selected(config, &mut args)
+                .ok_or_else(|| anyhow!("no Desktop selected; pass --desktop ID"))?;
+            let desktop = crate::desktop::load(&desktop_id)?;
+            let thread = take_option(&mut args, "--thread").ok_or_else(|| {
+                anyhow!("usage: mush project push <project> --thread <thread> [--remote origin]")
+            })?;
+            let remote = take_option(&mut args, "--remote").unwrap_or_else(|| "origin".to_string());
+            ensure_no_options(&args)?;
+            ensure_arity(&args, 1)?;
+            let mut state = open_project_state(&desktop)?;
+            let outcomes = state.push_project(&args[0], &thread, &remote)?;
+            println!("{}", serde_json::to_string_pretty(&outcomes)?);
+            Ok(())
+        }
+        other => bail!(
+            "unknown project subcommand {other:?}; try define, checkout, status, commit, push"
+        ),
+    }
+}
+
+fn open_project_state(desktop: &crate::desktop::Desktop) -> Result<State> {
+    let root = desktop.root.clone();
+    let state_root = std::env::var("MUSH_STATE_ROOT")
+        .map(|value| crate::config::expand_home(&value))
+        .unwrap_or_else(|_| root.join(".fungos/records"));
+    let book = std::env::var("MUSH_WORKTREE_BOOK").unwrap_or_else(|_| "mush".into());
+    let collection =
+        std::env::var("MUSH_WORKTREE_COLLECTION").unwrap_or_else(|_| "worktree".into());
+    let store = std::env::var("MUSH_VFS_STORE")
+        .ok()
+        .map(|value| crate::config::expand_home(&value));
+    State::open(&root, &state_root, &book, &collection, store.as_deref())
+}
+
+fn project_help() -> Result<()> {
+    println!(
+        "mush project define <id> --desktop <id> --repo PATH [--repo PATH ...] [--title TITLE]\n\
+         mush project add-repo <id> --repo PATH --desktop <id>\n\
+         mush project list --desktop <id>\n\
+         mush project show <id> --desktop <id>\n\
+         mush project checkout <id> --thread <thread> --desktop <id>\n\
+         mush project status <id> --thread <thread> --desktop <id>\n\
+         mush project commit <id> --thread <thread> --message MSG --desktop <id>\n\
+         mush project push <id> --thread <thread> [--remote origin] --desktop <id>"
+    );
+    Ok(())
+}
+
 pub(crate) fn run(
     root: &Path,
     command: &str,
@@ -695,7 +1228,7 @@ pub(crate) fn run(
     }
 }
 
-fn run_worktree(state: &mut State, root: &Path, args: &mut Vec<String>) -> Result<()> {
+fn run_worktree(state: &mut State, _root: &Path, args: &mut Vec<String>) -> Result<()> {
     let Some(subcommand) = args.first().cloned() else {
         return worktree_help();
     };
@@ -1070,6 +1603,14 @@ fn checkout_record(id: &str) -> String {
     format!("checkout/{id}")
 }
 
+fn project_record(id: &str) -> String {
+    format!("project/{id}")
+}
+
+fn workspace_record(thread: &str, project: &str) -> String {
+    format!("workspace/{thread}/{project}")
+}
+
 /// A media type for a file the store is recording.
 ///
 /// Only the handful the fleet actually reads: everything else is bytes, and
@@ -1089,6 +1630,112 @@ fn media_type(path: &Path) -> &'static str {
         Some("svg") => "image/svg+xml",
         _ => "application/octet-stream",
     }
+}
+
+/// The branch a thread worktree uses for one repository.
+///
+/// One branch per repo per project per thread, so two threads never share a
+/// mutable ref. The name is sanitized because git refs forbid whitespace and
+/// a handful of punctuation that thread/project ids may contain.
+fn project_branch(project: &str, thread: &str, repo: &str) -> String {
+    let raw = format!("soil/{project}/{thread}/{repo}");
+    let mut branch = String::with_capacity(raw.len());
+    let mut last_slash = false;
+    for ch in raw.chars() {
+        let ch = if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | '/') {
+            ch
+        } else {
+            '-'
+        };
+        if ch == '/' {
+            if last_slash {
+                continue;
+            }
+            last_slash = true;
+        } else {
+            last_slash = false;
+        }
+        branch.push(ch);
+    }
+    while branch.contains("..") {
+        branch = branch.replace("..", ".");
+    }
+    let branch = branch.trim_matches('/').trim_end_matches('.').to_string();
+    branch.chars().take(240).collect()
+}
+
+/// Add a real git worktree for one project repo.
+///
+/// If the branch already exists (a retry, or another device pushed it), check
+/// it out by name instead of trying to create it again. A source checkout that
+/// is dirty is not carried over: the worktree starts at the committed base,
+/// which is the only state git can reproduce.
+fn add_git_worktree(source: &Path, target: &Path, branch: &str, base: &str) -> Result<()> {
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+    let reference = format!("refs/heads/{branch}");
+    let exists = Command::new("git")
+        .arg("-C")
+        .arg(source)
+        .args(["show-ref", "--verify", "--quiet", &reference])
+        .status()
+        .with_context(|| format!("run git show-ref in {}", source.display()))?
+        .success();
+    let mut command = Command::new("git");
+    command.arg("-C").arg(source).args(["worktree", "add"]);
+    if exists {
+        command.arg(target).arg(branch);
+    } else {
+        command.args(["-b", branch]).arg(target).arg(base);
+    }
+    let output = command
+        .output()
+        .with_context(|| format!("run git worktree add in {}", source.display()))?;
+    if !output.status.success() {
+        bail!(
+            "git worktree add {}: {}",
+            target.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+fn run_git(path: &Path, args: &[&str]) -> Result<()> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(args)
+        .output()
+        .with_context(|| format!("run git -C {} {:?}", path.display(), args))?;
+    if !output.status.success() {
+        bail!(
+            "git -C {} {:?}: {}",
+            path.display(),
+            args,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+fn git_stdout(path: &Path, args: &[&str]) -> Result<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(args)
+        .output()
+        .with_context(|| format!("run git -C {} {:?}", path.display(), args))?;
+    if !output.status.success() {
+        bail!(
+            "git -C {} {:?}: {}",
+            path.display(),
+            args,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 fn normalize_path(path: &str) -> Result<String> {
@@ -1189,14 +1836,133 @@ mod tests {
         (dir, state)
     }
 
+    fn git_repo(path: &Path) {
+        std::fs::create_dir_all(path).unwrap();
+        for args in [
+            vec!["init", "-q"],
+            vec!["config", "user.email", "test@example.com"],
+            vec!["config", "user.name", "Test"],
+        ] {
+            let status = Command::new("git")
+                .arg("-C")
+                .arg(path)
+                .args(&args)
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        }
+        std::fs::write(path.join("README.md"), "initial\n").unwrap();
+        for args in [vec!["add", "."], vec!["commit", "-q", "-m", "initial"]] {
+            let status = Command::new("git")
+                .arg("-C")
+                .arg(path)
+                .args(&args)
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {args:?}");
+        }
+    }
+
+    #[test]
+    fn a_project_checkout_makes_one_git_worktree_per_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("store");
+        let mut state = State::open(
+            &dir.path().join("vfs"),
+            &dir.path().join("records"),
+            "mush-test",
+            "worktree",
+            Some(&store),
+        )
+        .unwrap();
+        let one = dir.path().join("src/one");
+        let two = dir.path().join("src/two");
+        git_repo(&one);
+        git_repo(&two);
+
+        let project = state
+            .define_project(
+                "acme",
+                "suite",
+                "Suite",
+                vec![one.display().to_string(), two.display().to_string()],
+            )
+            .unwrap();
+        assert_eq!(project.repos.len(), 2);
+
+        let workspace = state.checkout_project("suite", "thread-1").unwrap();
+        assert_eq!(workspace.root, "threads/thread-1/suite");
+        assert_eq!(workspace.repos.len(), 2);
+        for repo in &workspace.repos {
+            let path = state.root.join(&repo.path);
+            assert!(path.join(".git").is_file(), "{}", path.display());
+            assert_eq!(
+                git_stdout(&path, &["rev-parse", "--abbrev-ref", "HEAD"])
+                    .unwrap()
+                    .trim(),
+                repo.branch
+            );
+            assert!(state.load_worktree(&repo.worktree).unwrap().thread == "thread-1");
+        }
+
+        // Re-running checkout is a resume, not a second set of worktrees.
+        let again = state.checkout_project("suite", "thread-1").unwrap();
+        assert_eq!(
+            again.repos.iter().map(|repo| &repo.worktree).collect::<Vec<_>>(),
+            workspace
+                .repos
+                .iter()
+                .map(|repo| &repo.worktree)
+                .collect::<Vec<_>>()
+        );
+
+        // add-repo is durable and the next checkout materializes it.
+        let three = dir.path().join("src/three");
+        git_repo(&three);
+        state
+            .add_project_repo("suite", &three.display().to_string())
+            .unwrap();
+        let grown = state.checkout_project("suite", "thread-1").unwrap();
+        assert_eq!(grown.repos.len(), 3);
+        assert!(state.root.join(&grown.repos[2].path).join(".git").is_file());
+
+        std::fs::write(
+            state.root.join(&workspace.repos[0].path).join("README.md"),
+            "changed\n",
+        )
+        .unwrap();
+        let outcomes = state
+            .commit_project("suite", "thread-1", "one change")
+            .unwrap();
+        assert_eq!(outcomes[0].status, "committed");
+        assert_eq!(outcomes[1].status, "unchanged");
+        assert_eq!(
+            git_stdout(
+                &state.root.join(&workspace.repos[0].path),
+                &["status", "--porcelain"]
+            )
+            .unwrap()
+            .trim(),
+            ""
+        );
+    }
+
     /// A store written before the split keeps its worktree, and the device
-    /// state it used to carry moves to the local book instead of being dropped.    #[test]
+    /// state it used to carry moves to the local book instead of being dropped.
+    #[test]
     fn the_migration_splits_a_pre_split_worktree_record() {
         let dir = tempfile::tempdir().unwrap();
         let (vfs_root, records_root) = (dir.path().join("vfs"), dir.path().join("records"));
         let store = dir.path().join("store");
         {
-            let mut state = State::open(&vfs_root, &records_root, "mush-test", "worktree", Some(&store)).unwrap();
+            let mut state = State::open(
+                &vfs_root,
+                &records_root,
+                "mush-test",
+                "worktree",
+                Some(&store),
+            )
+            .unwrap();
             // The shape written before the split: portable identity and device
             // state in one record.
             let legacy = serde_json::json!({
@@ -1215,7 +1981,14 @@ mod tests {
         }
 
         // Reopening migrates.
-        let mut state = State::open(&vfs_root, &records_root, "mush-test", "worktree", Some(&store)).unwrap();
+        let mut state = State::open(
+            &vfs_root,
+            &records_root,
+            "mush-test",
+            "worktree",
+            Some(&store),
+        )
+        .unwrap();
         let local = state.load_worktree_state("wt_old").unwrap();
         assert_eq!(local.path, "projects/old");
         assert_eq!(local.head_tree, "tree-head");
@@ -1228,7 +2001,14 @@ mod tests {
         assert!(!body.contains("projects/old"), "{body}");
 
         // Idempotent: a second open does not duplicate or lose anything.
-        let mut again = State::open(&vfs_root, &records_root, "mush-test", "worktree", Some(&store)).unwrap();
+        let mut again = State::open(
+            &vfs_root,
+            &records_root,
+            "mush-test",
+            "worktree",
+            Some(&store),
+        )
+        .unwrap();
         assert_eq!(
             again
                 .scan_local::<WorktreeState>("worktree-state/")

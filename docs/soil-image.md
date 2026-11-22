@@ -15,6 +15,22 @@ soil-image
 An image is attached to a VFS workspace root. Source is read and written through
 `soil:vfs`, never through an arbitrary host path.
 
+The workspace root is a **thread mount root**, not a Desktop and not a
+repository. It is the directory that contains every repository worktree for one
+thread's project:
+
+```text
+threads/<thread>/<project>/
+  soil/
+  spores/
+  theseus/
+```
+
+Subagents of that thread attach to the same mount root. A parallel thread gets a
+different mount root. The image does not know or care which repository a form
+came from; provenance records the VFS path, and that path is relative to the
+thread's mount root.
+
 ## Protocol
 
 One JSON request per line, one JSON response per line:

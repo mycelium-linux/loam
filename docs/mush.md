@@ -166,6 +166,42 @@ one Desktop. See [attaching a checkout](#attaching-a-checkout).
 `mush desktop list --json` and `mush desktop show ID --json` print the same row
 shape as `mush attach --json`, so a script reads one schema.
 
+### Projects and thread mount roots
+
+A project is a named set of repositories. A thread gets one mount root and one
+git worktree per repository:
+
+```sh
+mush project define fpl-suite \
+  --desktop fpl \
+  --repo ~/src/singularity/soil \
+  --repo ~/src/fungOS/spores \
+  --repo ~/src/singularity
+
+mush project add-repo fpl-suite --repo ~/src/theseus --desktop fpl
+mush project checkout fpl-suite --thread auth-refactor --desktop fpl
+mush project status fpl-suite --thread auth-refactor --desktop fpl
+mush project commit fpl-suite --thread auth-refactor --desktop fpl -m "auth: retry"
+mush project push fpl-suite --thread auth-refactor --desktop fpl
+```
+
+The checkout is idempotent: re-running it reuses existing worktrees and adds any
+repository that was added to the project since the thread started. The mount
+root is:
+
+```text
+<desktop-root>/threads/<thread>/<project>/
+  <repo>/
+  <repo>/
+```
+
+Subagents of the same thread share that root. Parallel threads get different
+roots and different branches (`soil/<project>/<thread>/<repo>`).
+
+`add-repo` is deliberately the only agent-facing mutation. Removing or
+re-pinning a repository is a project edit; an agent may request it, but doing it
+silently would delete or relocate worktrees it does not own.
+
 ### Origin
 
 `mush origin` answers "which Desktop owns this caller?" from the only two hints

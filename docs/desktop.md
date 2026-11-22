@@ -27,16 +27,48 @@ namespace plus the records, projects, Canvas views, and grants attached to it.
 A Desktop follows the principal across machines. Its **local materialization**
 does not: each machine gets its own mount root and checkouts.
 
+## The hierarchy
+
+```text
+Desktop
+  Project                 named set of pinned repositories
+    Thread                agent session + its per-repo worktrees
+      Mount root          the thread's VFS/checkout root
+        repo A worktree
+        repo B worktree
+      Image               live runtime attached to the mount root
+```
+
+The short form:
+
+```text
+Desktop -> Project -> Thread -> Mount root -> Image
+```
+
+`Workspace` is not a durable layer. If the word is used at all, it means one
+thread's mount root, or the local session context around it. It is not a synonym
+for Desktop, Project, or Thread.
+
+A **Project** is a named set of repositories, not a repository. The project
+manifest pins each repository (source, path inside the mount root, base branch,
+and eventually a commit/tree). A **Thread** gets one mount root and one worktree
+per repository. A **subagent** in the same thread shares that mount root and
+those worktrees. A **parallel thread** gets a different mount root and different
+worktrees. An **Image** attaches to the thread's mount root; it does not attach
+to the Desktop and it does not attach to one repository.
+
 ## Vocabulary
 
 | Term | Meaning | Durable? | Shared? |
 |---|---|---|---|
 | **Desktop** | Top-level namespace for a major context | Yes | Personal or shared |
 | **Shared Desktop** | Desktop with multiple principals | Yes | Yes |
-| **Project** | Git repository referenced by a Desktop | Yes | Per Desktop policy |
-| **Thread** | Conversation plus its project worktrees | Yes | Per thread policy |
-| **Worktree** | A thread's version of one project | Yes | Per thread policy |
+| **Project** | Named set of pinned repositories referenced by a Desktop | Yes | Per Desktop policy |
+| **Thread** | Agent session plus its per-repo worktrees | Yes | Per thread policy |
+| **Mount root** | This device's VFS/checkout root for one thread's project | Local | Per device |
+| **Worktree** | A thread's version of one repository | Yes | Per thread policy |
 | **Checkout** | Materialized worktree files on one machine | Local | Per device |
+| **Image** | Live runtime attached to a thread mount root | Local | Per thread |
 | **Canvas** | Visual projection of a Desktop | Yes | Per Desktop policy |
 | **Mush session** | Local shell/VFS execution context | Local | Per device |
 
@@ -48,9 +80,14 @@ survives internally, it should mean only the local VFS/session context.
 ```text
 Desktop / Shared Desktop
   ├─ projects/
-  │    ├─ Project A
-  │    │    ├─ Thread 1 worktree -> checkout on Neo
-  │    │    └─ Thread 2 worktree -> checkout on Studio
+  │    ├─ Project A (repos: soil, spores, theseus)
+  │    │    ├─ Thread 1 mount root
+  │    │    │    ├─ soil worktree   -> checkout on Neo
+  │    │    │    ├─ spores worktree
+  │    │    │    └─ theseus worktree
+  │    │    └─ Thread 2 mount root
+  │    │         ├─ soil worktree   -> checkout on Studio
+  │    │         └─ spores worktree
   │    └─ Project B
   ├─ notes/
   ├─ scratch/
@@ -59,7 +96,7 @@ Desktop / Shared Desktop
   ├─ Canvas layouts + Desktop theme
   └─ threads/
        ├─ conversation and comments
-       └─ project worktrees
+       └─ mount roots and worktrees
 ```
 
 A Desktop can contain many projects. A `ProjectRef` can be re-used in many
@@ -84,6 +121,15 @@ ProjectRef
   project_id      stable repository identity
   repo            source remote
   default_branch
+
+ProjectManifest
+  id              stable project identity (one per Desktop)
+  title
+  repos[]
+    name          directory inside the thread mount root
+    source        checkout or remote
+    base          branch the thread worktree forks from
+    pin           commit/tree, when pinned
 
 DesktopMount
   path            VFS path, e.g. projects/crm
@@ -284,6 +330,67 @@ new Desktop, the layout is copied, not shared.
 `Canvas Workspace` should mean "a saved Canvas layout for a Desktop," not a
 second storage container.
 
+## Project, thread, mount root, image
+
+A project is the unit of source. A thread is the unit of work. A mount root is
+where that work happens on this device. An image is the live evaluator attached
+to that mount root.
+
+```text
+FPL Desktop
+  Project fpl-suite
+    repos: soil, spores, theseus
+    Thread auth-refactor
+      mount root /threads/auth-refactor/fpl-suite
+        soil/
+        spores/
+        theseus/
+      image: fpl-suite/auth-refactor
+```
+
+The project is durable. The mount root is local and disposable. The image is
+local and disposable. Removing or re-creating a mount root must not change the
+project manifest.
+
+### Subagents
+
+A subagent is part of the same thread and therefore shares its mount root and
+worktrees. This is deliberate: a reviewer, a test fixer, and the main agent
+should not each get a divergent copy of the same change.
+
+```text
+Thread auth-refactor
+  main agent      -> /threads/auth-refactor/fpl-suite
+  review subagent -> same mount root
+  test subagent   -> same mount root
+```
+
+A parallel thread is different work and gets a different mount root:
+
+```text
+Thread auth-refactor     -> /threads/auth-refactor/fpl-suite
+Thread auth-retry        -> /threads/auth-retry/fpl-suite
+```
+
+Subagents share the worktree; they do not share an image process. The harness
+may multiplex one image or attach several clients to the same image, but the
+namespace and files are the thread's.
+
+### Adding repositories
+
+Agents may **request or add** a repository to a project. Removing or re-pinning
+a repository is a project edit, not an agent convenience.
+
+```sh
+mush project add-repo fpl-suite --repo ~/src/extra --desktop fpl
+mush project checkout fpl-suite --thread auth-refactor --desktop fpl
+```
+
+The add is durable in the project manifest. Existing thread mount roots pick up
+the new repository on the next checkout; they do not silently delete worktrees
+for repositories that are still in the project. An agent-facing capability
+should expose `add-repo` only, never `remove-repo`.
+
 ## Mush
 
 Mush runs **inside** a Desktop session.
@@ -343,26 +450,35 @@ it is not yet a mount table, checkout reconciliation, or peer sync. See
 
 ## Threads and worktrees
 
-A thread is a conversation plus the worktrees it creates.
+A thread is a conversation plus the mount root and worktrees it owns.
 
 ```text
 Desktop acme
-  Project crm
+  Project crm-suite
+    repos: crm, crm-ui, crm-worker
     Thread 42
-      worktree w42-crm
-        checkout on Neo
-  Project fleet
+      mount root threads/42/crm-suite
+        crm/worktree
+        crm-ui/worktree
+        crm-worker/worktree
+      image crm-suite/42
+  Project fleet-suite
+    repos: fleet, fleet-api
     Thread 42
-      worktree w42-fleet
-        checkout on Neo
+      mount root threads/42/fleet-suite
+        fleet/worktree
+        fleet-api/worktree
 ```
 
 Rules:
 
 - A thread belongs to one Desktop for permission and namespace purposes.
 - A thread can touch one or more projects in that Desktop.
-- Each project gets a thread-scoped worktree.
-- Forks get their own worktrees; they do not share mutable worktree state.
+- A project gets one thread-scoped mount root; each repository in it gets one
+  worktree.
+- Subagents of a thread share its mount root and worktrees.
+- Parallel threads get separate mount roots and branches; they do not share
+  mutable worktree state.
 - A Desktop can outlive every thread in it. Threads can be archived without
   deleting the Desktop.
 
@@ -371,8 +487,11 @@ Rules:
 ```text
 Desktop manifest / membership    soil:records
 Desktop files and snapshots      soil:vfs
+Project manifest and pins        soil:records
 Project identity and remotes     ProjectRef in manifest
+Thread mount root                local VFS/checkout path, device-local
 Thread worktree history          VFS history scoped by thread/project
+Image provenance                 image-local, flushable to VFS
 Canvas layout and theme          records or VFS metadata
 Command roots                    Desktop-scoped host config
 ```
@@ -441,6 +560,13 @@ archive
    reads `placeholder`, no entry claims to be missing, and `fetch` fills them
    from the Desktop's declared replica. No byte is taken from a machine-local
    checkout, even when one is present and nearby.
+
+## Transcripts
+
+Conversations are durable, but they are not the Desktop manifest. An agent
+transcript is a CRDT document stored in VFS and anchored to the thread/session
+that produced it; comments are annotations on that document, not a separate
+mutable table. See [Transcripts as CRDT documents](transcript-crdt.md).
 
 ## Non-goals
 
