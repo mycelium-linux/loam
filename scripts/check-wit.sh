@@ -19,7 +19,7 @@ for world in \
     crates/loam/wit/stream \
     crates/loam-surface/wit \
     crates/loam-ble-host/wit \
-    crates/loam-audio/wit \
+    crates/loam-media/wit \
     crates/loam-command/wit/plugin \
     crates/loam-mcp/fixtures/adapter/wit \
     wit/soil-command

@@ -7,7 +7,7 @@
 #[ignore = "requires an audio output device"]
 fn tone_guest_completes_without_error() {
     let component = include_bytes!("../fixtures/tone.wasm");
-    let status = wasi_audio_wasmtime::run_component_blocking(component).expect("guest run");
+    let status = loam_media::audio::run_component_blocking(component).expect("guest run");
     assert_eq!(status, 0, "guest reported audio failure");
 }
 
@@ -22,12 +22,12 @@ fn tone_guest_streams_packets_to_isochrone() {
         .unwrap();
     let destination = receiver.local_addr().unwrap();
     let host =
-        wasi_audio_wasmtime::WasiAudioHost::with_isochrone(wasi_audio_wasmtime::IsochroneConfig {
+        loam_media::audio::WasiAudioHost::with_isochrone(loam_media::audio::IsochroneConfig {
             bind: "127.0.0.1:0".parse().unwrap(),
             destination,
             ssrc: 0x1234_5678,
         });
-    let status = wasi_audio_wasmtime::AudioRuntime::new()
+    let status = loam_media::audio::AudioRuntime::new()
         .unwrap()
         .run_component_with_host(include_bytes!("../fixtures/tone.wasm"), host)
         .expect("guest run");

@@ -63,7 +63,7 @@ model2vec = ["vfs", "dep:model2vec-rs"]
 remote = ["vfs"]
 
 [dependencies]
-soil-codec = { package = "loam-codec", path = "../loam-codec" }
+loam-media = { path = "../loam-media" }
 anyhow = "1"
 base64 = { version = "0.22", optional = true }
 blake3 = { version = "1", optional = true }

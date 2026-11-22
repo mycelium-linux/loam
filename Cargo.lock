@@ -2561,7 +2561,7 @@ dependencies = [
  "hyper",
  "ipnet",
  "libc",
- "loam-codec",
+ "loam-media",
  "model2vec-rs",
  "mycelium-peer-protocol",
  "percent-encoding",
@@ -2580,21 +2580,6 @@ dependencies = [
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-http",
-]
-
-[[package]]
-name = "loam-audio"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "cpal",
- "isochrone",
- "isochrone-core",
- "rtrb",
- "serde",
- "serde_json",
- "wasmtime",
- "wasmtime-wasi",
 ]
 
 [[package]]
@@ -2641,15 +2626,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "loam-codec"
-version = "0.1.0"
-dependencies = [
- "audiopus",
- "hound",
- "thiserror 2.0.21",
-]
-
-[[package]]
 name = "loam-command"
 version = "0.1.0"
 dependencies = [
@@ -2672,6 +2648,24 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "serde_json",
+]
+
+[[package]]
+name = "loam-media"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "audiopus",
+ "cpal",
+ "hound",
+ "isochrone",
+ "isochrone-core",
+ "rtrb",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "wasmtime",
+ "wasmtime-wasi",
 ]
 
 [[package]]

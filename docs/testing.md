@@ -53,7 +53,7 @@ The printer at the end names the package directory. Copy it under
 ## Audio
 
 ```sh
-cargo test -p loam-audio
+cargo test -p loam-media
 ```
 
 The packet/isochrone test runs in CI. The real-device tone test is ignored unless
