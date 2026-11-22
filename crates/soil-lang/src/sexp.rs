@@ -118,6 +118,129 @@ pub struct Comment {
     pub span: Span,
 }
 
+/// One lexical token, including comments. This is the formatter's view of a
+/// source file: whitespace is discarded, but every comment is retained exactly
+/// where it appeared.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Token {
+    pub kind: TokenKind,
+    pub text: String,
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TokenKind {
+    Open,
+    Close,
+    Atom,
+    String,
+    Comment,
+    Prefix,
+}
+
+impl TokenKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Close => "close",
+            Self::Atom => "atom",
+            Self::String => "string",
+            Self::Comment => "comment",
+            Self::Prefix => "prefix",
+        }
+    }
+}
+
+/// Tokenize without losing comments or string spelling.
+///
+/// This is deliberately a second, small scanner rather than a parser mode: the
+/// formatter needs trivia that the value reader deliberately drops.
+pub fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
+    let mut tokens = Vec::new();
+    let mut pos = 0;
+    while pos < input.len() {
+        let ch = input[pos..].chars().next().expect("in bounds");
+        if ch.is_whitespace() {
+            pos += ch.len_utf8();
+            continue;
+        }
+        let start = pos;
+        let kind = match ch {
+            '(' => {
+                pos += 1;
+                TokenKind::Open
+            }
+            ')' => {
+                pos += 1;
+                TokenKind::Close
+            }
+            ';' => {
+                while pos < input.len() && input.as_bytes()[pos] != b'\n' {
+                    pos += 1;
+                }
+                TokenKind::Comment
+            }
+            '"' => {
+                pos += 1;
+                let mut escaped = false;
+                while pos < input.len() {
+                    let byte = input.as_bytes()[pos];
+                    pos += 1;
+                    if escaped {
+                        escaped = false;
+                    } else if byte == b'\\' {
+                        escaped = true;
+                    } else if byte == b'"' {
+                        break;
+                    }
+                }
+                if input.as_bytes().get(pos.saturating_sub(1)) != Some(&b'"') {
+                    return Err(ParseError {
+                        message: "unterminated string".into(),
+                        offset: start,
+                    });
+                }
+                TokenKind::String
+            }
+            '\'' | '`' => {
+                pos += 1;
+                TokenKind::Prefix
+            }
+            ',' => {
+                pos += 1;
+                if input.as_bytes().get(pos) == Some(&b'@') {
+                    pos += 1;
+                }
+                TokenKind::Prefix
+            }
+            '#' if input.as_bytes().get(pos + 1) == Some(&b'\'') => {
+                pos += 2;
+                TokenKind::Prefix
+            }
+            _ => {
+                while pos < input.len() {
+                    let ch = input[pos..].chars().next().expect("in bounds");
+                    if ch.is_whitespace()
+                        || matches!(ch, '(' | ')' | ';' | '"' | '\'' | '`' | ',')
+                    {
+                        break;
+                    }
+                    pos += ch.len_utf8();
+                }
+                TokenKind::Atom
+            }
+        };
+        tokens.push(Token {
+            kind,
+            text: input[start..pos].to_string(),
+            start,
+            end: pos,
+        });
+    }
+    Ok(tokens)
+}
+
 /// One top-level form with its source identity.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Form {

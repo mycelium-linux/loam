@@ -1,0 +1,43 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+; Pure command resolution. The host owns execution; this decides what a
+; command name means and refuses built-in shadowing before anything runs.
+
+(defun tend/builtins ()
+  (list "test" "bench" "lint" "doc" "build" "check"))
+
+(defun tend/one-of? (value values)
+  (if (nil? values)
+      #f
+      (if (= value (first values)) #t (tend/one-of? value (rest values)))))
+
+(defun tend/find-command (name commands)
+  (if (nil? commands)
+      nil
+      (if (= name (field (first commands) :name))
+          (first commands)
+          (tend/find-command name (rest commands)))))
+
+(defun tend/dispatch (manifest-source name args)
+  (let ((manifest (tend/parse manifest-source)))
+    (if (not (ok? manifest))
+        manifest
+        (let ((command (tend/find-command name
+                        (field (value manifest) :commands))))
+          (cond
+            ((and (not (nil? command)) (tend/one-of? name (tend/builtins)))
+              (tend/err (str "command " name " shadows a built-in")))
+            ((not (nil? command))
+              (tend/ok
+                (list
+                  (list :kind "project")
+                  (list :name name)
+                  (list :run (field command :run))
+                  (list :args args))))
+            ((tend/one-of? name (tend/builtins))
+              (tend/ok
+                (list
+                  (list :kind "builtin")
+                  (list :name name)
+                  (list :args args))))
+            (else
+              (tend/err (str "unknown command " name))))))))

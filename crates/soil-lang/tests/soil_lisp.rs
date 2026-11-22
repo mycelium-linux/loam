@@ -42,6 +42,7 @@ fn runtime(root: &Path) -> Runtime {
         "../../tools/tend/doc.soil",
         "../../tools/tend/hygiene.soil",
         "../../tools/tend/fmt.soil",
+        "../../tools/tend/dispatch.soil",
         "bindings/soil-time.soil",
         "bindings/soil-records.soil",
         "bindings/soil-http.soil",

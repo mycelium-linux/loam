@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::time::Instant;
 
-use crate::sexp::{Comment, Form, Value, parse_all, parse_document};
+use crate::sexp::{Comment, Form, Token, Value, parse_all, parse_document, tokenize};
 use anyhow::{Context, Result, anyhow, bail};
 
 #[derive(Clone)]
@@ -871,7 +871,9 @@ impl Runtime {
                         let source = source
                             .as_str()
                             .ok_or_else(|| anyhow!("read-document expects a string"))?;
-                        document_value(parse_document(source)?)
+                        let document = parse_document(source)?;
+                        let tokens = tokenize(source)?;
+                        document_value(document, tokens)
                             .map_err(|error| anyhow!("read-document: {error}"))
                     }
                     "eval" => {
@@ -1500,7 +1502,7 @@ fn is_json_object(items: &[Value]) -> bool {
 /// Forms retain their source byte span and leading comments. The raw comment
 /// text is preserved so `;;;` blocks remain Markdown rather than being
 /// reflowed by the reader.
-fn document_value(document: crate::sexp::Document) -> Result<Value> {
+fn document_value(document: crate::sexp::Document, tokens: Vec<Token>) -> Result<Value> {
     Ok(Value::List(vec![
         pair("source", Value::String(document.source)),
         pair(
@@ -1511,7 +1513,20 @@ fn document_value(document: crate::sexp::Document) -> Result<Value> {
             "trailing-comments",
             Value::List(document.trailing_comments.into_iter().map(comment_value).collect()),
         ),
+        pair(
+            "tokens",
+            Value::List(tokens.into_iter().map(token_value).collect()),
+        ),
     ]))
+}
+
+fn token_value(token: Token) -> Value {
+    Value::List(vec![
+        pair("kind", Value::String(token.kind.as_str().into())),
+        pair("text", Value::String(token.text)),
+        pair("start", Value::Int(token.start as i64)),
+        pair("end", Value::Int(token.end as i64)),
+    ])
 }
 
 fn form_value(form: Form) -> Value {
@@ -1941,5 +1956,10 @@ mod document_tests {
                 .unwrap()
                 > 0.0
         );
+        let tokens = field_value(&value, &Value::Keyword("tokens".into()));
+        let tokens = tokens.as_list().expect("tokens");
+        assert!(tokens.iter().any(|token| {
+            field_value(token, &Value::Keyword("kind".into())).as_str() == Some("comment")
+        }));
     }
 }

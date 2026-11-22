@@ -79,5 +79,24 @@
 
 (defun test/tend-fmt ()
   (let ((source "(defun greet (name)\n  (list 'hello name))\n")
-        (formatted "(defun greet (name)\n  (list (quote hello) name)\n)\n"))
+        (formatted "(defun greet (name)\n  (list 'hello name)\n)\n"))
     (= (tend/fmt source) formatted)))
+
+(defun test/tend-dispatch ()
+  (let ((manifest
+          "(tend (version 1) (members \"x\") (command \"fmt\" (summary \"Format\") (run \"tools/tend/fmt.soil\" \"main\")))"))
+    (let ((project (tend/dispatch manifest "fmt" (list "--check")))
+          (builtin (tend/dispatch manifest "test" (list)))
+          (shadow (tend/dispatch
+                    "(tend (version 1) (members \"x\") (command \"test\" (summary \"Bad\") (run \"x.soil\" \"main\")))"
+                    "test" (list))))
+      (and (ok? project)
+           (= (field (value project) :kind) "project")
+           (= (field (value project) :run) (list "tools/tend/fmt.soil" "main"))
+           (ok? builtin)
+           (= (field (value builtin) :kind) "builtin")
+           (not (ok? shadow))))))
+
+(defun test/tend-fmt-comments ()
+  (let ((source "(defun f (x)\n  ; nested\n  (if x 1 2))\n"))
+    (string-contains? (tend/fmt source) "; nested")))

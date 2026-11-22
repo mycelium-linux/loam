@@ -88,11 +88,26 @@ functions; the manifest stays data-only.
 
 ## Formatter
 
-`tools/tend/fmt.soil` is the first formatter slice. It currently:
+`tools/tend/fmt.soil` formats from the token stream, so comments and reader
+syntax survive:
 
-- formats top-level `defun` forms with two-space body indentation
-- preserves top-level comments, including `;;;` Markdown blocks
-- normalizes quote syntax to `(quote …)`
+- nested comments are preserved in place
+- `'x` stays `'x` rather than being rewritten
+- `defun`, `let`, `if`, `cond`, `begin`, and `do` have explicit layout
+- other lists stay inline when short and become two-space-indented lists when long
+- top-level forms are separated by a blank line
 
-Nested trivia preservation and special-form layout are the next pass. Until
-then, do not use `tend fmt` as a whole-tree rewrite without reviewing the diff.
+The formatter is still conservative. It does not try to invent a layout for
+forms it does not understand.
+
+## Dispatch
+
+`tools/tend/dispatch.soil` resolves a command name against the manifest and the
+built-in command table:
+
+- project command → returns its `run` target and args
+- built-in command → returns the built-in name
+- built-in shadowing → refused
+- unknown command → refused
+
+Execution belongs to the host; dispatch is pure Soil policy.
