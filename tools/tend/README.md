@@ -71,3 +71,28 @@ rendering and `tend doc --open` are separate from the extraction step.
 
 This is intentionally a separate check from parsing. A missing license line is
 reported even when the file parses.
+
+## Subcommands
+
+Project-local commands are declared in `tend.soil`:
+
+```lisp
+(command "fmt"
+  (summary "Format Soil sources")
+  (run "tools/tend/fmt.soil" "main")
+  (usage "tend fmt [--check] [paths...]"))
+```
+
+Built-in names are reserved. Command implementations are ordinary Soil
+functions; the manifest stays data-only.
+
+## Formatter
+
+`tools/tend/fmt.soil` is the first formatter slice. It currently:
+
+- formats top-level `defun` forms with two-space body indentation
+- preserves top-level comments, including `;;;` Markdown blocks
+- normalizes quote syntax to `(quote …)`
+
+Nested trivia preservation and special-form layout are the next pass. Until
+then, do not use `tend fmt` as a whole-tree rewrite without reviewing the diff.

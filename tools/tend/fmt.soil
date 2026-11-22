@@ -1,0 +1,41 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+; A deliberately small Soil formatter.
+;
+; The first slice formats top-level forms and keeps Markdown comments intact.
+; Nested trivia and special-form layout are the next pass; this version does not
+; pretend to reflow what it cannot yet see.
+
+(defun tend/spaces (n)
+  (if (<= n 0) "" (str " " (tend/spaces (- n 1)))))
+
+(defun tend/comment-text (comments)
+  (if (nil? comments)
+      ""
+      (str (field (first comments) :text) "\n"
+           (tend/comment-text (rest comments)))))
+
+(defun tend/fmt-body (body indent)
+  (if (nil? body)
+      ""
+      (str (tend/spaces indent) (str (first body)) "\n"
+           (tend/fmt-body (rest body) indent))))
+
+(defun tend/fmt-form (form)
+  (let ((value (field form :value)))
+    (if (and (not (atom value)) (= (first value) 'defun))
+        (str "(defun " (nth 1 value) " " (str (nth 2 value)) "\n"
+             (tend/fmt-body (drop 3 value) 2)
+             ")\n")
+        (str (str value) "\n"))))
+
+(defun tend/fmt-forms (forms)
+  (if (nil? forms)
+      ""
+      (str (tend/comment-text (field (first forms) :comments))
+           (tend/fmt-form (first forms))
+           (tend/fmt-forms (rest forms)))))
+
+(defun tend/fmt (source)
+  (let ((document (read-document source)))
+    (str (tend/fmt-forms (field document :forms))
+         (tend/comment-text (field document :trailing-comments)))))

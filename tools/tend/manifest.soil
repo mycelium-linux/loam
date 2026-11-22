@@ -130,6 +130,44 @@
         (else
           (tend/err (str "unknown dependency source " kind)))))))
 
+(defun tend/command-with (name summary run usage)
+  (list
+    (list :name name)
+    (list :summary summary)
+    (list :run run)
+    (list :usage usage)))
+
+(defun tend/parse-command-opts (opts summary run usage)
+  (if (nil? opts)
+      (if (or (nil? summary) (nil? run))
+          (tend/err "command needs summary and run")
+          (tend/ok (tend/command-with nil summary run usage)))
+      (let ((opt (first opts)))
+        (let ((key (first opt)))
+          (cond
+            ((= key 'summary)
+              (tend/parse-command-opts (rest opts) (nth 1 opt) run usage))
+            ((= key 'run)
+              (tend/parse-command-opts (rest opts) summary (drop 1 opt) usage))
+            ((= key 'usage)
+              (tend/parse-command-opts (rest opts) summary run (nth 1 opt)))
+            (else
+              (tend/err (str "unknown command option " key))))))))
+
+(defun tend/parse-command (item manifest)
+  (let ((name (nth 1 item))
+        (opts (drop 2 item)))
+    (let ((result (tend/parse-command-opts opts nil nil nil)))
+      (if (ok? result)
+          (let ((command (tend/command-with name
+                           (field (value result) :summary)
+                           (field (value result) :run)
+                           (field (value result) :usage)))
+                (commands (or-empty (field manifest :commands))))
+            (tend/ok (tend/set manifest :commands
+              (append commands (list command)))))
+          result))))
+
 (defun tend/parse-entry (item manifest)
   (let ((key (first item)))
     (cond
@@ -138,6 +176,7 @@
       ((= key 'test) (tend/parse-test item manifest))
       ((= key 'bench) (tend/parse-bench item manifest))
       ((= key 'dependency) (tend/parse-dependency item manifest))
+      ((= key 'command) (tend/parse-command item manifest))
       (else (tend/err (str "unknown tend key " key))))))
 
 (defun tend/parse-entries (entries manifest)
@@ -169,7 +208,8 @@
                       (list :members nil)
                       (list :tests nil)
                       (list :benches nil)
-                      (list :dependencies nil)))))))))
+                      (list :dependencies nil)
+                      (list :commands nil)))))))))
 
 (defun tend/emit-option (key values)
   (if (nil? values)
@@ -215,6 +255,21 @@
       (str (tend/emit-dependency (first dependencies))
            (tend/emit-dependencies (rest dependencies)))))
 
+(defun tend/emit-command (command)
+  (str "  (command " (tend/quote (field command :name)) "\n"
+       "    (summary " (tend/quote (field command :summary)) ")\n"
+       "    (run" (tend/string-list (field command :run)) ")\n"
+       (if (nil? (field command :usage))
+           ""
+           (str "    (usage " (tend/quote (field command :usage)) ")\n"))
+       "  )\n"))
+
+(defun tend/emit-commands (commands)
+  (if (nil? commands)
+      ""
+      (str (tend/emit-command (first commands))
+           (tend/emit-commands (rest commands)))))
+
 (defun tend/emit (manifest)
   (str "(tend\n"
        "  (version " (field manifest :version) ")\n"
@@ -222,4 +277,5 @@
        (tend/emit-tests (field manifest :tests))
        (tend/emit-benches (field manifest :benches))
        (tend/emit-dependencies (field manifest :dependencies))
+       (tend/emit-commands (field manifest :commands))
        ")\n"))

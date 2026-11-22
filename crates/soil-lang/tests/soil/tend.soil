@@ -68,3 +68,16 @@
 (defun test/tend-license ()
   (and (ok? (tend/license-check "; SPDX-License-Identifier: MIT OR Apache-2.0\n"))
        (not (ok? (tend/license-check "(defun foo () 1)\n")))))
+
+(defun test/tend-command ()
+  (let ((result
+          (tend/parse
+            "(tend (version 1) (members \"x\") (command \"fmt\" (summary \"Format\") (run \"tools/fmt.soil\" \"main\")))")))
+    (and (ok? result)
+         (= (field (first (field (value result) :commands)) :name) "fmt")
+         (= (field (first (field (value result) :commands)) :summary) "Format"))))
+
+(defun test/tend-fmt ()
+  (let ((source "(defun greet (name)\n  (list 'hello name))\n")
+        (formatted "(defun greet (name)\n  (list (quote hello) name)\n)\n"))
+    (= (tend/fmt source) formatted)))
