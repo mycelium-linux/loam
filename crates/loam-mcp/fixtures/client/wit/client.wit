@@ -1,0 +1,6 @@
+package fungos:mcp-client@0.1.0;
+
+world guest {
+  import soil:mcp/mcp@0.1.0;
+  export wasi:cli/run@0.2.4;
+}

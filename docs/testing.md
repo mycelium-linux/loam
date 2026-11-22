@@ -33,6 +33,23 @@ loam surface fixture.wasm --size 64x64 --capture out.rgba
 
 and checks the captured frame byte-for-byte for size, corner and bar order.
 
+## Plugin gate
+
+```sh
+scripts/build-mcp-plugin.sh
+loam plugin list --root target
+loam plugin verify --root target
+```
+
+The script builds:
+
+- the `loam-mcp` stdio sidecar
+- the `soil:mcp` wasm adapter
+- a sealed local test package under `target/loam-mcp-plugin`
+
+The printer at the end names the package directory. Copy it under
+`~/.local/share/fungos/spores/` to test it through the default roots.
+
 ## Audio
 
 ```sh

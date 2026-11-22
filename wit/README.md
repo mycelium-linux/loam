@@ -22,6 +22,7 @@ soil:ble              Bluetooth LE host
 wasi:audio            draft bounded PCM sink
 soil:codec            audio/image codec boundary
 soil:inference        model/tool/completion host
+soil:mcp              generic MCP catalog and tool invocation
 ```
 
 ## Runtime support
@@ -31,6 +32,7 @@ soil:command          command package surface
 soil:spore            package/catalog surface
 soil:time             compatibility clock at the plugin edge
 fungos:http-context   host-attested request context for wasi:http
+loam:plugin           narrow adapter-to-sidecar IPC
 ```
 
 ## WASI

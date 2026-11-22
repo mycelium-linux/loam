@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/loam", "crates/loam-cli", "crates/loam-command", "crates/loam-codec", "crates/loam-inference", "crates/loam-inference-host", "crates/loam-scrub", "crates/loam-spore", "crates/loam-ble-api", "crates/loam-ble-host", "crates/loam-ble-sim", "crates/loam-audio", "crates/loam-surface"]
+members = ["crates/loam", "crates/loam-cli", "crates/loam-command", "crates/loam-codec", "crates/loam-inference", "crates/loam-inference-host", "crates/loam-scrub", "crates/loam-spore", "crates/loam-ble-api", "crates/loam-ble-host", "crates/loam-ble-sim", "crates/loam-audio", "crates/loam-surface", "crates/loam-mcp"]
 resolver = "3"
 
 [workspace.package]

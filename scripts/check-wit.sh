@@ -10,6 +10,8 @@ fi
 # Each host world owns its WIT graph. Parse the worlds that use the root
 # contracts, not the root directory as one package: the root is a collection.
 for world in \
+    wit/soil-mcp.wit \
+    wit/loam-plugin.wit \
     crates/loam/wit/principal \
     crates/loam/wit/vfs \
     crates/loam/wit/http \
@@ -18,6 +20,8 @@ for world in \
     crates/loam-ble-host/wit \
     crates/loam-audio/wit \
     crates/loam-inference-host/wit \
+    crates/loam-command/wit/plugin \
+    crates/loam-mcp/fixtures/adapter/wit \
     wit/soil-command
 do
     wasm-tools component wit "$world" >/dev/null

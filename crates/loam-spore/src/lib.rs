@@ -289,6 +289,22 @@ pub struct Manifest {
     /// which of them it exposes.
     #[serde(default)]
     pub commands: Vec<SporeCommand>,
+    /// Optional native implementation detail behind a wasm adapter.
+    ///
+    /// This is not a grant and not a launch surface. The Spore remains the wasm
+    /// component; a sidecar is a child process the adapter reaches through
+    /// `loam:plugin/ipc`. A bare name is resolved on `PATH`; a relative path is
+    /// resolved inside the package.
+    #[serde(default)]
+    pub plugin: Option<Plugin>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Plugin {
+    /// Native sidecar executable, when this adapter has one.
+    #[serde(default)]
+    pub sidecar: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1466,7 +1482,7 @@ impl Manifest {
         for capability in self.grants.keys() {
             if !grants(capability) {
                 return Err(Error::Invalid(format!(
-                    "grant {capability:?} is not a soil:/wasi:/fungos: capability"
+                    "grant {capability:?} is not a soil:/wasi:/fungos:/loam: capability"
                 )));
             }
         }
@@ -1892,7 +1908,7 @@ fn grants(value: &str) -> bool {
     let Some((package, interface)) = value.split_once(':') else {
         return false;
     };
-    matches!(package, "soil" | "wasi" | "fungos")
+    matches!(package, "soil" | "wasi" | "fungos" | "loam")
         && !interface.is_empty()
         && interface.chars().all(|c| {
             c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '.' | '_' | '/')
@@ -2267,7 +2283,23 @@ fn lock_of(id: &str, version: &str, files: &[(String, Vec<u8>)]) -> Lock {
 /// A package is the unit a manifest declares, so this is what `[grants]` must
 /// cover: an import nobody declared is a capability the package author did not
 /// write down.
-pub fn imported_packages(bytes: &[u8]) -> Result<BTreeSet<String>> {
+/// The interfaces a component exports, e.g. `soil:mcp/mcp@0.1.0`.
+///
+/// A Spore that consumes a capability declares it in `[grants]`. A Spore that
+/// provides one declares it in the module itself; this is what a host indexes
+/// so another Spore can link it. Exports are declarations, not grants.
+pub fn exported_interfaces(bytes: &[u8]) -> Result<BTreeSet<String>> {
+    let (resolve, world) = decoded_world(bytes)?;
+    let mut interfaces = BTreeSet::new();
+    for key in resolve.worlds[world].exports.keys() {
+        if matches!(key, wit_parser::WorldKey::Interface(_)) {
+            interfaces.insert(resolve.name_world_key(key));
+        }
+    }
+    Ok(interfaces)
+}
+
+fn decoded_world(bytes: &[u8]) -> Result<(wit_parser::Resolve, wit_parser::WorldId)> {
     // `wit_component::decode` also accepts a bare core module and reports an
     // empty world for it, which would make the manifest rule vacuous. A Spore
     // module is a component by definition, so check the preamble first: a
@@ -2277,16 +2309,18 @@ pub fn imported_packages(bytes: &[u8]) -> Result<BTreeSet<String>> {
             "module is a core wasm module, not a component".into(),
         ));
     }
-    let decoded = wit_component::decode(bytes)
-        .map_err(|error| Error::Invalid(format!("module is not a component: {error}")))?;
-    let (resolve, world) = match decoded {
-        wit_component::DecodedWasm::Component(resolve, world) => (resolve, world),
-        wit_component::DecodedWasm::WitPackage(..) => {
-            return Err(Error::Invalid(
-                "module is a WIT package, not a component".into(),
-            ));
-        }
-    };
+    match wit_component::decode(bytes)
+        .map_err(|error| Error::Invalid(format!("module is not a component: {error}")))?
+    {
+        wit_component::DecodedWasm::Component(resolve, world) => Ok((resolve, world)),
+        wit_component::DecodedWasm::WitPackage(..) => Err(Error::Invalid(
+            "module is a WIT package, not a component".into(),
+        )),
+    }
+}
+
+pub fn imported_packages(bytes: &[u8]) -> Result<BTreeSet<String>> {
+    let (resolve, world) = decoded_world(bytes)?;
     let mut packages = BTreeSet::new();
     for key in resolve.worlds[world].imports.keys() {
         let wit_parser::WorldKey::Interface(id) = key else {

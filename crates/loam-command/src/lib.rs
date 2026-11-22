@@ -114,10 +114,12 @@ pub struct Refusal {
 }
 
 pub mod cli;
+pub mod plugin;
+pub mod plugin_ipc;
 
 /// What the runner can link for a command. A package that requires anything
 /// else is refused by the registry instead of failing at instantiation.
-pub const RUNNER_CAPABILITIES: &[&str] = &["soil:records", "soil:time", "soil:unibus"];
+pub const RUNNER_CAPABILITIES: &[&str] = &["soil:records", "soil:time", "soil:unibus", "soil:mcp"];
 
 #[derive(Debug, Clone)]
 pub struct CommandRegistry {
@@ -645,6 +647,8 @@ pub struct RunOutput {
 
 pub struct CommandRunner {
     engine: Engine,
+    /// Installed Spore exports this runner can link into a command.
+    plugins: Option<Arc<crate::plugin::PluginRegistry>>,
     records: Option<RecordsBinding>,
     /// The bus a command may publish on. Linked (possibly as an unavailable
     /// bus) for a command that declares `soil:unibus`, so a missing hub costs
@@ -660,10 +664,17 @@ impl CommandRunner {
         let engine = Engine::new(&config)?;
         Ok(Self {
             engine,
+            plugins: None,
             records,
             bus,
             components: Mutex::new(BTreeMap::new()),
         })
+    }
+
+    /// Use a scanned plugin registry when resolving a command's imports.
+    pub fn with_plugins(mut self, plugins: crate::plugin::PluginRegistry) -> Self {
+        self.plugins = Some(Arc::new(plugins));
+        self
     }
 
     pub fn run(&self, entry: &CommandEntry, request: &RunRequest) -> Result<RunOutput> {
@@ -687,6 +698,7 @@ impl CommandRunner {
         };
         let mut linker = wasmtime::component::Linker::<Host>::new(&self.engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
+        crate::plugin_ipc::add_to_linker::<Host>(&mut linker)?;
         let records = match &self.records {
             Some(binding) => Some(
                 RecordsBookHost::open(
@@ -741,6 +753,15 @@ impl CommandRunner {
         let limits = StoreLimitsBuilder::new()
             .memory_size(entry.max_memory_bytes)
             .build();
+        let ipc = self
+            .plugins
+            .as_ref()
+            .and_then(|plugins| plugins.native_for(&self.engine, &component))
+            .map(|(program, cwd)| {
+                crate::plugin_ipc::Sidecar::spawn(&program, &[], cwd.as_deref())
+                    .map(|sidecar| Box::new(sidecar) as Box<dyn crate::plugin_ipc::Backend>)
+            })
+            .transpose()?;
         let mut store = Store::new(
             &self.engine,
             Host {
@@ -749,6 +770,7 @@ impl CommandRunner {
                 limits,
                 records,
                 bus,
+                ipc,
             },
         );
         store.limiter(|host| &mut host.limits);
@@ -760,6 +782,11 @@ impl CommandRunner {
             engine.increment_epoch();
         });
 
+        if let Some(plugins) = &self.plugins {
+            plugins
+                .link(&self.engine, &mut linker, &mut store, &component)
+                .context("link command plugins")?;
+        }
         let command = Command::instantiate(&mut store, &component, &linker)?;
         // A guest that traps has usually already said why on stderr — a panic
         // message lands there before the abort. Returning the trap alone throws
@@ -794,6 +821,18 @@ struct Host {
     /// bus. The command publishes through this; the records host never learns
     /// the bus exists, which is what keeps the two capabilities independent.
     bus: Option<::soil::unibus::BusHost>,
+    /// `loam:plugin/ipc` backend, when a plugin provider named a sidecar.
+    ipc: Option<Box<dyn crate::plugin_ipc::Backend>>,
+}
+
+impl crate::plugin_ipc::ipc::Host for Host {
+    fn request(
+        &mut self,
+        method: String,
+        payload: Vec<u8>,
+    ) -> Result<Vec<u8>, crate::plugin_ipc::ipc::Error> {
+        crate::plugin_ipc::handle(&mut self.ipc, &method, &payload)
+    }
 }
 
 impl WasiView for Host {

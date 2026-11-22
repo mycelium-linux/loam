@@ -93,12 +93,38 @@ Command packages live in the usual roots:
 
 `loam` is a linker. Core capabilities are linked natively. Everything else is discovered at runtime.
 
-Two plugin forms:
+**A plugin is a Spore that exports WIT.** There is no second package format:
 
-1. **Wasm plugin** — a component exporting the capability WIT. `loam` links its exports directly.
-2. **Native sidecar** — a native process plus a generated wasm adapter that exports the same WIT and forwards over `loam:plugin/ipc`.
+```text
+Spore = wasm component + spore.toml + spore.lock + signatures
+grants constrain imports
+exports are what the Spore provides
+```
 
-No `loam` rebuild is needed to add a capability. The plugin package is signed and declares the WIT interfaces it provides and the grants it requires.
+A Spore that exports `run` is a command. One that exports `wasi:http/incoming-handler` is a service. One that exports `soil:mcp` is a capability plugin.
+
+```sh
+loam plugin list       # installed exports
+loam plugin verify     # refused packages, duplicate providers, missing seals
+loam plugin pack DIR   # write spore.lock for a local package
+```
+
+Wasm plugins are linked directly. A native sidecar is a different trust class
+behind the same interface: the package ships a wasm adapter and a native
+executable, and the adapter reaches it through `loam:plugin/ipc`.
+
+```text
+guest imports soil:mcp
+        ↓
+adapter Spore exports soil:mcp
+adapter imports loam:plugin/ipc
+        ↓
+native sidecar (loam-mcp)
+```
+
+Exports are declarations, not grants. A provider's own imports are still
+bounded by its `[grants]`, and a consumer still needs the capability in its own
+`[grants]`.
 
 See [`docs/architecture.md`](docs/architecture.md).
 
@@ -114,6 +140,7 @@ crates/loam-ble-*        first-party BLE plugin
 crates/loam-audio        first-party audio plugin
 crates/loam-codec        first-party codec plugin
 crates/loam-inference*   first-party inference plugin
+crates/loam-mcp          MCP adapter package and native stdio sidecar
 crates/loam-scrub        internal inference helper
 wit/                     canonical capability contracts
 ```
@@ -136,6 +163,7 @@ cargo build -p loam-cli
 scripts/check-architecture.sh
 scripts/check-wit.sh
 scripts/check-surface-fixture.sh
+scripts/build-mcp-plugin.sh   # build the first real plugin package
 ```
 
 The runnable binary is `target/debug/loam`.

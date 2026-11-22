@@ -31,7 +31,7 @@ jobs:
       - name: build
         run: |
           cargo build --release --target "${{ matrix.target }}" \
-            -p loam-cli -p loam-ble-host
+            -p loam-cli -p loam-ble-host -p loam-mcp
       - name: package
         run: |
           set -euo pipefail
@@ -39,6 +39,7 @@ jobs:
           mkdir -p "dist/$name/bin" "dist/$name/share/loam"
           cp "target/${TARGET}/release/loam" "dist/$name/bin/"
           cp "target/${TARGET}/release/loam-ble-host" "dist/$name/bin/"
+          cp "target/${TARGET}/release/loam-mcp" "dist/$name/bin/"
           cp -R wit "dist/$name/share/loam/wit"
           cp README.md LICENSE-APACHE LICENSE-MIT "dist/$name/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"

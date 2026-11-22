@@ -2676,6 +2676,7 @@ dependencies = [
  "toml 0.8.23",
  "wasmtime",
  "wasmtime-wasi",
+ "wat",
 ]
 
 [[package]]
@@ -2705,6 +2706,14 @@ dependencies = [
  "tiny_http",
  "ureq",
  "wasmtime",
+]
+
+[[package]]
+name = "loam-mcp"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
 ]
 
 [[package]]

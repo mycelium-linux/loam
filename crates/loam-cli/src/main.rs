@@ -13,6 +13,8 @@ commands:
   run [OPTIONS] NAME [ARGS...]    run an installed wasm command
   surface FILE [--size WxH] [--capture FILE.rgba]
                                   open a native surface or capture one frame
+  plugin [list|verify|roots|pack DIR]
+                                  inspect or seal installed Spore capability exports
   doctor                          print the linked capability profile
   help                            this message"#
 }
@@ -78,6 +80,7 @@ fn run() -> Result<()> {
                 loam_surface::run_window(&path, Some(size))
             }
         }
+        "plugin" => soil_command::plugin::cli(&args[1..]),
         "doctor" => {
             println!("loam {}", env!("CARGO_PKG_VERSION"));
             for capability in soil::WASI_PROFILE {
