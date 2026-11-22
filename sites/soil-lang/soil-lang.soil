@@ -73,7 +73,7 @@
                   (a "#examples" "" (list (txt (copy :nav :examples))))
                   (a "#spores" "" (list (txt (copy :nav :spores))))
                   (a "#community" "" (list (txt (copy :nav :community))))
-              (a "https://github.com/mycelium-linux/soil" "nav-cta" (list (txt (copy :nav :github))))))))))
+              (a "https://github.com/ajmwagar/soil" "nav-cta" (list (txt (copy :nav :github))))))))))
       (el "main" nil
         (list
           (el "section" (list (attr :class "hero"))
@@ -90,7 +90,7 @@
                   (el "div" (list (attr :class "actions"))
                     (list
                       (a "#learn" "btn primary" (list (txt (copy :hero :primary-label))))
-                      (a "https://github.com/mycelium-linux/soil" "btn" (list (txt (copy :hero :github-label))))))
+                      (a "https://github.com/ajmwagar/soil" "btn" (list (txt (copy :hero :github-label))))))
                   (el "p" (list (attr :class "meta"))
                     (list
                       (txt (copy :hero :meta-prefix))
@@ -167,8 +167,8 @@
                     (list (txt (copy :community :body))))))
               (el "div" (list (attr :class "actions"))
                 (list
-                  (a "https://github.com/mycelium-linux/soil" "btn primary" (list (txt (copy :community :primary-label))))
-                  (a "https://github.com/mycelium-linux/soil/issues" "btn" (list (txt (copy :community :secondary-label))))))))))
+                  (a "https://github.com/ajmwagar/soil" "btn primary" (list (txt (copy :community :primary-label))))
+                  (a "https://github.com/ajmwagar/soil/issues" "btn" (list (txt (copy :community :secondary-label))))))))))
       (el "footer" (list (attr :class "footer"))
         (list
           (el "div" nil (list (txt (copy :footer :left))))

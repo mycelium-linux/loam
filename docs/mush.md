@@ -152,7 +152,7 @@ A Desktop remembers the checkouts it works on as `[[project]]` rows:
 
 ```toml
 [[project]]
-project = "mycelium-linux/soil"
+project = "ajmwagar/soil"
 host = "github.com"
 path = "/Users/me/src/soil"
 ```
@@ -222,7 +222,7 @@ repo: soil
 desktop: personal
 vfs root: /Users/me/.local/share/fungos/desktops/personal
 mount: /Users/me/mnt/personal [mounted]
-project: mycelium-linux/soil
+project: ajmwagar/soil
 path: /Users/me/mnt/personal/projects/soil
 status: ready
 ```

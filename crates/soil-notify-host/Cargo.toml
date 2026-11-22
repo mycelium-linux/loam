@@ -3,7 +3,7 @@ name = "soil-notify-host"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0 OR MIT"
-repository = "https://github.com/mycelium-linux/soil"
+repository = "https://github.com/ajmwagar/soil"
 publish = false
 
 [dependencies]
