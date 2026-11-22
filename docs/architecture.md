@@ -65,6 +65,16 @@ soil:codec
 
 They are native implementations today. They are still plugins: a build without them still provides the core runtime.
 
+Optional plugin contracts are kept in `wit/` but are not linked by the runtime:
+
+```text
+soil:process
+```
+
+`soil:process` is the opt-in process/pipe contract. A host that wants it links a
+plugin provider and grants `soil:process` explicitly; the default `loam` build
+does not expose it.
+
 ## Plugin forms
 
 A plugin is a role, not a package type. It is a Spore that exports one or more
