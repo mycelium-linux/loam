@@ -1,0 +1,28 @@
+[package]
+name = "loam-surface"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Native winit + WebGPU surface host"
+
+[dependencies]
+anyhow = "1"
+pollster = "0.4"
+softbuffer = "0.4"
+wasi-webgpu-wasmtime = { git = "https://github.com/mycelium-linux/wasi-gfx-runtime", rev = "9624cae" }
+wasmtime = { version = "50", default-features = false, features = [
+    "anyhow",
+    "async",
+    "component-model",
+    "component-model-async",
+    "cranelift",
+    "runtime",
+    "std",
+] }
+wasmtime-wasi = { version = "50", default-features = false, features = ["p2"] }
+winit = "0.30"
+
+[lints]
+workspace = true

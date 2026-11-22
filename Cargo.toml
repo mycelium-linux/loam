@@ -1,12 +1,11 @@
 [workspace]
-members = ["crates/soil-abi", "crates/soil-lang", "crates/soil-lang-wasm", "crates/soil-compiler-wasm", "crates/soil-ui-proto", "crates/soil-ble-api", "crates/soil-ble-sim", "crates/soil-agent-host", "crates/soil-agentsd", "crates/soil-agent-records", "crates/soil-open", "crates/soil-sdk-unibus", "crates/soil-sdk-lua", "crates/soil-ble-host", "crates/soil-canvas-input", "crates/soil-android", "crates/soil-runtime", "crates/s22-canvas-surface", "crates/soil-webgpu", "crates/soil-process", "crates/cpal-soil", "crates/fungos-content", "crates/wasi-audio-wasmtime", "crates/soil-sdk", "crates/soil-sdk-audio", "crates/soil-sdk-codec", "crates/soil-sdk-appdata", "crates/soil-sdk-records", "crates/viewer-spore", "crates/soil-spore", "crates/soil-spore-host", "crates/soil-desktop", "crates/soil-store", "crates/soil-install", "crates/soil-home", "crates/soil-dfm-viz", "crates/soil", "crates/soil-appdata-host", "crates/soil-search-host", "crates/soil-shell", "crates/terminal-host", "crates/mush", "crates/soil-sync-host", "crates/soil-actions-host", "crates/soil-canvas-actions-host", "crates/soil-scrub", "crates/soil-inference", "crates/soil-codec", "crates/soil-inference-host", "crates/soil-media-host", "crates/soil-surface-import-host", "crates/soil-notify-host", "crates/soil-crm-espo", "crates/soil-crm-host", "crates/soil-mentions", "crates/soil-marbles", "crates/soil-gitmyc", "crates/soil-consent", "crates/soil-consent-popup", "crates/soil-marbles-import", "crates/soil-command", "crates/soil-conversation", "crates/soil-confluence", "crates/soil-edge", "crates/soil-iroh-http", "crates/soil-scene", "crates/soil-lua", "crates/soil-layout", "crates/soil-input", "crates/soil-vt", "crates/soil-terminal", "crates/soil-terminal-web", "crates/soil-web-bridge", "crates/soil-openapi", "crates/soil-termd", "crates/soil-scene-gpu", "crates/soil-video", "crates/soil-ui-demo", "crates/soil-sdk-canvas", "crates/soil-canvas-host", "crates/canvas-winit", "crates/soil-dev-host", "crates/tend-core"]
-exclude = ["crates/soil-ui-spike"]
+members = ["crates/loam", "crates/loam-cli", "crates/loam-command", "crates/loam-codec", "crates/loam-inference", "crates/loam-inference-host", "crates/loam-scrub", "crates/loam-spore", "crates/loam-ble-api", "crates/loam-ble-host", "crates/loam-ble-sim", "crates/loam-audio", "crates/loam-surface"]
 resolver = "3"
 
 [workspace.package]
 edition = "2024"
 license = "Apache-2.0 OR MIT"
-repository = "https://github.com/mycelium-linux/soil"
+repository = "https://github.com/mycelium-linux/loam"
 
 # `fungos-records` is the on-disk records format shared by the records host, the
 # sync host and every book consumer. Two revisions in one workspace means two
@@ -14,9 +13,6 @@ repository = "https://github.com/mycelium-linux/soil"
 # here and only here; a bump is one edit that moves every crate together.
 [workspace.dependencies]
 fungos-records = { git = "https://github.com/mycelium-linux/records.git", rev = "1fa03a239b6191f61ecf9d5f9c5284ba9045a1cd" }
-# The transcript event both producers write and this reader parses: one copy of
-# the schema, the field names and the ACP→station table.
-fungos-agents-event = { git = "https://github.com/mycelium-linux/records.git", rev = "1fa03a239b6191f61ecf9d5f9c5284ba9045a1cd" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

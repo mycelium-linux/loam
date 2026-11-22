@@ -1,9 +1,0 @@
-// A Spore that presents encoded pixels: no `wasi:webgpu`, no texture.
-package soil:rgba-test@0.1.0;
-
-world runner {
-  import soil:present/surface@0.1.0;
-
-  /// Render one frame, present it, and report a status code.
-  export run: func() -> u32;
-}

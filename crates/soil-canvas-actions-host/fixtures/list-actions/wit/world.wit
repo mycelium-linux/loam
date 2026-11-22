@@ -1,6 +1,0 @@
-package test:list-actions@0.1.0;
-
-world fixture {
-  import fungos:actions/catalog@1.0.0;
-  export run: func() -> result<u32, string>;
-}
