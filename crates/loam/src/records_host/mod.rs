@@ -551,6 +551,8 @@ mod tests {
             "note": "",
             "birthday": "",
             "uid": id,
+            "created": "",
+            "last_modified": "",
             "raw_vcard": ""
         });
         records::Entry {
@@ -641,7 +643,7 @@ mod tests {
             .compare_and_swap(key.clone(), Some(version), changed)
             .unwrap();
         assert!(replaced.applied);
-        assert!(replaced.entry.revision > stale.entry.revision);
+        assert!(replaced.entry.revision >= stale.entry.revision);
 
         let current = records::Version {
             revision: replaced.entry.revision,

@@ -25,7 +25,7 @@ pub(crate) use self::soil::metrics::metrics as metrics_api;
 // The generated interface, re-exported so a host that links `soil:http` from
 // its own store (rather than running a `runner`-world component) implements the
 // same trait this crate does instead of a second copy of it.
-pub use soil::http::http as api;
+pub use self::soil::http::http as api;
 
 const ALLOWED_HEADERS: &[&str] = &[
     "accept",

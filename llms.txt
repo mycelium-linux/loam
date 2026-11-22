@@ -1,0 +1,26 @@
+# loam
+
+loam is the native runtime for Soil components.
+
+## Primary docs
+
+- README: ./README.md
+- Architecture: ./docs/architecture.md
+- Install: ./docs/install.md
+- Releases: ./docs/releases.md
+- Testing: ./docs/testing.md
+- WIT contracts: ./wit/README.md
+- Agent instructions: ./AGENTS.md
+
+## One-sentence model
+
+Wasmtime runs components; loam links core capabilities, command packages, and
+signed plugins; Soil is the language and userland.
+
+## Do not confuse
+
+- soil: language, tools, Spores
+- loam: native host runtime
+- wasi: WebAssembly system interfaces
+- wasi:webgpu: GPU contract
+- soil:surface: frame/input handoff

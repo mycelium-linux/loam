@@ -336,9 +336,10 @@ impl clipboard::Host for Host {
             }
             let status = child.wait().map_err(|error| format!("pbcopy: {error}"))?;
             if status.success() {
-                return Ok(());
+                Ok(())
+            } else {
+                Err("pbcopy reported failure".into())
             }
-            return Err("pbcopy reported failure".into());
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -382,6 +383,29 @@ impl SurfaceRuntime {
 
     pub fn run(&self, bytes: &[u8], setup: SurfaceSetup) -> Result<u32> {
         pollster::block_on(self.run_async(bytes, setup))
+    }
+
+    /// Run a sync guest export. The RGBA capture fixture is sync on purpose:
+    /// a frame handoff has no asynchronous operation, and keeping the proof
+    /// path free of the async ABI makes it a smaller, more useful test.
+    fn run_sync(&self, bytes: &[u8], setup: SurfaceSetup) -> Result<u32> {
+        let component = Component::new(&self.engine, bytes)
+            .map_err(anyhow::Error::from)
+            .context("compile surface component")?;
+        let mut store = Store::new(&self.engine, Host::new(setup)?);
+        let instance = self
+            .linker
+            .instantiate(&mut store, &component)
+            .map_err(anyhow::Error::from)
+            .context("instantiate surface component")?;
+        let run = instance
+            .get_func(&mut store, "run")
+            .context("surface component does not export run")?
+            .typed::<(), (u32,)>(&mut store)
+            .map_err(anyhow::Error::from)
+            .context("run: func() -> u32")?;
+        let (status,) = run.call(&mut store, ()).map_err(anyhow::Error::from)?;
+        Ok(status)
     }
 
     async fn run_async(&self, bytes: &[u8], setup: SurfaceSetup) -> Result<u32> {
@@ -700,7 +724,7 @@ pub fn capture(module: &Path, size: (u32, u32)) -> Result<Option<Frame>> {
     let capture = FrameCapture::new(size);
     let sink = capture.clone();
     let runtime = SurfaceRuntime::new()?;
-    runtime.run(
+    runtime.run_sync(
         &bytes,
         SurfaceSetup {
             presenter: Box::new(sink),

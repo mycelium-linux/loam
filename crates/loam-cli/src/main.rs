@@ -11,7 +11,8 @@ fn usage() -> &'static str {
     r#"usage: loam <command>
 commands:
   run [OPTIONS] NAME [ARGS...]    run an installed wasm command
-  surface FILE [--size WxH]       open a native winit + WebGPU surface
+  surface FILE [--size WxH] [--capture FILE.rgba]
+                                  open a native surface or capture one frame
   doctor                          print the linked capability profile
   help                            this message"#
 }
@@ -39,6 +40,7 @@ fn run() -> Result<()> {
         "surface" => {
             let mut path = None;
             let mut size = None;
+            let mut capture = None;
             let mut i = 1;
             while i < args.len() {
                 match args[i].as_str() {
@@ -51,6 +53,12 @@ fn run() -> Result<()> {
                         ));
                         i += 2;
                     }
+                    "--capture" => {
+                        capture = Some(std::path::PathBuf::from(
+                            args.get(i + 1).context("--capture FILE.rgba")?,
+                        ));
+                        i += 2;
+                    }
                     value => {
                         path = Some(std::path::PathBuf::from(value));
                         i += 1;
@@ -58,7 +66,17 @@ fn run() -> Result<()> {
                 }
             }
             let path = path.context("surface needs a component path")?;
-            loam_surface::run_window(&path, size)
+            let size = size.unwrap_or((1000, 700));
+            if let Some(output) = capture {
+                let frame = loam_surface::capture(&path, size)?
+                    .context("surface fixture presented no frame")?;
+                std::fs::write(&output, &frame.rgba)
+                    .with_context(|| format!("write {}", output.display()))?;
+                println!("{}x{} {}", frame.width, frame.height, output.display());
+                Ok(())
+            } else {
+                loam_surface::run_window(&path, Some(size))
+            }
         }
         "doctor" => {
             println!("loam {}", env!("CARGO_PKG_VERSION"));

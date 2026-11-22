@@ -118,15 +118,31 @@ crates/loam-scrub        internal inference helper
 wit/                     canonical capability contracts
 ```
 
+## Install
+
+```sh
+# release tarball, shell installer or Homebrew once published
+loam doctor
+```
+
+See [`docs/install.md`](docs/install.md).
+
 ## Build
 
 ```sh
 cargo check --workspace
 cargo test --workspace
 cargo build -p loam-cli
+scripts/check-architecture.sh
+scripts/check-wit.sh
+scripts/check-surface-fixture.sh
 ```
 
 The runnable binary is `target/debug/loam`.
+
+Project rules are in [`AGENTS.md`](AGENTS.md) and
+[`CONTRIBUTING.md`](CONTRIBUTING.md). Agent discovery starts at
+[`llms.txt`](llms.txt).
 
 ## Principles
 

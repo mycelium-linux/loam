@@ -374,15 +374,14 @@ impl Backend for SimBackend {
                 characteristic.source == Source::Static,
             )
         };
-        if is_static {
-            if let Some(characteristic) = state.devices[index]
+        if is_static
+            && let Some(characteristic) = state.devices[index]
                 .services
                 .iter_mut()
                 .flat_map(|service| service.characteristics.iter_mut())
                 .find(|characteristic| characteristic.uuid == key)
-            {
-                characteristic.value = data.to_vec();
-            }
+        {
+            characteristic.value = data.to_vec();
         }
         let is_qring = key == QRING_WRITE;
         linked_mut(&mut state, link)?
