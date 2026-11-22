@@ -15,6 +15,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use sha2::{Digest, Sha256};
 use wasm_compose::{
     composer::ComponentComposer,
     config::{Config, Dependency, Instantiation, InstantiationArg},
@@ -305,6 +306,50 @@ impl PluginRegistry {
         }
         Ok(linked)
     }
+}
+
+/// Stable cache key for one provider/consumer/import composition.
+pub fn composition_key(root: &Path, provider: &Path, import: &str) -> Result<String> {
+    let mut hasher = Sha256::new();
+    hasher.update(b"loam-composition-v1 ");
+    hasher.update(env!("CARGO_PKG_VERSION").as_bytes());
+    hasher.update(b" ");
+    hasher.update(import.as_bytes());
+    hasher.update(b" ");
+    hasher.update(std::fs::read(root).with_context(|| format!("read {}", root.display()))?);
+    hasher.update(b" ");
+    hasher.update(std::fs::read(provider).with_context(|| format!("read {}", provider.display()))?);
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Compose into a digest-keyed cache, then copy the cached bytes to `out`.
+///
+/// Returns `true` when the cache already held the composition.
+pub fn compose_cached(
+    root: &Path,
+    provider: &Path,
+    import: &str,
+    cache_dir: &Path,
+    out: &Path,
+) -> Result<bool> {
+    std::fs::create_dir_all(cache_dir)
+        .with_context(|| format!("create composition cache {}", cache_dir.display()))?;
+    let key = composition_key(root, provider, import)?;
+    let cached = cache_dir.join(format!("{key}.wasm"));
+    let hit = cached.is_file();
+    if !hit {
+        let temp = tempfile::NamedTempFile::new_in(cache_dir)
+            .with_context(|| format!("create composition temp in {}", cache_dir.display()))?;
+        compose_provider(root, provider, import, temp.path())?;
+        temp.persist(&cached)
+            .map_err(|error| anyhow::anyhow!("install composition cache {}: {error}", cached.display()))?;
+    }
+    if let Some(parent) = out.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::copy(&cached, out)
+        .with_context(|| format!("copy composition {} to {}", cached.display(), out.display()))?;
+    Ok(hit)
 }
 
 /// Compose one provider component into a root component at install/build time.
@@ -653,6 +698,23 @@ mod tests {
         compose_provider(&root, &provider, "example:service/logging@0.1.0", &out)
             .expect("compose resource provider");
         Component::from_file(&engine, &out).expect("composed component");
+    }
+
+    #[test]
+    fn composition_cache_hits_after_first_write() {
+        let engine = engine();
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/composition/resource/root.wat");
+        let provider = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/composition/resource/logger.wat");
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("cache");
+        let first = dir.path().join("first.wasm");
+        let second = dir.path().join("second.wasm");
+        assert!(!compose_cached(&root, &provider, "example:service/logging@0.1.0", &cache, &first).unwrap());
+        assert!(compose_cached(&root, &provider, "example:service/logging@0.1.0", &cache, &second).unwrap());
+        assert_eq!(std::fs::read(&first).unwrap(), std::fs::read(&second).unwrap());
+        Component::from_file(&engine, &first).expect("cached composed component");
     }
 
     #[test]
