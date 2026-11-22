@@ -703,6 +703,21 @@ impl records::Host for WasiHost {
         self.with_records(|book| records::Host::scan(book, collection, cursor, limit))
     }
 
+    fn query(
+        &mut self,
+        spec: records::QuerySpec,
+    ) -> std::result::Result<records::Page, records::Error> {
+        self.with_records(|book| records::Host::query(book, spec))
+    }
+
+    fn aggregate(
+        &mut self,
+        collection: String,
+        spec: records::AggregateSpec,
+    ) -> std::result::Result<Vec<records::AggregateGroup>, records::Error> {
+        self.with_records(|book| records::Host::aggregate(book, collection, spec))
+    }
+
     fn scan_packed(
         &mut self,
         collection: String,

@@ -1612,6 +1612,30 @@ impl records_host::records::Host for WebGpuHost {
             .scan(collection, cursor, limit)
     }
 
+    fn query(
+        &mut self,
+        spec: records_host::records::QuerySpec,
+    ) -> std::result::Result<records_host::records::Page, records_host::records::Error> {
+        self.records
+            .as_mut()
+            .ok_or(records_host::records::Error::Unsupported)?
+            .query(spec)
+    }
+
+    fn aggregate(
+        &mut self,
+        collection: String,
+        spec: records_host::records::AggregateSpec,
+    ) -> std::result::Result<
+        Vec<records_host::records::AggregateGroup>,
+        records_host::records::Error,
+    > {
+        self.records
+            .as_mut()
+            .ok_or(records_host::records::Error::Unsupported)?
+            .aggregate(collection, spec)
+    }
+
     fn scan_packed(
         &mut self,
         collection: String,

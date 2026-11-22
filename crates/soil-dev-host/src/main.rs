@@ -99,6 +99,21 @@ impl records::Host for DevHost {
         records::Host::scan(&mut self.records, collection, cursor, limit)
     }
 
+    fn query(
+        &mut self,
+        spec: records::QuerySpec,
+    ) -> std::result::Result<records::Page, records::Error> {
+        records::Host::query(&mut self.records, spec)
+    }
+
+    fn aggregate(
+        &mut self,
+        collection: String,
+        spec: records::AggregateSpec,
+    ) -> std::result::Result<Vec<records::AggregateGroup>, records::Error> {
+        records::Host::aggregate(&mut self.records, collection, spec)
+    }
+
     fn scan_packed(
         &mut self,
         collection: String,

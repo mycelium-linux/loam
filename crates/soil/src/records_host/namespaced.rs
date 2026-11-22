@@ -260,6 +260,18 @@ impl records::Host for NamespacedRecordsHost {
         Err(records::Error::OverBudget)
     }
 
+    fn query(&mut self, spec: records::QuerySpec) -> Result<records::Page, records::Error> {
+        crate::records_host::query(self, spec)
+    }
+
+    fn aggregate(
+        &mut self,
+        collection: String,
+        spec: records::AggregateSpec,
+    ) -> Result<Vec<records::AggregateGroup>, records::Error> {
+        crate::records_host::aggregate(self, collection, spec)
+    }
+
     fn scan_packed(
         &mut self,
         collection: String,

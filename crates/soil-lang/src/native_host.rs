@@ -156,48 +156,20 @@ impl NativeHost {
                     Err(error) => Ok(err(records_error(error))),
                 }
             }
-            "query" => Ok(ok(
-                self.query_page(args.first().ok_or("query needs a spec")?)?
-            )),
-            "scan-query" => {
-                let collection = text(args.first()).unwrap_or_default();
-                let field = text(args.get(1)).unwrap_or_default();
-                let value = text(args.get(2)).unwrap_or_default();
-                let spec = list(vec![
-                    pair("collection", Value::String(collection)),
-                    pair("prefix", Value::Nil),
-                    pair(
-                        "filters",
-                        list(vec![list(vec![
-                            pair("field", Value::String(field)),
-                            pair("op", Value::String("eq".into())),
-                            pair("value", Value::String(value)),
-                        ])]),
-                    ),
-                    pair("fields", Value::Nil),
-                    pair("cursor", args.get(3).cloned().unwrap_or(Value::Nil)),
-                    pair("limit", args.get(4).cloned().unwrap_or(Value::Int(50))),
-                ]);
-                Ok(ok(self.query_page(&spec)?))
-            }
-            "scan-fields" => {
-                let collection = text(args.first()).unwrap_or_default();
-                let prefix = text(args.get(1)).unwrap_or_default();
-                let fields = args.get(2).and_then(Value::as_list).unwrap_or(&[]).to_vec();
-                let spec = list(vec![
-                    pair("collection", Value::String(collection)),
-                    pair("prefix", Value::String(prefix)),
-                    pair("filters", Value::Nil),
-                    pair("fields", list(fields)),
-                    pair("cursor", args.get(3).cloned().unwrap_or(Value::Nil)),
-                    pair("limit", args.get(4).cloned().unwrap_or(Value::Int(50))),
-                ]);
-                Ok(ok(self.query_page(&spec)?))
+            "query" => {
+                let spec = records_query_spec(args.first().ok_or("query needs a spec")?)?;
+                match records::Host::query(&mut self.records, spec) {
+                    Ok(page) => Ok(ok(records_page(page))),
+                    Err(error) => Ok(err(records_error(error))),
+                }
             }
             "aggregate" => {
                 let collection = text(args.first()).unwrap_or_default();
-                let spec = args.get(1).cloned().unwrap_or(Value::Nil);
-                Ok(ok(self.aggregate_page(&collection, &spec)?))
+                let spec = records_aggregate_spec(args.get(1).ok_or("aggregate needs a spec")?)?;
+                match records::Host::aggregate(&mut self.records, collection, spec) {
+                    Ok(groups) => Ok(ok(list(groups.into_iter().map(records_group).collect()))),
+                    Err(error) => Ok(err(records_error(error))),
+                }
             }
             "upsert" => {
                 let entry = records_parse_entry(args.first().ok_or("upsert needs an entry")?)?;
@@ -228,148 +200,6 @@ impl NativeHost {
             }
             other => Err(format!("unknown soil:records function `{other}`")),
         }
-    }
-
-    fn query_page(&mut self, spec: &Value) -> std::result::Result<Value, String> {
-        let collection = owned_text(field_value(spec, "collection")).unwrap_or_default();
-        let prefix = owned_text(field_value(spec, "prefix")).unwrap_or_default();
-        let filters = field_value(spec, "filters");
-        let filters = filters
-            .as_list()
-            .unwrap_or(&[])
-            .iter()
-            .map(|filter| {
-                serde_json::json!({
-                    "field": owned_text(field_value(filter, "field")).unwrap_or_default(),
-                    "op": owned_text(field_value(filter, "op")).unwrap_or_default(),
-                    "value": owned_text(field_value(filter, "value")).unwrap_or_default(),
-                })
-            })
-            .collect::<Vec<_>>();
-        let fields = field_value(spec, "fields")
-            .as_list()
-            .unwrap_or(&[])
-            .iter()
-            .filter_map(|value| text(Some(value)).filter(|text| !text.is_empty()))
-            .collect::<Vec<_>>();
-        let mut cursor = records_option(&field_value(spec, "cursor"));
-        let limit = field_value(spec, "limit").as_f64().unwrap_or(50.0) as usize;
-        let limit = limit.max(1);
-        let mut entries = Vec::with_capacity(limit);
-        let mut next = None;
-        loop {
-            let page = records::Host::scan(&mut self.records, collection.clone(), cursor, 512)
-                .map_err(|error| format!("{error:?}"))?;
-            let page_len = page.entries.len();
-            for entry in page.entries {
-                let id = entry.key.id.clone();
-                if !id.starts_with(&prefix) || !records_filters(&entry.body, &filters) {
-                    cursor = Some(id);
-                    continue;
-                }
-                entries.push(records_entry(project_entry(entry, &fields)));
-                if entries.len() == limit {
-                    next = Some(id);
-                    break;
-                }
-                cursor = Some(id);
-            }
-            if entries.len() == limit || page_len < 512 {
-                break;
-            }
-            cursor = page.next;
-            if cursor.is_none() {
-                break;
-            }
-        }
-        Ok(records_page_values(entries, next))
-    }
-
-    fn aggregate_page(
-        &mut self,
-        collection: &str,
-        spec: &Value,
-    ) -> std::result::Result<Value, String> {
-        let aggregate = aggregate_spec(spec)?;
-        let prefix = aggregate
-            .get("prefix")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("");
-        let group_by = aggregate
-            .get("group_by")
-            .and_then(serde_json::Value::as_array)
-            .map(|values| {
-                values
-                    .iter()
-                    .filter_map(serde_json::Value::as_str)
-                    .map(str::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let filters = aggregate
-            .get("filters")
-            .and_then(serde_json::Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let bucket = aggregate
-            .get("bucket")
-            .and_then(serde_json::Value::as_object);
-        let bucket_field = bucket
-            .and_then(|bucket| bucket.get("field"))
-            .and_then(serde_json::Value::as_str);
-        let bucket_seconds = bucket
-            .and_then(|bucket| bucket.get("seconds"))
-            .and_then(serde_json::Value::as_i64)
-            .filter(|seconds| *seconds > 0);
-        let mut groups: std::collections::BTreeMap<Vec<String>, u64> =
-            std::collections::BTreeMap::new();
-        let mut cursor = None;
-        loop {
-            let page = records::Host::scan(
-                &mut self.records,
-                collection.to_string(),
-                cursor.clone(),
-                512,
-            )
-            .map_err(|error| format!("{error:?}"))?;
-            let page_len = page.entries.len();
-            for entry in page.entries {
-                let id = entry.key.id.clone();
-                cursor = Some(id.clone());
-                if !id.starts_with(prefix) || !records_filters(&entry.body, &filters) {
-                    continue;
-                }
-                let fields: serde_json::Value =
-                    serde_json::from_slice(&entry.body).map_err(|error| error.to_string())?;
-                let mut key = group_by
-                    .iter()
-                    .map(|field| json_text(json_path(&fields, field)))
-                    .collect::<Vec<_>>();
-                if let (Some(field), Some(seconds)) = (bucket_field, bucket_seconds)
-                    && let Some(value) = json_path(&fields, field).and_then(|value| value.as_i64())
-                {
-                    key.push((value.div_euclid(seconds) * seconds).to_string());
-                }
-                *groups.entry(key).or_default() += 1;
-            }
-            if page_len < 512 || cursor.is_none() {
-                break;
-            }
-        }
-        Ok(Value::List(
-            groups
-                .into_iter()
-                .map(|(values, count)| {
-                    list(vec![
-                        pair(
-                            "values",
-                            list(values.into_iter().map(Value::String).collect()),
-                        ),
-                        pair("count", Value::Int(count as i64)),
-                    ])
-                })
-                .collect(),
-        ))
     }
 
     fn call_http(&mut self, function: &str, args: &[Value]) -> std::result::Result<Value, String> {
@@ -461,15 +291,7 @@ impl Host for NativeHost {
             }
             "soil:records" => matches!(
                 function,
-                "get"
-                    | "scan"
-                    | "scan-query"
-                    | "scan-fields"
-                    | "query"
-                    | "aggregate"
-                    | "upsert"
-                    | "delete"
-                    | "compare-and-swap"
+                "get" | "scan" | "query" | "aggregate" | "upsert" | "delete" | "compare-and-swap"
             ),
             "soil:vfs" => matches!(function, "ls" | "stat" | "read"),
             "soil:http" => self.http.is_some() && function == "fetch",
@@ -847,108 +669,80 @@ fn body_bytes(value: &Value) -> std::result::Result<Vec<u8>, String> {
     }
 }
 
-fn project_entry(entry: records::Entry, fields: &[String]) -> records::Entry {
-    if fields.is_empty() {
-        return entry;
-    }
-    let Ok(body) = serde_json::from_slice::<serde_json::Value>(&entry.body) else {
-        return entry;
+fn records_filter(value: &Value) -> std::result::Result<records::Filter, String> {
+    let field = owned_text(field_value(value, "field")).unwrap_or_default();
+    let op = match owned_text(field_value(value, "op")).as_deref() {
+        Some("eq") => records::FilterOp::Eq,
+        Some("prefix") => records::FilterOp::Prefix,
+        Some("contains") => records::FilterOp::Contains,
+        Some("exists") => records::FilterOp::Exists,
+        Some("lt") => records::FilterOp::Lt,
+        Some("lte") => records::FilterOp::Lte,
+        Some("gt") => records::FilterOp::Gt,
+        Some("gte") => records::FilterOp::Gte,
+        other => return Err(format!("unknown filter op `{}`", other.unwrap_or(""))),
     };
-    let Some(object) = body.as_object() else {
-        return entry;
-    };
-    let mut projected = serde_json::Map::new();
-    for field in fields {
-        if let Some(value) = object.get(field) {
-            projected.insert(field.clone(), value.clone());
-        }
-    }
-    records::Entry {
-        body: serde_json::to_vec(&serde_json::Value::Object(projected)).unwrap_or_default(),
-        ..entry
-    }
-}
-
-fn records_filters(body: &[u8], filters: &[serde_json::Value]) -> bool {
-    if filters.is_empty() {
-        return true;
-    }
-    let Ok(fields) = serde_json::from_slice::<serde_json::Value>(body) else {
-        return false;
-    };
-    filters.iter().all(|filter| {
-        let field = filter
-            .get("field")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("");
-        let op = filter
-            .get("op")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("eq");
-        let wanted = filter
-            .get("value")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("");
-        let actual = json_path(&fields, field);
-        match op {
-            "exists" => actual.is_some(),
-            "prefix" => actual
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|text| text.starts_with(wanted)),
-            "contains" => actual
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|text| text.contains(wanted)),
-            _ => actual.is_some_and(|actual| {
-                actual.as_str() == Some(wanted) || actual.to_string() == wanted
-            }),
-        }
+    Ok(records::Filter {
+        field,
+        op,
+        value: records_option(&field_value(value, "value")),
     })
 }
 
-fn aggregate_spec(spec: &Value) -> std::result::Result<serde_json::Value, String> {
-    if let Value::String(text) = spec {
-        return serde_json::from_str(text).map_err(|error| error.to_string());
-    }
-    let filters = field_value(spec, "filters");
-    let filters = filters
+fn records_text_list(value: Value) -> Vec<String> {
+    value
         .as_list()
         .unwrap_or(&[])
         .iter()
-        .map(|filter| {
-            serde_json::json!({
-                "field": owned_text(field_value(filter, "field")).unwrap_or_default(),
-                "op": owned_text(field_value(filter, "op")).unwrap_or_default(),
-                "value": owned_text(field_value(filter, "value")).unwrap_or_default(),
-            })
-        })
-        .collect::<Vec<_>>();
-    let group_by = field_value(spec, "group_by");
-    let group_by = group_by
+        .filter_map(|value| text(Some(value)).filter(|text| !text.is_empty()))
+        .collect()
+}
+
+fn records_query_spec(value: &Value) -> std::result::Result<records::QuerySpec, String> {
+    let filters = field_value(value, "filters")
         .as_list()
         .unwrap_or(&[])
         .iter()
-        .map(|value| text(Some(value)).unwrap_or_default())
-        .collect::<Vec<_>>();
-    let bucket_field = owned_text(field_value(spec, "bucket_field")).unwrap_or_default();
-    let bucket_seconds = field_value(spec, "bucket_seconds").as_f64().unwrap_or(0.0) as i64;
-    let mut out = serde_json::json!({"prefix": owned_text(field_value(spec, "prefix")).unwrap_or_default(), "filters": filters, "group_by": group_by});
-    if !bucket_field.is_empty() && bucket_seconds > 0 {
-        out["bucket"] = serde_json::json!({"field": bucket_field, "seconds": bucket_seconds});
-    }
-    Ok(out)
+        .map(records_filter)
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(records::QuerySpec {
+        collection: owned_text(field_value(value, "collection")).unwrap_or_default(),
+        prefix: records_option(&field_value(value, "prefix")),
+        filters,
+        fields: records_text_list(field_value(value, "fields")),
+        cursor: records_option(&field_value(value, "cursor")),
+        limit: field_value(value, "limit")
+            .as_f64()
+            .unwrap_or(50.0)
+            .max(1.0) as u32,
+    })
 }
 
-fn json_path<'a>(value: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
-    path.split('.')
-        .try_fold(value, |value, part| value.get(part))
+fn records_aggregate_spec(value: &Value) -> std::result::Result<records::AggregateSpec, String> {
+    let filters = field_value(value, "filters")
+        .as_list()
+        .unwrap_or(&[])
+        .iter()
+        .map(records_filter)
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(records::AggregateSpec {
+        collection: owned_text(field_value(value, "collection")).unwrap_or_default(),
+        prefix: records_option(&field_value(value, "prefix")),
+        filters,
+        group_by: records_text_list(field_value(value, "group-by")),
+        bucket_field: records_option(&field_value(value, "bucket-field")),
+        bucket_seconds: field_value(value, "bucket-seconds").as_f64().unwrap_or(0.0) as u32,
+    })
 }
 
-fn json_text(value: Option<&serde_json::Value>) -> String {
-    match value {
-        Some(serde_json::Value::String(text)) => text.clone(),
-        Some(value) => value.to_string(),
-        None => String::new(),
-    }
+fn records_group(group: records::AggregateGroup) -> Value {
+    list(vec![
+        pair(
+            "values",
+            list(group.values.into_iter().map(Value::String).collect()),
+        ),
+        pair("count", Value::Int(group.count as i64)),
+    ])
 }
 
 fn field_value(record: &Value, name: &str) -> Value {

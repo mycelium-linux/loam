@@ -40,6 +40,60 @@ interface records {
     next: option<string>,
   }
 
+  /// One predicate over the JSON body. `value` is absent for `exists`.
+  ///
+  /// Filters compare the field at `field` (a dotted path such as
+  /// `links.project`) against `value`. `eq`, `prefix`, and `contains` compare
+  /// strings; `lt`, `lte`, `gt`, and `gte` compare numbers when both sides are
+  /// numeric and strings otherwise.
+  enum filter-op {
+    eq,
+    prefix,
+    contains,
+    exists,
+    lt,
+    lte,
+    gt,
+    gte,
+  }
+
+  record filter {
+    field: string,
+    op: filter-op,
+    value: option<string>,
+  }
+
+  /// A projected, filtered read of one collection.
+  ///
+  /// `fields` selects top-level body fields and is empty for the whole body.
+  /// The cursor is the id of the last entry returned by the previous page.
+  record query-spec {
+    collection: string,
+    prefix: option<string>,
+    filters: list<filter>,
+    fields: list<string>,
+    cursor: option<string>,
+    limit: u32,
+  }
+
+  /// A grouped count over one collection.
+  ///
+  /// `bucket-field` groups a numeric body field into fixed `bucket-seconds`
+  /// windows. The grouped value is appended to `values` as a decimal string.
+  record aggregate-spec {
+    collection: string,
+    prefix: option<string>,
+    filters: list<filter>,
+    group-by: list<string>,
+    bucket-field: option<string>,
+    bucket-seconds: u32,
+  }
+
+  record aggregate-group {
+    values: list<string>,
+    count: u64,
+  }
+
   /// A page of live records packed into one buffer.
   ///
   /// The frame is, repeated until the buffer ends, all integers little-endian:
@@ -96,6 +150,17 @@ interface records {
   /// Scan one collection in revision order. A cursor from a previous page is
   /// valid until the host reports `stale`.
   scan: func(collection: string, cursor: option<string>, limit: u32) -> result<page, error>;
+
+  /// Filtered, projected read within one collection. The host applies the
+  /// filters and projection; callers do not pull a whole store to emulate them.
+  query: func(spec: query-spec) -> result<page, error>;
+
+  /// Group live records by body fields, optionally bucketing one numeric field
+  /// by time. Only grouped counts cross the boundary; rows stay host-side.
+  aggregate: func(
+    collection: string,
+    spec: aggregate-spec,
+  ) -> result<list<aggregate-group>, error>;
 
   /// Scan live records packed into one buffer. Same cursor and limit rules as
   /// `scan`, but the entries are framed bytes rather than a list of records.

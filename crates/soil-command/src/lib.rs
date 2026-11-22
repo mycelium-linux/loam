@@ -854,6 +854,30 @@ impl ::soil::records_host::records::Host for Host {
             .scan(collection, cursor, limit)
     }
 
+    fn query(
+        &mut self,
+        spec: ::soil::records_host::records::QuerySpec,
+    ) -> Result<::soil::records_host::records::Page, ::soil::records_host::records::Error> {
+        self.records
+            .as_mut()
+            .ok_or(::soil::records_host::records::Error::Denied)?
+            .query(spec)
+    }
+
+    fn aggregate(
+        &mut self,
+        collection: String,
+        spec: ::soil::records_host::records::AggregateSpec,
+    ) -> Result<
+        Vec<::soil::records_host::records::AggregateGroup>,
+        ::soil::records_host::records::Error,
+    > {
+        self.records
+            .as_mut()
+            .ok_or(::soil::records_host::records::Error::Denied)?
+            .aggregate(collection, spec)
+    }
+
     fn scan_packed(
         &mut self,
         collection: String,

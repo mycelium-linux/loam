@@ -11,7 +11,9 @@ use fungos_records::{Contact, Record, Store};
 use wasmtime::component::{HasSelf, Linker};
 
 mod namespaced;
+mod query;
 pub use namespaced::{Namespace, NamespacedRecordsHost};
+pub use query::{aggregate, query};
 
 wasmtime::component::bindgen!({ path: "../../wit/soil-records.wit", world: "records-host" });
 
@@ -270,6 +272,18 @@ impl records::Host for RecordsBookHost {
             entries: page,
             next,
         })
+    }
+
+    fn query(&mut self, spec: records::QuerySpec) -> Result<records::Page, records::Error> {
+        crate::records_host::query(self, spec)
+    }
+
+    fn aggregate(
+        &mut self,
+        collection: String,
+        spec: records::AggregateSpec,
+    ) -> Result<Vec<records::AggregateGroup>, records::Error> {
+        crate::records_host::aggregate(self, collection, spec)
     }
 
     fn scan_packed(
@@ -755,5 +769,148 @@ mod tests {
         .unwrap();
         let page = host.scan("contact".into(), None, 10).unwrap();
         assert!(page.entries.is_empty());
+    }
+
+    fn thing(host: &mut RecordsBookHost, id: &str, body: serde_json::Value) {
+        host.upsert(records::Entry {
+            key: records::Key {
+                collection: "things".into(),
+                id: id.into(),
+            },
+            schema: "things/thing".into(),
+            revision: 0,
+            updated_at_ms: 0,
+            origin: String::new(),
+            deleted: false,
+            body: serde_json::to_vec(&body).unwrap(),
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn query_filters_projects_and_paginates() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut host = RecordsBookHost::open(dir.path(), "personal/test/things", "things").unwrap();
+        thing(
+            &mut host,
+            "a-1",
+            serde_json::json!({"project": "a", "status": "open", "n": 1}),
+        );
+        thing(
+            &mut host,
+            "a-2",
+            serde_json::json!({"project": "a", "status": "closed", "n": 5}),
+        );
+        thing(
+            &mut host,
+            "b-1",
+            serde_json::json!({"project": "b", "status": "open", "n": 9}),
+        );
+
+        let page = host
+            .query(records::QuerySpec {
+                collection: "things".into(),
+                prefix: Some("a-".into()),
+                filters: vec![records::Filter {
+                    field: "status".into(),
+                    op: records::FilterOp::Eq,
+                    value: Some("open".into()),
+                }],
+                fields: vec!["project".into()],
+                cursor: None,
+                limit: 10,
+            })
+            .unwrap();
+        assert_eq!(page.entries.len(), 1);
+        assert_eq!(page.entries[0].key.id, "a-1");
+        let body: serde_json::Value = serde_json::from_slice(&page.entries[0].body).unwrap();
+        assert_eq!(body, serde_json::json!({"project": "a"}));
+
+        let first = host
+            .query(records::QuerySpec {
+                collection: "things".into(),
+                prefix: Some("a-".into()),
+                filters: vec![],
+                fields: vec![],
+                cursor: None,
+                limit: 1,
+            })
+            .unwrap();
+        assert_eq!(first.entries.len(), 1);
+        let next = first.next.expect("a full page has a cursor");
+        let second = host
+            .query(records::QuerySpec {
+                collection: "things".into(),
+                prefix: Some("a-".into()),
+                filters: vec![],
+                fields: vec![],
+                cursor: Some(next),
+                limit: 10,
+            })
+            .unwrap();
+        assert_eq!(second.entries.len(), 1);
+        assert_eq!(second.entries[0].key.id, "a-2");
+
+        let page = host
+            .query(records::QuerySpec {
+                collection: "things".into(),
+                prefix: None,
+                filters: vec![records::Filter {
+                    field: "n".into(),
+                    op: records::FilterOp::Gte,
+                    value: Some("5".into()),
+                }],
+                fields: vec![],
+                cursor: None,
+                limit: 10,
+            })
+            .unwrap();
+        assert_eq!(page.entries.len(), 2);
+    }
+
+    #[test]
+    fn aggregate_groups_and_buckets() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut host = RecordsBookHost::open(dir.path(), "personal/test/things", "things").unwrap();
+        thing(
+            &mut host,
+            "a-1",
+            serde_json::json!({"status": "open", "created": 10}),
+        );
+        thing(
+            &mut host,
+            "a-2",
+            serde_json::json!({"status": "open", "created": 11}),
+        );
+        thing(
+            &mut host,
+            "a-3",
+            serde_json::json!({"status": "closed", "created": 20}),
+        );
+
+        let groups = host
+            .aggregate(
+                "things".into(),
+                records::AggregateSpec {
+                    collection: "things".into(),
+                    prefix: Some("a-".into()),
+                    filters: vec![],
+                    group_by: vec!["status".into()],
+                    bucket_field: Some("created".into()),
+                    bucket_seconds: 10,
+                },
+            )
+            .unwrap();
+        let groups = groups
+            .into_iter()
+            .map(|group| (group.values, group.count))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            groups,
+            vec![
+                (vec!["closed".into(), "20".into()], 1),
+                (vec!["open".into(), "10".into()], 2),
+            ]
+        );
     }
 }

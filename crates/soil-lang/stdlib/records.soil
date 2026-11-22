@@ -30,9 +30,9 @@
     (list :collection collection)
     (list :prefix prefix)
     (list :filters filters)
-    (list :group_by group-by)
-    (list :bucket_field bucket-field)
-    (list :bucket_seconds bucket-seconds)))
+    (list :group-by group-by)
+    (list :bucket-field bucket-field)
+    (list :bucket-seconds bucket-seconds)))
 
 (defun records/aggregate (collection prefix filters group-by bucket-field bucket-seconds)
   (soil:records/aggregate collection

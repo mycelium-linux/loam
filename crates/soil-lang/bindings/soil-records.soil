@@ -21,20 +21,17 @@
   (next (option string))
 )
 
-(define-record soil:records/packed-page
-  (entries (list u8))
-  (next (option string))
-)
+(define-enum soil:records/filter-op eq prefix contains exists lt lte gt gte)
 
 (define-record soil:records/filter
   (field string)
-  (op string)
-  (value string)
+  (op soil:records/filter-op)
+  (value (option string))
 )
 
 (define-record soil:records/query-spec
   (collection string)
-  (prefix string)
+  (prefix (option string))
   (filters (list soil:records/filter))
   (fields (list string))
   (cursor (option string))
@@ -43,16 +40,21 @@
 
 (define-record soil:records/aggregate-spec
   (collection string)
-  (prefix string)
+  (prefix (option string))
   (filters (list soil:records/filter))
-  (group_by (list string))
-  (bucket_field string)
-  (bucket_seconds u32)
+  (group-by (list string))
+  (bucket-field (option string))
+  (bucket-seconds u32)
 )
 
 (define-record soil:records/aggregate-group
   (values (list string))
   (count u64)
+)
+
+(define-record soil:records/packed-page
+  (entries (list u8))
+  (next (option string))
 )
 
 (define-record soil:records/apply-result
