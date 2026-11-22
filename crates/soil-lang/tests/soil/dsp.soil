@@ -1,0 +1,18 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+
+(defun test/dsp-windowed-fft ()
+  (let ((result
+          (soil:dsp/windowed-fft
+            (list
+              (list :samples
+                (list
+                  1.0 0.0 -1.0 0.0 1.0 0.0 -1.0 0.0
+                  1.0 0.0 -1.0 0.0 1.0 0.0 -1.0 0.0
+                  1.0 0.0 -1.0 0.0 1.0 0.0 -1.0 0.0
+                  1.0 0.0 -1.0 0.0 1.0 0.0 -1.0 0.0))
+              (list :sample-rate-hz 32)
+              (list :window "rectangular")))))
+    (and
+      (ok? result)
+      (= (length (field (value result) :magnitudes)) 16)
+      (= (field (value result) :peak-bin) 8))))

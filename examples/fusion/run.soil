@@ -1,0 +1,8 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+
+(defun fusion/episodes ()
+  (field (fusion-fixture) :episodes))
+
+(defun main ()
+  (let ((done (fusion/run (fusion/episodes) 0.55)))
+    (println (json-encode done))))

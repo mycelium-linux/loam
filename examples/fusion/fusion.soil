@@ -1,0 +1,126 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+; Offline sensor-fusion judge: recorded episodes -> calibrated score -> shadow
+; decisions. No actuator is called; shadow output is the product of this slice.
+
+(defun fusion/abs (value)
+  (if (< value 0.0) (- 0.0 value) value))
+
+(defun fusion/clamp (value)
+  (if (< value 0.0) 0.0 (if (> value 1.0) 1.0 value)))
+
+(defun fusion/score (episode)
+  (+
+    (* 0.35 (fusion/clamp (field episode :ble)))
+    (* 0.30 (fusion/clamp (field episode :imu)))
+    (* 0.20 (fusion/clamp (field episode :hr)))
+    (* 0.15 (fusion/clamp (field episode :gps)))))
+
+(defun fusion/predicted? (episode threshold)
+  (>= (fusion/score episode) threshold))
+
+(defun fusion/label? (episode)
+  (= (field episode :label) 1))
+
+(defun fusion/decision (episode threshold)
+  (list
+    (list :kind "fusion.shadow")
+    (list :mode "shadow")
+    (list :episode (field episode :id))
+    (list :score (fusion/score episode))
+    (list :threshold threshold)
+    (list :predicted (fusion/predicted? episode threshold))
+    (list :observed (fusion/label? episode))
+    (list :correct (= (fusion/predicted? episode threshold)
+                      (fusion/label? episode)))))
+
+(defun fusion/sum (episodes)
+  (if (nil? episodes)
+      0.0
+      (+ (field (first episodes) :score)
+         (fusion/sum (rest episodes)))))
+
+(defun fusion/scored (episodes acc)
+  (if (nil? episodes)
+      (reverse acc)
+      (fusion/scored
+        (rest episodes)
+        (cons
+          (assoc :score (fusion/score (first episodes)) (first episodes))
+          acc))))
+
+(defun fusion/brier (episodes)
+  (if (nil? episodes)
+      0.0
+      (let ((episode (first episodes))
+            (rest (rest episodes)))
+        (+ (* (- (field episode :score)
+                 (if (= (field episode :label) 1) 1.0 0.0))
+              (- (field episode :score)
+                 (if (= (field episode :label) 1) 1.0 0.0)))
+           (fusion/brier rest)))))
+
+(defun fusion/brier-mean (episodes count)
+  (if (= count 0)
+      0.0
+      (/ (fusion/brier episodes) count)))
+
+(defun fusion/count (episodes)
+  (if (nil? episodes) 0 (length episodes)))
+
+(defun fusion/bucket-stats (episodes bucket)
+  (if (nil? episodes)
+      (list 0 0.0 0.0)
+      (let ((episode (first episodes)))
+        (let ((stats (fusion/bucket-stats (rest episodes) bucket)))
+          (if (= (floor (* (field episode :score) 5)) bucket)
+              (list
+                (+ (nth 0 stats) 1)
+                (+ (nth 1 stats) (field episode :score))
+                (+ (nth 2 stats) (if (= (field episode :label) 1) 1.0 0.0)))
+              stats)))))
+
+(defun fusion/ece-buckets (episodes bucket total)
+  (if (>= bucket 5)
+      0.0
+      (let ((stats (fusion/bucket-stats episodes bucket)))
+        (let ((count (nth 0 stats)))
+          (+
+            (if (= count 0)
+                0.0
+                (* (/ count total)
+                   (fusion/abs (- (/ (nth 1 stats) count)
+                                  (/ (nth 2 stats) count)))))
+            (fusion/ece-buckets episodes (+ bucket 1) total))))))
+
+(defun fusion/ece (episodes)
+  (let ((count (fusion/count episodes)))
+    (if (= count 0) 0.0 (fusion/ece-buckets episodes 0 count))))
+
+(defun fusion/calibrate (episodes)
+  (let ((scored (fusion/scored episodes nil)))
+    (list
+      (list :kind "fusion.calibration")
+      (list :episodes (fusion/count scored))
+      (list :brier (fusion/brier-mean scored (fusion/count scored)))
+      (list :ece (fusion/ece scored)))))
+
+(defun fusion/shadow-events (episodes threshold acc)
+  (if (nil? episodes)
+      (reverse acc)
+      (fusion/shadow-events
+        (rest episodes) threshold
+        (cons (fusion/decision (first episodes) threshold) acc))))
+
+(defun fusion/print-event (event)
+  (println (json-encode event)))
+
+(defun fusion/run (episodes threshold)
+  (let ((calibration (fusion/calibrate episodes)))
+    (println (json-encode calibration))
+    (let ((events (fusion/shadow-events episodes threshold nil)))
+      (map 'fusion/print-event events)
+      (list
+        (list :kind "fusion.done")
+        (list :mode "shadow")
+        (list :episodes (length events))
+        (list :threshold threshold)))))

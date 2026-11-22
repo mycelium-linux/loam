@@ -78,12 +78,15 @@ pub const CONTRACTS: &[Contract] = &[
         file: "wit/soil-vfs-mut.wit",
         source: include_str!("../../../wit/soil-vfs-mut.wit"),
         package: "soil:vfs-mut@0.1.0",
-        interfaces: &[("vfs-mut", &["begin-write", "write", "remove", "mkdir", "rmdir", "rename"])],
+        interfaces: &[(
+            "vfs-mut",
+            &["begin-write", "write", "remove", "mkdir", "rmdir", "rename"],
+        )],
     },
     Contract {
         file: "wit/soil-index.wit",
         source: include_str!("../../../wit/soil-index.wit"),
-        package: "soil:index@1.1.0",
+        package: "soil:index@1.2.0",
         interfaces: &[("index", &["browse", "search", "knn", "state", "refresh"])],
     },
     Contract {
@@ -127,6 +130,12 @@ pub const CONTRACTS: &[Contract] = &[
                 "state",
             ],
         )],
+    },
+    Contract {
+        file: "wit/soil-dsp.wit",
+        source: include_str!("../../../wit/soil-dsp.wit"),
+        package: "soil:dsp@0.1.0",
+        interfaces: &[("dsp", &["windowed-fft", "iq-windowed-fft"])],
     },
     Contract {
         file: "wit/soil-codec.wit",

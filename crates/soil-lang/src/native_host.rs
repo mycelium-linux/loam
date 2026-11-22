@@ -16,6 +16,8 @@ use soil::http_host::{
 use soil::vfs_host::vfs::Host as VfsHostTrait;
 use soil::vfs_host::{VfsHost, vfs};
 
+use soil_dsp_host::{DspError, Window, iq_windowed_fft, windowed_fft};
+
 use crate::sexp::Value;
 use crate::{Host, SoilRecordsHost, SystemTimeHost};
 
@@ -160,6 +162,7 @@ impl Host for NativeHost {
             "soil:records" => self.records.granted(interface, function),
             "soil:vfs" => matches!(function, "ls" | "stat" | "read"),
             "soil:http" => self.http.is_some() && function == "fetch",
+            "soil:dsp" => matches!(function, "windowed-fft" | "iq-windowed-fft"),
             _ => false,
         }
     }
@@ -175,7 +178,84 @@ impl Host for NativeHost {
             "soil:records" => self.records.call(interface, function, args),
             "soil:vfs" => self.call_vfs(function, args),
             "soil:http" => self.call_http(function, args),
+            "soil:dsp" => self.call_dsp(function, args),
             other => Err(format!("unknown interface `{other}`")),
+        }
+    }
+}
+
+impl NativeHost {
+    fn call_dsp(&mut self, function: &str, args: &[Value]) -> std::result::Result<Value, String> {
+        if function != "windowed-fft" && function != "iq-windowed-fft" {
+            return Err(format!("unknown soil:dsp function `{function}`"));
+        }
+        let request = args
+            .first()
+            .ok_or_else(|| format!("{function} needs a request"))?;
+        let samples = record_field(request, "samples")
+            .as_list()
+            .unwrap_or_default()
+            .iter()
+            .map(|sample| {
+                sample
+                    .as_f64()
+                    .map(|value| value as f32)
+                    .ok_or_else(|| "samples must be numbers".to_string())
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let sample_rate = record_u32(request, "sample-rate-hz")
+            .ok_or_else(|| "sample-rate-hz is required".to_string())?;
+        let window = match record_text(request, "window").as_deref() {
+            Some("rectangular") => Window::Rectangular,
+            Some("hann") => Window::Hann,
+            Some("hamming") => Window::Hamming,
+            Some("blackman") => Window::Blackman,
+            Some(other) => return Err(format!("unknown window `{other}`")),
+            None => return Err("window is required".to_string()),
+        };
+        let spectrum = if function == "iq-windowed-fft" {
+            iq_windowed_fft(&samples, sample_rate, window).map(|spectrum| {
+                Value::List(vec![
+                    pair(
+                        "magnitudes",
+                        Value::List(
+                            spectrum
+                                .magnitudes
+                                .into_iter()
+                                .map(|magnitude| Value::Float(f64::from(magnitude)))
+                                .collect(),
+                        ),
+                    ),
+                    pair("bin-hz", Value::Float(f64::from(spectrum.bin_hz))),
+                    pair("peak-bin", Value::Int(i64::from(spectrum.peak_bin))),
+                    pair("peak-hz", Value::Float(f64::from(spectrum.peak_hz))),
+                    pair("rms", Value::Float(f64::from(spectrum.rms))),
+                ])
+            })
+        } else {
+            windowed_fft(&samples, sample_rate, window).map(|spectrum| {
+                Value::List(vec![
+                    pair(
+                        "magnitudes",
+                        Value::List(
+                            spectrum
+                                .magnitudes
+                                .into_iter()
+                                .map(|magnitude| Value::Float(f64::from(magnitude)))
+                                .collect(),
+                        ),
+                    ),
+                    pair("bin-hz", Value::Float(f64::from(spectrum.bin_hz))),
+                    pair("peak-bin", Value::Int(i64::from(spectrum.peak_bin))),
+                    pair("peak-hz", Value::Float(f64::from(spectrum.peak_hz))),
+                    pair("rms", Value::Float(f64::from(spectrum.rms))),
+                ])
+            })
+        };
+        match spectrum {
+            Ok(spectrum) => Ok(ok(spectrum)),
+            Err(DspError::OverBudget) => Ok(err("over-budget")),
+            Err(DspError::Invalid) => Ok(err("invalid")),
         }
     }
 }

@@ -1,0 +1,68 @@
+{
+  "episodes": [
+    {
+      "id": "empty-room",
+      "label": 0,
+      "ble": 0.05,
+      "imu": 0.02,
+      "hr": 0.0,
+      "gps": 0.0
+    },
+    {
+      "id": "phone-nearby",
+      "label": 0,
+      "ble": 0.62,
+      "imu": 0.05,
+      "hr": 0.0,
+      "gps": 0.0
+    },
+    {
+      "id": "person-still",
+      "label": 1,
+      "ble": 0.86,
+      "imu": 0.08,
+      "hr": 0.58,
+      "gps": 0.0
+    },
+    {
+      "id": "person-moving",
+      "label": 1,
+      "ble": 0.81,
+      "imu": 0.72,
+      "hr": 0.66,
+      "gps": 0.31
+    },
+    {
+      "id": "ble-noise",
+      "label": 0,
+      "ble": 0.55,
+      "imu": 0.04,
+      "hr": 0.0,
+      "gps": 0.0
+    },
+    {
+      "id": "walking",
+      "label": 1,
+      "ble": 0.78,
+      "imu": 0.81,
+      "hr": 0.61,
+      "gps": 0.44
+    },
+    {
+      "id": "guest-still",
+      "label": 1,
+      "ble": 0.74,
+      "imu": 0.12,
+      "hr": 0.52,
+      "gps": 0.0
+    },
+    {
+      "id": "sensor-dropout",
+      "label": 0,
+      "ble": 0.2,
+      "imu": 0.0,
+      "hr": 0.0,
+      "gps": 0.0
+    }
+  ]
+}
