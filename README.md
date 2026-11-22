@@ -43,8 +43,6 @@ First-party native plugins:
 | BLE | `loam-ble-api`, `loam-ble-host`, `loam-ble-sim` | native |
 | Audio | `loam-audio` | native |
 | Codec | `loam-codec` | native |
-| Inference | `loam-inference`, `loam-inference-host` | native |
-| Text scrubbing | `loam-scrub` | internal to inference |
 
 The runtime also provides WASI p2 and `wasi:http` through Wasmtime:
 
@@ -139,9 +137,7 @@ crates/loam-surface      winit + WebGPU surface host
 crates/loam-ble-*        first-party BLE plugin
 crates/loam-audio        first-party audio plugin
 crates/loam-codec        first-party codec plugin
-crates/loam-inference*   first-party inference plugin
 crates/loam-mcp          MCP adapter package and native stdio sidecar
-crates/loam-scrub        internal inference helper
 wit/                     canonical capability contracts
 ```
 

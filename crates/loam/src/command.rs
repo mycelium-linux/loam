@@ -79,7 +79,6 @@ impl CommandService {
             .map_err(anyhow::Error::from)
             .context("link WASI p2")?;
         crate::context::add_to_linker(&mut linker)?;
-        soil_inference_host::add_to_linker(&mut linker).context("link soil:inference")?;
         creds::add_to_linker(&mut linker)?;
         unibus::add_to_linker(&mut linker)?;
         crate::time::add_to_linker(&mut linker)?;

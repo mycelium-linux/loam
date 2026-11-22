@@ -12,7 +12,6 @@ use crate::stream::{StreamHub, StreamInfo, StreamSession, duplex as stream_api};
 use crate::vfs_host::{VfsHost, VfsWriter, cid, index, vfs, vfs_mut};
 use anyhow::Result;
 use http_body_util::BodyExt;
-use soil_inference_host::api as inference_api;
 use wasmtime::component::{Resource, ResourceTable};
 use wasmtime_wasi::{FsPerms, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 use wasmtime_wasi_http::{
@@ -76,8 +75,6 @@ pub struct WasiHostBuilder {
     /// Whether the manifest granted `soil:metrics`. The import is linked either
     /// way; the grant decides whether `emit` answers or refuses.
     metrics_granted: bool,
-    /// Optional `soil:inference` provider. Absent answers `unsupported`.
-    inference: Option<Arc<Mutex<soil_inference_host::InferenceHost>>>,
     /// Optional native codec sessions.
     pub(crate) codec: Option<Arc<Mutex<crate::codec_host::CodecHost>>>,
     /// Optional VFS. The same host serves `soil:vfs`, `soil:vfs-mut`,
@@ -279,7 +276,6 @@ impl WasiHostBuilder {
             records: self.records.clone(),
             soil_http: self.http.clone(),
             metrics: self.metrics_granted.then(|| Arc::clone(&self.metrics)),
-            inference: self.inference.clone(),
             codec: self.codec.clone(),
             vfs: self.vfs.clone(),
             streams: self.streams.clone(),
@@ -304,12 +300,6 @@ impl WasiHostBuilder {
 
     pub fn has_vfs(&self) -> bool {
         self.vfs.is_some()
-    }
-
-    /// Link `soil:inference` and route it to this provider.
-    pub fn inference(mut self, host: soil_inference_host::InferenceHost) -> Self {
-        self.inference = Some(Arc::new(Mutex::new(host)));
-        self
     }
 
     pub fn codec(mut self, host: crate::codec_host::CodecHost) -> Self {
@@ -340,7 +330,6 @@ pub struct WasiHost {
     soil_http: Option<Arc<HttpCapability>>,
     /// `Some` only when the manifest granted `soil:metrics`.
     metrics: Option<Arc<Metrics>>,
-    inference: Option<Arc<Mutex<soil_inference_host::InferenceHost>>>,
     pub(crate) codec: Option<Arc<Mutex<crate::codec_host::CodecHost>>>,
     vfs: Option<VfsHost>,
     streams: Option<Arc<StreamHub>>,
@@ -754,101 +743,6 @@ impl records::Host for WasiHost {
         entries: Vec<records::Entry>,
     ) -> std::result::Result<records::ApplyResult, records::Error> {
         self.with_records(|book| records::Host::apply(book, entries))
-    }
-}
-
-impl inference_api::Host for WasiHost {
-    fn models(&mut self) -> std::result::Result<Vec<inference_api::Model>, inference_api::Error> {
-        let Some(host) = &self.inference else {
-            return Err(inference_api::Error::Unsupported);
-        };
-        let mut host = host.lock().map_err(|_| inference_api::Error::Io)?;
-        inference_api::Host::models(&mut *host)
-    }
-
-    fn complete(
-        &mut self,
-        request: inference_api::Request,
-    ) -> std::result::Result<inference_api::Response, inference_api::Error> {
-        let Some(host) = &self.inference else {
-            return Err(inference_api::Error::Unsupported);
-        };
-        let mut host = host.lock().map_err(|_| inference_api::Error::Io)?;
-        inference_api::Host::complete(&mut *host, request)
-    }
-
-    fn embed(
-        &mut self,
-        request: inference_api::EmbedRequest,
-    ) -> std::result::Result<inference_api::EmbedResponse, inference_api::Error> {
-        let Some(host) = &self.inference else {
-            return Err(inference_api::Error::Unsupported);
-        };
-        let mut host = host.lock().map_err(|_| inference_api::Error::Io)?;
-        inference_api::Host::embed(&mut *host, request)
-    }
-
-    fn voice_embed(
-        &mut self,
-        request: inference_api::VoiceEmbeddingRequest,
-    ) -> std::result::Result<inference_api::VoiceEmbeddingResponse, inference_api::Error> {
-        let Some(host) = &self.inference else {
-            return Err(inference_api::Error::Unsupported);
-        };
-        let mut host = host.lock().map_err(|_| inference_api::Error::Io)?;
-        inference_api::Host::voice_embed(&mut *host, request)
-    }
-
-    fn transcribe(
-        &mut self,
-        request: inference_api::TranscribeRequest,
-    ) -> std::result::Result<inference_api::TranscribeResponse, inference_api::Error> {
-        let Some(host) = &self.inference else {
-            return Err(inference_api::Error::Unsupported);
-        };
-        let mut host = host.lock().map_err(|_| inference_api::Error::Io)?;
-        inference_api::Host::transcribe(&mut *host, request)
-    }
-
-    fn open_stream(
-        &mut self,
-        _request: inference_api::Request,
-    ) -> std::result::Result<Resource<inference_api::CompletionStream>, inference_api::Error> {
-        Err(inference_api::Error::Unsupported)
-    }
-
-    fn state(
-        &mut self,
-    ) -> std::result::Result<inference_api::InferenceState, inference_api::Error> {
-        let Some(host) = &self.inference else {
-            return Err(inference_api::Error::Unsupported);
-        };
-        let mut host = host.lock().map_err(|_| inference_api::Error::Io)?;
-        inference_api::Host::state(&mut *host)
-    }
-}
-
-impl inference_api::HostCompletionStream for WasiHost {
-    fn next(
-        &mut self,
-        _stream: Resource<inference_api::CompletionStream>,
-        _timeout_ms: u32,
-    ) -> std::result::Result<Option<inference_api::Chunk>, inference_api::Error> {
-        Err(inference_api::Error::Unsupported)
-    }
-
-    fn cancel(
-        &mut self,
-        _stream: Resource<inference_api::CompletionStream>,
-    ) -> std::result::Result<(), inference_api::Error> {
-        Err(inference_api::Error::Unsupported)
-    }
-
-    fn drop(
-        &mut self,
-        _stream: Resource<inference_api::CompletionStream>,
-    ) -> std::result::Result<(), wasmtime::Error> {
-        Ok(())
     }
 }
 

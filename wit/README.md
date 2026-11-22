@@ -21,7 +21,6 @@ soil:index            derived VFS index
 soil:ble              Bluetooth LE host
 wasi:audio            draft bounded PCM sink
 soil:codec            audio/image codec boundary
-soil:inference        model/tool/completion host
 soil:mcp              generic MCP catalog and tool invocation
 ```
 

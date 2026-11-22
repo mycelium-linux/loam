@@ -61,7 +61,6 @@ soil:surface
 soil:ble
 wasi:audio
 soil:codec
-soil:inference
 ```
 
 They are native implementations today. They are still plugins: a build without them still provides the core runtime.

@@ -64,7 +64,6 @@ remote = ["vfs"]
 
 [dependencies]
 soil-codec = { package = "loam-codec", path = "../loam-codec" }
-soil-inference-host = { package = "loam-inference-host", path = "../loam-inference-host" }
 anyhow = "1"
 base64 = { version = "0.22", optional = true }
 blake3 = { version = "1", optional = true }

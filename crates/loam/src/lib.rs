@@ -50,6 +50,8 @@ mod clock;
 #[cfg(feature = "wasi")]
 pub mod codec_host;
 #[cfg(feature = "wasi")]
+mod command;
+#[cfg(feature = "wasi")]
 pub mod context;
 #[cfg(feature = "wasi")]
 pub mod creds;
@@ -59,12 +61,9 @@ mod gateway;
 mod host;
 #[cfg(any(feature = "http", feature = "wasi"))]
 pub mod http_host;
-pub mod metrics;
-pub use soil_inference_host::InferenceHost;
-#[cfg(feature = "wasi")]
-mod command;
 #[cfg(feature = "principal")]
 pub mod local_identity;
+pub mod metrics;
 #[cfg(any(feature = "http", feature = "wasi"))]
 mod policy;
 #[cfg(feature = "principal")]
