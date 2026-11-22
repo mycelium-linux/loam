@@ -3,6 +3,7 @@
 ; Domain policy (devices, signals, profiles) belongs above this file.
 
 ;;; Apply `f` to every element of `xs` and return a new list.
+(defun or-empty (xs) (if (nil? xs) (list) xs))
 (defun min (a b) (if (< a b) a b))
 (defun max (a b) (if (> a b) a b))
 

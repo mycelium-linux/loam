@@ -51,7 +51,7 @@ contract and explicit `--project`/`--folder`/`--goal` flags.
 ## Soil CLI
 
 `examples/marbles/mb.soil` is the Soil `mb` replacement for the records-backed
-command surface. Reads use the host's `scan-query` projection, so
+command surface. Reads use the host's typed `query` projection, so
 `list --project` does not decode every issue in the book. Writes append the same
 Marbles JSON bodies and audit events, and `claim` uses `compare-and-swap` on the
 revision and origin it read.
@@ -102,9 +102,9 @@ For timing and counter-based profiling, load `stdlib/perf.soil` and use
 `:bench`, and `:reset` commands. See
 [`docs/soil-lisp-perf.md`](../../docs/soil-lisp-perf.md).
 
-`scan-query` and `compare-and-swap` are currently native `soil-lang` host
-extensions. They still need to be promoted into the canonical `soil:records`
-WIT and the `soil`/`soil-command` hosts for a wasm `mb`.
+`query`, `aggregate`, and `compare-and-swap` are currently native `soil-lang`
+host extensions. They still need to be promoted into the canonical
+`soil:records` WIT and the `soil`/`soil-command` hosts for a wasm `mb`.
 
 ## Live host
 
@@ -140,5 +140,5 @@ so source edits hot-reload. Actions are intentionally no-ops for now.
 `stats` and project/all-scoped `burndown` now use the host-side `aggregate`
 pushdown, so they return group counts instead of every issue body. `doctor`,
 `plan`, and `portfolio` still materialize issues in Soil and remain slower on a
-large book. Promote `scan-query`, `scan-fields`, `aggregate`, and
-`compare-and-swap` into canonical WIT for a wasm build.
+large book. Promote `query`, `aggregate`, and `compare-and-swap` into canonical
+WIT for a wasm build.

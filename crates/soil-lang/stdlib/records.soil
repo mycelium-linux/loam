@@ -1,0 +1,42 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+; Ergonomic read helpers over the low-level soil:records/query primitive.
+;
+; The host owns filtering, projection, cursors, and aggregation. These wrappers
+; only build specs and unwrap pages; they never pull a whole store to emulate a
+; query.
+
+(defun records/filter (field op value)
+  (list (list :field field) (list :op op) (list :value value)))
+
+(defun records/spec (collection prefix filters fields cursor limit)
+  (list
+    (list :collection collection)
+    (list :prefix prefix)
+    (list :filters filters)
+    (list :fields fields)
+    (list :cursor cursor)
+    (list :limit limit)))
+
+(defun records/where (prefix field value)
+  (soil:records/query
+    (records/spec "" prefix (list (records/filter field "eq" value)) nil nil 4096)))
+
+(defun records/select (prefix fields)
+  (soil:records/query
+    (records/spec "" prefix nil fields nil 4096)))
+
+(defun records/aggregate-spec (collection prefix filters group-by bucket-field bucket-seconds)
+  (list
+    (list :collection collection)
+    (list :prefix prefix)
+    (list :filters filters)
+    (list :group_by group-by)
+    (list :bucket_field bucket-field)
+    (list :bucket_seconds bucket-seconds)))
+
+(defun records/aggregate (collection prefix filters group-by bucket-field bucket-seconds)
+  (soil:records/aggregate collection
+    (records/aggregate-spec collection prefix filters group-by bucket-field bucket-seconds)))
+
+(defun records/entries (result)
+  (if (ok? result) (or-empty (field (value result) :entries)) nil))

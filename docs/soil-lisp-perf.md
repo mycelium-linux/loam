@@ -58,30 +58,28 @@ The native `--repl` accepts:
 The REPL keeps one `Runtime`, so `:stats` after repeated work shows cumulative
 evaluator and host counters until `:reset`.
 
-## Records aggregate pushdown
+## Records query and aggregate pushdown
 
-`soil:records/aggregate` takes a small JSON spec and returns grouped counts:
+Load `stdlib/records.soil` for the ergonomic wrappers:
 
 ```soil
-(soil:records/aggregate "" (json-encode
-  (list (list :prefix "issue/")
-        (list :group_by (list "project" "status")))))
+(records/select "issue/" (list "project" "status"))
+(records/where "issue/" "project" "marbles")
+(records/aggregate "" "issue/" nil (list "project" "status") "" 0)
 ```
 
-It supports exact/prefix/exists filters and an optional numeric time bucket:
+The underlying WIT-shaped types are records, not SQL strings:
 
-```json
-{
-  "prefix": "issue/",
-  "filters": [{"field": "project", "op": "eq", "value": "marbles"}],
-  "group_by": ["status"],
-  "bucket": {"field": "created_at", "seconds": 86400}
-}
+```soil
+(records/filter "project" "eq" "marbles")
+(records/spec "" "issue/" filters fields nil 4096)
 ```
 
-`mb stats` uses it directly. `mb burndown` uses it for project/all scopes; a
-goal/epic-scoped burndown still needs descendant ids and falls back to the issue
-list. SQL remains inside the records host; the Spore sees typed groups.
+`aggregate` supports exact/prefix/contains/exists filters, dotted field paths,
+and an optional numeric time bucket. `mb stats` uses it directly. `mb burndown`
+uses it for project/all scopes; a goal/epic-scoped burndown still needs
+descendant ids and falls back to the issue list. SQL remains inside the records
+host; Soil sees typed groups.
 
 ## Why both counters
 

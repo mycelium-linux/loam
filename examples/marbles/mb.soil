@@ -181,15 +181,27 @@
   (let ((entry (entry-of id)))
     (if (nil? entry) nil (entry-body entry))))
 
-(defun query-entries (field value)
-  (let ((result (soil:records/scan-query "" field value nil 4096)))
+(defun field-prefix (field)
+  (cond
+    ((= field "project") "issue/")
+    ((= field "child") "dependency/")
+    ((= field "parent") "dependency/")
+    ((= field "slug") "project/")
+    ((= field "issue_id") "marbles_event/")
+    (else "")))
+
+(defun query-entries-prefix (prefix field value)
+  (let ((result (records/where prefix field value)))
     (if (ok? result)
         (let ((entries (field (value result) :entries)))
           (if (or (nil? entries) (= 0 (length entries))) nil entries))
         (mb-fail (str "records query failed: " (field result :err))))))
 
+(defun query-entries (field value)
+  (query-entries-prefix (field-prefix field) field value))
+
 (defun typed-bodies (prefix field value)
-  (map 'entry-body (filter-with 'entry-type? prefix (query-entries field value))))
+  (map 'entry-body (filter-with 'entry-type? prefix (query-entries-prefix prefix field value))))
 
 (defun entry-type? (entry prefix)
   (cli-prefix? (entry-id entry) prefix))
@@ -209,7 +221,7 @@
     (filter-with 'entry-type? prefix (reverse (scan-into nil nil)))))
 
 (defun field-bodies (prefix fields)
-  (let ((result (soil:records/scan-fields "" prefix fields nil 20000)))
+  (let ((result (records/select prefix fields)))
     (if (not (ok? result))
         (mb-fail (str "records projection failed: " (field result :err)))
         (map 'entry-body (field (value result) :entries)))))
@@ -785,14 +797,11 @@
       (stats-add-groups (rest rows) (stats-add-group (first rows) stats))))
 
 (defun stats-command ()
-  (let ((spec (json-encode
-                (list (list :prefix "issue/")
-                      (list :group_by (list "project" "status"))))))
-    (let ((result (soil:records/aggregate "" spec)))
-      (if (not (ok? result))
-          (mb-fail (str "aggregate failed: " (field result :err)))
-          (let ((stats (stats-add-groups (value result) nil)))
-            (if (nil? stats) (json-object) stats))))))
+  (let ((result (records/aggregate "" "issue/" nil (list "project" "status") "" 0)))
+    (if (not (ok? result))
+        (mb-fail (str "aggregate failed: " (field result :err)))
+        (let ((stats (stats-add-groups (value result) nil)))
+          (if (nil? stats) (json-object) stats)))))
 
 ; ---------------------------------------------------------------------------
 ; Admin, supersession, and sweeps
@@ -1232,19 +1241,12 @@
           (buckets-total (rest rows))
           (+ (field (first rows) :count) (buckets-total (rest rows))))))
 
-(defun burndown-spec (project field)
-  (let ((filters (if (nil? project)
-                     (list)
-                     (list (list (list :field "project")
-                                 (list :op "eq")
-                                 (list :value project))))))
-    (json-encode
-      (list (list :prefix "issue/")
-            (list :filters filters)
-            (list :bucket (list (list :field field) (list :seconds 86400)))))))
+(defun burndown-filters (project)
+  (if (nil? project) nil
+      (list (records/filter "project" "eq" project))))
 
 (defun burndown-buckets (project field)
-  (let ((result (soil:records/aggregate "" (burndown-spec project field))))
+  (let ((result (records/aggregate "" "issue/" (burndown-filters project) nil field 86400)))
     (if (not (ok? result))
         (mb-fail (str "burndown aggregate failed: " (field result :err)))
         (value result))))
