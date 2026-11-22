@@ -20,8 +20,10 @@
 
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
+use std::sync::Arc;
 
 use serde_json::{Value as Json, json};
+use soil_lang::eval::CompiledFunction;
 use soil_lang::sexp::Value;
 use soil_lang::{NativeHost, Runtime};
 use wasmtime::{Engine, Instance, Module, Store, Val};
@@ -35,7 +37,7 @@ struct Image {
     records: String,
     book: String,
     engine: Engine,
-    modules: HashMap<String, Module>,
+    modules: HashMap<String, Arc<Module>>,
 }
 
 fn prelude() -> Result<String, String> {
@@ -87,6 +89,86 @@ fn session_of(request: &Json) -> &str {
         text_field(request, "name")
     } else {
         session
+    }
+}
+
+fn form_returns_bool(form: &Value) -> bool {
+    let Some(items) = form.as_list() else {
+        return false;
+    };
+    if items.first().and_then(Value::as_symbol) != Some("defun") {
+        return false;
+    }
+    items.get(3).is_some_and(expr_returns_bool)
+}
+
+fn expr_returns_bool(value: &Value) -> bool {
+    let Some(items) = value.as_list() else {
+        return false;
+    };
+    let Some(head) = items.first().and_then(Value::as_symbol) else {
+        return false;
+    };
+    match head {
+        "=" | ">" | "<" | ">=" | "<=" | "not" | "and" | "or" => true,
+        "if" => {
+            items.get(2).is_some_and(expr_returns_bool)
+                && items.get(3).is_some_and(expr_returns_bool)
+        }
+        "cond" => items[1..].iter().all(|clause| {
+            clause
+                .as_list()
+                .and_then(|parts| parts.get(1))
+                .is_some_and(expr_returns_bool)
+        }),
+        "let" => items
+            .last()
+            .is_some_and(|body| body != value && expr_returns_bool(body)),
+        _ => false,
+    }
+}
+
+struct WasmFunction {
+    engine: Engine,
+    module: Arc<Module>,
+    function: String,
+    bool_result: bool,
+}
+
+impl CompiledFunction for WasmFunction {
+    fn call(&mut self, args: &[Value]) -> anyhow::Result<Option<Value>> {
+        let params = match args
+            .iter()
+            .map(|value| match value {
+                Value::Int(value) => Some(Val::I64(*value)),
+                Value::Bool(value) => Some(Val::I64(i64::from(*value))),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()
+        {
+            Some(params) => params,
+            None => return Ok(None),
+        };
+        let mut store = Store::new(&self.engine, ());
+        let instance = Instance::new(&mut store, &self.module, &[])?;
+        let Some(function) = instance.get_func(&mut store, &self.function) else {
+            return Ok(None);
+        };
+        let ty = function.ty(&store);
+        if ty.params().len() != params.len() {
+            return Ok(None);
+        }
+        let mut results = vec![Val::I64(0); ty.results().len()];
+        function.call(&mut store, &params, &mut results)?;
+        let value = match results.first() {
+            Some(Val::I64(value)) => *value,
+            _ => return Ok(None),
+        };
+        Ok(Some(if self.bool_result {
+            Value::Bool(value != 0)
+        } else {
+            Value::Int(value)
+        }))
     }
 }
 
@@ -257,8 +339,9 @@ fn dispatch(images: &mut HashMap<String, Image>, prelude: &str, request: &Json) 
             };
             let hash = blake3::hash(&wasm).to_hex().to_string();
             if !image.modules.contains_key(&hash) {
-                let module =
-                    Module::new(&image.engine, &wasm).map_err(|error| format!("{error:#}"))?;
+                let module = Arc::new(
+                    Module::new(&image.engine, &wasm).map_err(|error| format!("{error:#}"))?,
+                );
                 image.modules.insert(hash.clone(), module);
             }
             let module = image
@@ -266,7 +349,7 @@ fn dispatch(images: &mut HashMap<String, Image>, prelude: &str, request: &Json) 
                 .get(&hash)
                 .ok_or_else(|| "compiled module vanished".to_string())?;
             let mut store = Store::new(&image.engine, ());
-            let instance = Instance::new(&mut store, module, &[])
+            let instance = Instance::new(&mut store, module.as_ref(), &[])
                 .map_err(|error| format!("instantiate {path}: {error:#}"))?;
             let func = instance
                 .get_func(&mut store, &function)
@@ -296,6 +379,61 @@ fn dispatch(images: &mut HashMap<String, Image>, prelude: &str, request: &Json) 
                 "args": args,
                 "result": result,
                 "compiled": true,
+            }))
+        })(),
+        "compile-function" => (|| -> Result<Json, String> {
+            let name = text_field(request, "name").to_string();
+            if name.is_empty() {
+                return Err("compile-function needs name".to_string());
+            }
+            let image = images
+                .get_mut(&session)
+                .ok_or_else(|| format!("unknown session {session}"))?;
+            let source = image
+                .runtime
+                .numeric_source(&name)
+                .ok_or_else(|| format!("unknown definition {name}"))?;
+            let program = soil_lang::parse(&source).map_err(|error| format!("{error:#}"))?;
+            let wasm = soil_lang::compile(&program).map_err(|error| format!("{error:#}"))?;
+            let hash = blake3::hash(&wasm).to_hex().to_string();
+            let path = format!("compiled/{hash}.wasm");
+            if !image.modules.contains_key(&hash) {
+                let module = Arc::new(
+                    Module::new(&image.engine, &wasm).map_err(|error| format!("{error:#}"))?,
+                );
+                image.modules.insert(hash.clone(), module);
+                let mut writer = NativeHost::open(&image.workspace, &image.records, &image.book)
+                    .map_err(|error| format!("open host: {error:#}"))?;
+                writer
+                    .write_bytes(&path, &wasm, "application/wasm")
+                    .map_err(|error| format!("write {path}: {error:#}"))?;
+            }
+            let module = image
+                .modules
+                .get(&hash)
+                .cloned()
+                .ok_or_else(|| "compiled module vanished".to_string())?;
+            let bool_result = image
+                .runtime
+                .definition_form(&name)
+                .is_some_and(form_returns_bool);
+            image.runtime.install_compiled(
+                &name,
+                Box::new(WasmFunction {
+                    engine: image.engine.clone(),
+                    module,
+                    function: name.clone(),
+                    bool_result,
+                }),
+            );
+            Ok(json!({
+                "session": session,
+                "name": name,
+                "path": path,
+                "hash": hash,
+                "bytes": wasm.len(),
+                "bool_result": bool_result,
+                "installed": true,
             }))
         })(),
         "load" => {
@@ -369,6 +507,7 @@ fn dispatch(images: &mut HashMap<String, Image>, prelude: &str, request: &Json) 
                     "project": image.project,
                     "dirty": image.runtime.dirty_definitions(),
                     "unattached": image.runtime.unattached_definitions(),
+                    "compiled": image.runtime.compiled_definitions(),
                     "loaded": image.loaded.keys().cloned().collect::<Vec<_>>(),
                 })
             }),
