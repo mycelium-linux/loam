@@ -132,6 +132,12 @@ pub const CONTRACTS: &[Contract] = &[
         )],
     },
     Contract {
+        file: "wit/soil-mcp.wit",
+        source: include_str!("../../../wit/soil-mcp.wit"),
+        package: "soil:mcp@0.1.0",
+        interfaces: &[("mcp", &["servers", "tools", "call"])],
+    },
+    Contract {
         file: "wit/soil-lora.wit",
         source: include_str!("../../../wit/soil-lora.wit"),
         package: "soil:lora@0.1.0",

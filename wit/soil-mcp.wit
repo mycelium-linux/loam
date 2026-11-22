@@ -1,0 +1,61 @@
+// Generic MCP projection.
+//
+// MCP servers own their tools. Unibus or another host adapter owns transport,
+// leases, credentials and authorization. Soil sees a stable tool catalog plus
+// JSON in/out; typed wrappers are generated above this WIT, not inside it.
+package soil:mcp@0.1.0;
+
+interface types {
+  enum mutation {
+    read-only,
+    mutating,
+    unknown,
+  }
+
+  record server {
+    id: string,
+    title: string,
+    lease-expires-at-ms: u64,
+  }
+
+  record tool {
+    name: string,
+    description: string,
+    /// JSON Schema object encoded as a string.
+    input-schema: string,
+    /// JSON Schema object encoded as a string, when the server provides it.
+    output-schema: option<string>,
+    mutation: mutation,
+  }
+
+  enum error {
+    denied,
+    not-found,
+    invalid,
+    over-budget,
+    unavailable,
+    io,
+  }
+}
+
+interface mcp {
+  use types.{error, server, tool};
+
+  /// Servers currently leased to this host and visible to this Spore.
+  servers: func() -> result<list<server>, error>;
+
+  /// Catalog for one server.
+  tools: func(server: string) -> result<list<tool>, error>;
+
+  /// Call one tool. Arguments and results are JSON strings; the host validates
+  /// against the catalog schema before sending.
+  call: func(server: string, tool: string, arguments: string) -> result<string, error>;
+}
+
+world mcp-host {
+  import mcp;
+}
+
+world guest {
+  import mcp;
+}

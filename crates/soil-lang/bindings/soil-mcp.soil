@@ -1,0 +1,46 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+(define-package "soil:mcp@0.1.0" :base "soil:mcp" :version "0.1.0")
+
+(define-enum soil:mcp/types.mutation read-only mutating unknown)
+(define-record soil:mcp/types.server
+  (id string)
+  (title string)
+  (lease-expires-at-ms u64))
+(define-record soil:mcp/types.tool
+  (name string)
+  (description string)
+  (input-schema string)
+  (output-schema (option string))
+  (mutation soil:mcp/types.mutation))
+(define-enum soil:mcp/types.error denied not-found invalid over-budget unavailable io)
+
+(define-capability soil:mcp/servers
+  :interface "soil:mcp"
+  :function "servers"
+  :grant "soil:mcp"
+  :version "0.1.0"
+  :params ()
+  :result (result (list soil:mcp/types.server) soil:mcp/types.error))
+
+(defun soil:mcp/servers () (host-call "soil:mcp" "servers" nil))
+
+(define-capability soil:mcp/tools
+  :interface "soil:mcp"
+  :function "tools"
+  :grant "soil:mcp"
+  :version "0.1.0"
+  :params ((server string))
+  :result (result (list soil:mcp/types.tool) soil:mcp/types.error))
+
+(defun soil:mcp/tools (server) (host-call "soil:mcp" "tools" (list server)))
+
+(define-capability soil:mcp/call
+  :interface "soil:mcp"
+  :function "call"
+  :grant "soil:mcp"
+  :version "0.1.0"
+  :params ((server string) (tool string) (arguments string))
+  :result (result string soil:mcp/types.error))
+
+(defun soil:mcp/call (server tool arguments)
+  (host-call "soil:mcp" "call" (list server tool arguments)))
