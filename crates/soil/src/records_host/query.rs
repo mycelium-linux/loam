@@ -126,7 +126,7 @@ fn matches(body: &[u8], filters: &[records::Filter]) -> bool {
 }
 
 fn equals(actual: &Value, wanted: &str) -> bool {
-    actual.as_str() == Some(wanted) || actual.to_string() == wanted
+    actual.as_str() == Some(wanted) || actual == wanted
 }
 
 fn compare(actual: &Value, wanted: &str) -> std::cmp::Ordering {

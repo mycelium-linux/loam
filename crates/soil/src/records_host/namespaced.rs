@@ -176,7 +176,7 @@ impl NamespacedRecordsHost {
         records::Entry {
             key: records::Key {
                 collection: namespace.name.clone(),
-                id: Self::unscoped(&namespace, &record.entity_id),
+                id: Self::unscoped(namespace, &record.entity_id),
             },
             schema: record.schema_id,
             revision: record.updated_hlc,
@@ -204,7 +204,7 @@ impl records::Host for NamespacedRecordsHost {
                 .get(&namespace.book, &Self::scoped(&namespace, &key.id))
                 .map_err(|_| records::Error::NotFound)?
         };
-        Ok(Self::entry(&namespace, record))
+        Ok(Self::entry(namespace, record))
     }
 
     fn scan(
@@ -240,7 +240,7 @@ impl records::Host for NamespacedRecordsHost {
                 if !entity_id.starts_with(&prefix) {
                     continue;
                 }
-                entries.push(Self::entry(&namespace, record));
+                entries.push(Self::entry(namespace, record));
                 if entries.len() > limit as usize {
                     entries.truncate(limit as usize);
                     return Ok(records::Page {
@@ -319,7 +319,7 @@ impl records::Host for NamespacedRecordsHost {
             .get(&namespace.book, &Self::scoped(&namespace, &entry.key.id))
             .map_err(|_| records::Error::Io)?;
         drop(store);
-        Ok(Self::entry(&namespace, record))
+        Ok(Self::entry(namespace, record))
     }
 
     fn compare_and_swap(
@@ -408,7 +408,7 @@ impl records::Host for NamespacedRecordsHost {
         drop(store);
         Ok(records::CasResult {
             applied: true,
-            entry: Self::entry(&namespace, record),
+            entry: Self::entry(namespace, record),
         })
     }
 
@@ -462,7 +462,7 @@ impl records::Host for NamespacedRecordsHost {
         Ok(records::Page {
             entries: entries
                 .into_iter()
-                .map(|record| Self::entry(&namespace, record))
+                .map(|record| Self::entry(namespace, record))
                 .collect(),
             next,
         })
