@@ -5,9 +5,11 @@
 pub mod core;
 pub mod eval;
 pub mod lisp;
+#[cfg(feature = "native")]
 pub mod native_host;
 pub mod sexp;
 pub mod wasm;
+#[cfg(feature = "witgen")]
 pub mod witgen;
 
 pub use core::{Expr, Function, Program, parse};
@@ -15,8 +17,11 @@ pub use eval::{
     FakeHost, Host, HostChain, Runtime, json_to_value as from_json, value_to_json as to_json,
 };
 pub use lisp::{Compiled as CompiledLisp, compile_source as compile_lisp};
+#[cfg(feature = "native")]
 pub use native_host::NativeHost;
 pub use sexp::{Comment, Document, Form, Span, parse_document, print_document};
+#[cfg(feature = "native")]
 pub use soil::time::SystemTimeHost;
 pub use wasm::compile;
+#[cfg(feature = "witgen")]
 pub use witgen::{Generated, generate};
