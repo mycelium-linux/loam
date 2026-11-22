@@ -10,15 +10,11 @@ import sys
 
 allowed = {
     "loam",
-    "loam-cli",
-    "loam-command",
-    "loam-spore",
     "loam-surface",
     "loam-media",
     "loam-ble-api",
     "loam-ble-host",
     "loam-ble-sim",
-    "loam-mcp",
 }
 allowed_bins = {"loam", "loam-ble-host", "loam-mcp"}
 forbidden = (

@@ -31,7 +31,7 @@ jobs:
       - name: build
         run: |
           cargo build --release --target "${{ matrix.target }}" \
-            -p loam-cli -p loam-ble-host -p loam-mcp
+            -p loam --features loam/surface -p loam-ble-host
       - name: package
         run: |
           set -euo pipefail

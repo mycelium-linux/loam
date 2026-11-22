@@ -2562,6 +2562,7 @@ dependencies = [
  "ipnet",
  "libc",
  "loam-media",
+ "loam-surface",
  "model2vec-rs",
  "mycelium-peer-protocol",
  "percent-encoding",
@@ -2570,8 +2571,11 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "signal-hook",
+ "tar",
  "tempfile",
  "tokio",
+ "toml 0.8.23",
  "tracing",
  "unibus",
  "unibus-sdk",
@@ -2580,6 +2584,9 @@ dependencies = [
  "wasmtime",
  "wasmtime-wasi",
  "wasmtime-wasi-http",
+ "wat",
+ "wit-component 0.247.0",
+ "wit-parser 0.247.0",
 ]
 
 [[package]]
@@ -2616,41 +2623,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "loam-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "loam",
- "loam-command",
- "loam-surface",
-]
-
-[[package]]
-name = "loam-command"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "loam",
- "loam-spore",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "toml 0.8.23",
- "wasmtime",
- "wasmtime-wasi",
- "wat",
-]
-
-[[package]]
-name = "loam-mcp"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "serde_json",
-]
-
-[[package]]
 name = "loam-media"
 version = "0.1.0"
 dependencies = [
@@ -2666,22 +2638,6 @@ dependencies = [
  "thiserror 2.0.21",
  "wasmtime",
  "wasmtime-wasi",
-]
-
-[[package]]
-name = "loam-spore"
-version = "0.1.0"
-dependencies = [
- "ed25519-dalek",
- "serde",
- "serde_json",
- "sha2",
- "signal-hook",
- "tar",
- "tempfile",
- "toml 0.8.23",
- "wit-component 0.247.0",
- "wit-parser 0.247.0",
 ]
 
 [[package]]

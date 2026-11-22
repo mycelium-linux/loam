@@ -102,7 +102,7 @@ impl PluginRegistry {
                     .unwrap_or_default()
                     .join(".local/share/fungos/commands")
             });
-        Self::scan_roots(&crate::roots(command_root))
+        Self::scan_roots(&super::roots(command_root))
     }
 
     fn collect(&mut self, package: &Path) {
@@ -110,7 +110,7 @@ impl PluginRegistry {
         if !manifest_path.is_file() {
             return;
         }
-        let manifest = match soil_spore::Manifest::load(package) {
+        let manifest = match crate::spore::Manifest::load(package) {
             Ok(manifest) => manifest,
             Err(error) => {
                 self.refuse(package, format!("{error}"));
@@ -131,7 +131,7 @@ impl PluginRegistry {
                 return;
             }
         };
-        let exports = match soil_spore::exported_interfaces(&bytes) {
+        let exports = match crate::spore::exported_interfaces(&bytes) {
             Ok(exports) => exports,
             Err(error) => {
                 self.refuse(package, format!("{error}"));
@@ -148,7 +148,7 @@ impl PluginRegistry {
         if provides.is_empty() {
             return;
         }
-        if let Err(error) = soil_spore::check(package) {
+        if let Err(error) = crate::spore::check(package) {
             self.refuse(package, format!("package is not sealed: {error}"));
             return;
         }
@@ -415,10 +415,11 @@ pub fn cli(args: &[String]) -> Result<()> {
     let command = positional.first().map(String::as_str).unwrap_or("list");
     if command == "pack" {
         let package = PathBuf::from(positional.get(1).context("plugin pack DIR")?);
-        let manifest = soil_spore::Manifest::load(&package)?;
-        let lock = soil_spore::compute_lock(&package, &manifest)?;
-        std::fs::write(package.join(soil_spore::LOCK_NAME), lock.render())
-            .with_context(|| format!("write {}", package.join(soil_spore::LOCK_NAME).display()))?;
+        let manifest = crate::spore::Manifest::load(&package)?;
+        let lock = crate::spore::compute_lock(&package, &manifest)?;
+        std::fs::write(package.join(crate::spore::LOCK_NAME), lock.render()).with_context(
+            || format!("write {}", package.join(crate::spore::LOCK_NAME).display()),
+        )?;
         println!("{}", lock.digest);
         return Ok(());
     }
@@ -512,8 +513,8 @@ mod tests {
         )
         .unwrap();
         fs::write(package.join("spore.toml"), manifest()).unwrap();
-        let manifest = soil_spore::Manifest::load(&package).unwrap();
-        let lock = soil_spore::compute_lock(&package, &manifest).unwrap();
+        let manifest = crate::spore::Manifest::load(&package).unwrap();
+        let lock = crate::spore::compute_lock(&package, &manifest).unwrap();
         fs::write(package.join("spore.lock"), lock.render()).unwrap();
         if signed {
             fs::write(package.join("signatures/test.asc"), b"test signature").unwrap();

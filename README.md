@@ -128,14 +128,10 @@ See [`docs/architecture.md`](docs/architecture.md).
 ## Repository layout
 
 ```text
-crates/loam              runtime host and linker
-crates/loam-cli          the one `loam` binary
-crates/loam-command      command registry and wasm command runner
-crates/loam-spore        package identity, locks, signatures
+crates/loam              runtime, host, command runner, plugin linker, Spore package
 crates/loam-surface      winit + WebGPU surface host
 crates/loam-ble-*        first-party BLE plugin
 crates/loam-media        first-party audio + codec plugin
-crates/loam-mcp          MCP adapter package and native stdio sidecar
 wit/                     canonical capability contracts
 ```
 
@@ -153,7 +149,7 @@ See [`docs/install.md`](docs/install.md).
 ```sh
 cargo check --workspace
 cargo test --workspace
-cargo build -p loam-cli
+cargo build -p loam --features surface --bin loam
 scripts/check-architecture.sh
 scripts/check-wit.sh
 scripts/check-surface-fixture.sh

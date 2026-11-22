@@ -166,7 +166,7 @@ command.grant.sig
 module.wasm
 ```
 
-`loam-spore` owns the package identity, lock, manifest, and signature checks. `loam-command` owns the installed command registry and the wasm command runner.
+`loam::spore` owns package identity, lock, manifest, and signature checks. `loam::command` owns the installed command registry and the wasm command runner.
 
 ## Non-goals
 

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/loam", "crates/loam-cli", "crates/loam-command", "crates/loam-spore", "crates/loam-ble-api", "crates/loam-ble-host", "crates/loam-ble-sim", "crates/loam-media", "crates/loam-surface", "crates/loam-mcp"]
+members = ["crates/loam", "crates/loam-ble-api", "crates/loam-ble-host", "crates/loam-ble-sim", "crates/loam-media", "crates/loam-surface"]
 resolver = "3"
 
 [workspace.package]

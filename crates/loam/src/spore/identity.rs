@@ -20,7 +20,7 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-use crate::{Error, Result, hex};
+use super::{Error, Result, hex};
 
 /// Where Mycelium keeps the node certificate, relative to its home.
 pub const CERTIFICATE: &str = "pki/node.pem";

@@ -23,7 +23,7 @@ use wasmtime_wasi::{
     },
 };
 
-use ::soil::records_host::RecordsBookHost;
+use crate::records_host::RecordsBookHost;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -598,7 +598,7 @@ fn spore_commands(package: &Path) -> Result<Vec<CommandEntry>> {
     if !package.join("spore.toml").is_file() {
         return Ok(Vec::new());
     }
-    let manifest = soil_spore::Manifest::load(package)
+    let manifest = crate::spore::Manifest::load(package)
         .map_err(|error| anyhow::anyhow!("{}: {error}", package.display()))?;
     let limits = Limits::default();
     let mut entries = Vec::new();
@@ -648,17 +648,17 @@ pub struct RunOutput {
 pub struct CommandRunner {
     engine: Engine,
     /// Installed Spore exports this runner can link into a command.
-    plugins: Option<Arc<crate::plugin::PluginRegistry>>,
+    plugins: Option<Arc<crate::command::plugin::PluginRegistry>>,
     records: Option<RecordsBinding>,
     /// The bus a command may publish on. Linked (possibly as an unavailable
     /// bus) for a command that declares `soil:unibus`, so a missing hub costs
     /// a publish, not the command run.
-    bus: Option<Arc<dyn ::soil::Bus>>,
+    bus: Option<Arc<dyn crate::Bus>>,
     components: Mutex<BTreeMap<PathBuf, Arc<wasmtime::component::Component>>>,
 }
 
 impl CommandRunner {
-    pub fn new(records: Option<RecordsBinding>, bus: Option<Arc<dyn ::soil::Bus>>) -> Result<Self> {
+    pub fn new(records: Option<RecordsBinding>, bus: Option<Arc<dyn crate::Bus>>) -> Result<Self> {
         let mut config = caching_config();
         config.epoch_interruption(true);
         let engine = Engine::new(&config)?;
@@ -672,7 +672,7 @@ impl CommandRunner {
     }
 
     /// Use a scanned plugin registry when resolving a command's imports.
-    pub fn with_plugins(mut self, plugins: crate::plugin::PluginRegistry) -> Self {
+    pub fn with_plugins(mut self, plugins: crate::command::plugin::PluginRegistry) -> Self {
         self.plugins = Some(Arc::new(plugins));
         self
     }
@@ -698,7 +698,7 @@ impl CommandRunner {
         };
         let mut linker = wasmtime::component::Linker::<Host>::new(&self.engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
-        crate::plugin_ipc::add_to_linker::<Host>(&mut linker)?;
+        crate::command::plugin_ipc::add_to_linker::<Host>(&mut linker)?;
         let records = match &self.records {
             Some(binding) => Some(
                 RecordsBookHost::open(
@@ -711,10 +711,10 @@ impl CommandRunner {
             None => None,
         };
         if records.is_some() {
-            ::soil::records_host::add_to_linker::<Host>(&mut linker)?;
+            crate::records_host::add_to_linker::<Host>(&mut linker)?;
         }
         if entry.requires.iter().any(|cap| cap == "soil:time") {
-            ::soil::time::add_to_linker::<Host>(&mut linker)?;
+            crate::time::add_to_linker::<Host>(&mut linker)?;
         }
         // The grant is the command's own declaration, not the caller's wish: a
         // command that lists `soil:unibus` in `requires` gets the interface,
@@ -726,14 +726,14 @@ impl CommandRunner {
             Some(
                 self.bus
                     .clone()
-                    .map(|bus| ::soil::unibus::BusHost::new(Some(bus)))
-                    .unwrap_or_else(|| ::soil::unibus::BusHost::new(None)),
+                    .map(|bus| crate::unibus::BusHost::new(Some(bus)))
+                    .unwrap_or_else(|| crate::unibus::BusHost::new(None)),
             )
         } else {
             None
         };
         if bus.is_some() {
-            ::soil::unibus::add_to_linker::<Host>(&mut linker)?;
+            crate::unibus::add_to_linker::<Host>(&mut linker)?;
         }
 
         let stdout = MemoryOutputPipe::new(entry.max_stdout_bytes);
@@ -758,8 +758,9 @@ impl CommandRunner {
             .as_ref()
             .and_then(|plugins| plugins.native_for(&self.engine, &component))
             .map(|(program, cwd)| {
-                crate::plugin_ipc::Sidecar::spawn(&program, &[], cwd.as_deref())
-                    .map(|sidecar| Box::new(sidecar) as Box<dyn crate::plugin_ipc::Backend>)
+                crate::command::plugin_ipc::Sidecar::spawn(&program, &[], cwd.as_deref()).map(
+                    |sidecar| Box::new(sidecar) as Box<dyn crate::command::plugin_ipc::Backend>,
+                )
             })
             .transpose()?;
         let mut store = Store::new(
@@ -820,18 +821,18 @@ struct Host {
     /// `soil:unibus`, when the command declared it and the caller supplied a
     /// bus. The command publishes through this; the records host never learns
     /// the bus exists, which is what keeps the two capabilities independent.
-    bus: Option<::soil::unibus::BusHost>,
+    bus: Option<crate::unibus::BusHost>,
     /// `loam:plugin/ipc` backend, when a plugin provider named a sidecar.
-    ipc: Option<Box<dyn crate::plugin_ipc::Backend>>,
+    ipc: Option<Box<dyn crate::command::plugin_ipc::Backend>>,
 }
 
-impl crate::plugin_ipc::ipc::Host for Host {
+impl crate::command::plugin_ipc::ipc::Host for Host {
     fn request(
         &mut self,
         method: String,
         payload: Vec<u8>,
-    ) -> Result<Vec<u8>, crate::plugin_ipc::ipc::Error> {
-        crate::plugin_ipc::handle(&mut self.ipc, &method, &payload)
+    ) -> Result<Vec<u8>, crate::command::plugin_ipc::ipc::Error> {
+        crate::command::plugin_ipc::handle(&mut self.ipc, &method, &payload)
     }
 }
 
@@ -844,18 +845,18 @@ impl WasiView for Host {
     }
 }
 
-impl ::soil::unibus::bus::Host for Host {
+impl crate::unibus::bus::Host for Host {
     fn publish(
         &mut self,
         kind: String,
         body: Vec<u8>,
         destination: Option<String>,
         ttl_ms: u64,
-    ) -> Result<::soil::unibus::bus::Receipt, ::soil::unibus::bus::Error> {
+    ) -> Result<crate::unibus::bus::Receipt, crate::unibus::bus::Error> {
         let bus = self
             .bus
             .as_mut()
-            .ok_or(::soil::unibus::bus::Error::Unavailable)?;
+            .ok_or(crate::unibus::bus::Error::Unavailable)?;
         bus.publish(kind, body, destination, ttl_ms)
     }
 
@@ -864,37 +865,37 @@ impl ::soil::unibus::bus::Host for Host {
         kinds: Vec<String>,
         cursor: Option<String>,
         limit: u32,
-    ) -> Result<::soil::unibus::bus::Page, ::soil::unibus::bus::Error> {
+    ) -> Result<crate::unibus::bus::Page, crate::unibus::bus::Error> {
         let bus = self
             .bus
             .as_mut()
-            .ok_or(::soil::unibus::bus::Error::Unavailable)?;
+            .ok_or(crate::unibus::bus::Error::Unavailable)?;
         bus.poll(kinds, cursor, limit)
     }
 }
 
-impl ::soil::time::api::Host for Host {
-    fn monotonic_ms(&mut self) -> Result<u64, ::soil::time::api::Error> {
-        ::soil::time::SystemTimeHost.monotonic_ms()
+impl crate::time::api::Host for Host {
+    fn monotonic_ms(&mut self) -> Result<u64, crate::time::api::Error> {
+        crate::time::SystemTimeHost.monotonic_ms()
     }
 
-    fn wall_clock(&mut self) -> Result<::soil::time::api::DateTime, ::soil::time::api::Error> {
-        ::soil::time::SystemTimeHost.wall_clock()
+    fn wall_clock(&mut self) -> Result<crate::time::api::DateTime, crate::time::api::Error> {
+        crate::time::SystemTimeHost.wall_clock()
     }
 
-    fn tick(&mut self, timeout_ms: u32) -> Result<Option<u64>, ::soil::time::api::Error> {
-        ::soil::time::SystemTimeHost.tick(timeout_ms)
+    fn tick(&mut self, timeout_ms: u32) -> Result<Option<u64>, crate::time::api::Error> {
+        crate::time::SystemTimeHost.tick(timeout_ms)
     }
 }
 
-impl ::soil::records_host::records::Host for Host {
+impl crate::records_host::records::Host for Host {
     fn get(
         &mut self,
-        key: ::soil::records_host::records::Key,
-    ) -> Result<::soil::records_host::records::Entry, ::soil::records_host::records::Error> {
+        key: crate::records_host::records::Key,
+    ) -> Result<crate::records_host::records::Entry, crate::records_host::records::Error> {
         self.records
             .as_mut()
-            .ok_or(::soil::records_host::records::Error::Denied)?
+            .ok_or(crate::records_host::records::Error::Denied)?
             .get(key)
     }
 
@@ -903,34 +904,34 @@ impl ::soil::records_host::records::Host for Host {
         collection: String,
         cursor: Option<String>,
         limit: u32,
-    ) -> Result<::soil::records_host::records::Page, ::soil::records_host::records::Error> {
+    ) -> Result<crate::records_host::records::Page, crate::records_host::records::Error> {
         self.records
             .as_mut()
-            .ok_or(::soil::records_host::records::Error::Denied)?
+            .ok_or(crate::records_host::records::Error::Denied)?
             .scan(collection, cursor, limit)
     }
 
     fn query(
         &mut self,
-        spec: ::soil::records_host::records::QuerySpec,
-    ) -> Result<::soil::records_host::records::Page, ::soil::records_host::records::Error> {
+        spec: crate::records_host::records::QuerySpec,
+    ) -> Result<crate::records_host::records::Page, crate::records_host::records::Error> {
         self.records
             .as_mut()
-            .ok_or(::soil::records_host::records::Error::Denied)?
+            .ok_or(crate::records_host::records::Error::Denied)?
             .query(spec)
     }
 
     fn aggregate(
         &mut self,
         collection: String,
-        spec: ::soil::records_host::records::AggregateSpec,
+        spec: crate::records_host::records::AggregateSpec,
     ) -> Result<
-        Vec<::soil::records_host::records::AggregateGroup>,
-        ::soil::records_host::records::Error,
+        Vec<crate::records_host::records::AggregateGroup>,
+        crate::records_host::records::Error,
     > {
         self.records
             .as_mut()
-            .ok_or(::soil::records_host::records::Error::Denied)?
+            .ok_or(crate::records_host::records::Error::Denied)?
             .aggregate(collection, spec)
     }
 
@@ -939,44 +940,42 @@ impl ::soil::records_host::records::Host for Host {
         collection: String,
         cursor: Option<String>,
         limit: u32,
-    ) -> Result<::soil::records_host::records::PackedPage, ::soil::records_host::records::Error>
-    {
+    ) -> Result<crate::records_host::records::PackedPage, crate::records_host::records::Error> {
         self.records
             .as_mut()
-            .ok_or(::soil::records_host::records::Error::Denied)?
+            .ok_or(crate::records_host::records::Error::Denied)?
             .scan_packed(collection, cursor, limit)
     }
 
     fn upsert(
         &mut self,
-        entry: ::soil::records_host::records::Entry,
-    ) -> Result<::soil::records_host::records::Entry, ::soil::records_host::records::Error> {
+        entry: crate::records_host::records::Entry,
+    ) -> Result<crate::records_host::records::Entry, crate::records_host::records::Error> {
         self.records
             .as_mut()
-            .ok_or(::soil::records_host::records::Error::Denied)?
+            .ok_or(crate::records_host::records::Error::Denied)?
             .upsert(entry)
     }
 
     fn compare_and_swap(
         &mut self,
-        key: ::soil::records_host::records::Key,
-        expected: Option<::soil::records_host::records::Version>,
-        entry: ::soil::records_host::records::Entry,
-    ) -> Result<::soil::records_host::records::CasResult, ::soil::records_host::records::Error>
-    {
+        key: crate::records_host::records::Key,
+        expected: Option<crate::records_host::records::Version>,
+        entry: crate::records_host::records::Entry,
+    ) -> Result<crate::records_host::records::CasResult, crate::records_host::records::Error> {
         self.records
             .as_mut()
-            .ok_or(::soil::records_host::records::Error::Denied)?
+            .ok_or(crate::records_host::records::Error::Denied)?
             .compare_and_swap(key, expected, entry)
     }
 
     fn delete(
         &mut self,
-        key: ::soil::records_host::records::Key,
-    ) -> Result<(), ::soil::records_host::records::Error> {
+        key: crate::records_host::records::Key,
+    ) -> Result<(), crate::records_host::records::Error> {
         self.records
             .as_mut()
-            .ok_or(::soil::records_host::records::Error::Denied)?
+            .ok_or(crate::records_host::records::Error::Denied)?
             .delete(key)
     }
 
@@ -984,21 +983,21 @@ impl ::soil::records_host::records::Host for Host {
         &mut self,
         since: Option<String>,
         limit: u32,
-    ) -> Result<::soil::records_host::records::Page, ::soil::records_host::records::Error> {
+    ) -> Result<crate::records_host::records::Page, crate::records_host::records::Error> {
         self.records
             .as_mut()
-            .ok_or(::soil::records_host::records::Error::Denied)?
+            .ok_or(crate::records_host::records::Error::Denied)?
             .changes(since, limit)
     }
 
     fn apply(
         &mut self,
-        entries: Vec<::soil::records_host::records::Entry>,
-    ) -> Result<::soil::records_host::records::ApplyResult, ::soil::records_host::records::Error>
+        entries: Vec<crate::records_host::records::Entry>,
+    ) -> Result<crate::records_host::records::ApplyResult, crate::records_host::records::Error>
     {
         self.records
             .as_mut()
-            .ok_or(::soil::records_host::records::Error::Denied)?
+            .ok_or(crate::records_host::records::Error::Denied)?
             .apply(entries)
     }
 }

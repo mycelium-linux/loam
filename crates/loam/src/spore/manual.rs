@@ -10,7 +10,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
-use crate::{Error, Manifest};
+use super::{Error, Manifest};
 
 /// A man page assembled from one package.
 pub struct Manual {

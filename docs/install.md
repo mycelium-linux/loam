@@ -42,7 +42,7 @@ brew install mycelium-linux/loam/loam
 ## From source
 
 ```sh
-cargo build --release -p loam-cli
+cargo build --release -p loam --features surface --bin loam
 install -m 755 target/release/loam ~/.local/bin/loam
 loam doctor
 ```

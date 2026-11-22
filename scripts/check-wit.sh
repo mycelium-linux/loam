@@ -20,8 +20,8 @@ for world in \
     crates/loam-surface/wit \
     crates/loam-ble-host/wit \
     crates/loam-media/wit \
-    crates/loam-command/wit/plugin \
-    crates/loam-mcp/fixtures/adapter/wit \
+    crates/loam/wit/plugin \
+    crates/loam/fixtures/mcp-adapter/wit \
     wit/soil-command
 do
     wasm-tools component wit "$world" >/dev/null

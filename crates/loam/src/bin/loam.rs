@@ -33,7 +33,7 @@ fn run() -> Result<()> {
     };
     match command {
         "run" => {
-            let code = soil_command::cli::run_under_loam(args[1..].to_vec())?;
+            let code = soil::command::cli::run_under_loam(args[1..].to_vec())?;
             if code != 0 {
                 std::process::exit(code);
             }
@@ -80,7 +80,7 @@ fn run() -> Result<()> {
                 loam_surface::run_window(&path, Some(size))
             }
         }
-        "plugin" => soil_command::plugin::cli(&args[1..]),
+        "plugin" => soil::command::plugin::cli(&args[1..]),
         "doctor" => {
             println!("loam {}", env!("CARGO_PKG_VERSION"));
             for capability in soil::WASI_PROFILE {
