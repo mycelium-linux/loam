@@ -534,6 +534,8 @@ fn hex(bytes: &[u8]) -> String {
 fn caching_config() -> Config {
     let mut config = Config::new();
     config.wasm_component_model(true);
+    config.async_stack_size(16 * 1024 * 1024);
+    config.max_wasm_stack(16 * 1024 * 1024);
     // Keep compiled components on disk. `mb` is invoked hundreds of times a day
     // for the same 600 KB module, and without this every one of those invocations
     // pays to compile it again. Failing to open the cache is not fatal: wasmtime
