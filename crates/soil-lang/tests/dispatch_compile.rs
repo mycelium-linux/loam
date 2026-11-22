@@ -4,7 +4,7 @@
 //! This does not test a real component boundary; it catches drift between the
 //! generator's Rust names and the shape `wit-bindgen` exposes.
 
-#[allow(dead_code)]
+#[allow(dead_code, clippy::module_inception)]
 mod wit {
     pub mod soil {
         pub mod records {

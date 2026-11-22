@@ -667,19 +667,19 @@ fn encode_bool(value: bool) -> Value {
     Value::Bool(value)
 }
 trait IntValue {
-    fn as_i64(self) -> i64;
+    fn into_i64(self) -> i64;
 }
 macro_rules! int_value {
     ($($ty:ty),* $(,)?) => {$(
         impl IntValue for $ty {
-            fn as_i64(self) -> i64 { self as i64 }
+            fn into_i64(self) -> i64 { self as i64 }
         }
     )*};
 }
 int_value!(u8, u16, u32, u64, i8, i16, i32, i64);
 
 fn encode_int<T: IntValue>(value: T) -> Value {
-    Value::Int(value.as_i64())
+    Value::Int(value.into_i64())
 }
 fn encode_float<T: Into<f64>>(value: T) -> Value {
     Value::Float(value.into())
