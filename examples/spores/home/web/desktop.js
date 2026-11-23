@@ -96,21 +96,13 @@
       refreshWizardControls();
       return;
     }
-    const connection = event.target.closest('[data-connection]');
-    if (connection) {
-      event.preventDefault();
-      const name = connection.dataset.connection;
-      if (wizardConnections.has(name)) wizardConnections.delete(name);
-      else wizardConnections.add(name);
-      paintConnections();
-      return;
-    }
     const wizardStart = event.target.closest('[data-wizard-start]');
     if (wizardStart) {
       event.preventDefault();
       saveWizardAnswers();
       closeOrientation();
       open(wizardAnswers.what === 'website' ? 'files' : 'notes');
+      window.setTimeout(() => window.MyceliumAgent?.seed(buildAgentSeed()), 420);
       return;
     }
     const wizardOpen = event.target.closest('[data-wizard-open]');
@@ -321,29 +313,25 @@
   const connectionsList = document.getElementById('connections-list');
   let wizardStep = 1;
   let wizardAnswers = { where: null, what: null };
-  let wizardConnections = new Set();
 
-  const connectionCatalog = {
-    website: {
-      myself: [['Cloudflare', 'Domains, DNS, and the public edge'], ['GitHub', 'The code behind the site'], ['Stripe', 'Payments when you need them'], ['Plausible', 'Quiet analytics']],
-      business: [['Cloudflare', 'Domains, DNS, and the public edge'], ['GitHub', 'Site code and review'], ['Stripe', 'Checkout and billing'], ['Linear', 'The launch plan']],
-    },
-    automation: {
-      myself: [['GitHub', 'Repositories and triggers'], ['Slack', 'Notifications where you already are'], ['Google Drive', 'The files the flow touches'], ['Home Assistant', 'Your local devices']],
-      business: [['GitHub', 'Repositories and review'], ['Slack', 'Team notifications'], ['Linear', 'Work items and handoffs'], ['Google Workspace', 'Mail, calendar, and files']],
-    },
-    agent: {
-      myself: [['OpenAI', 'A model to reason with'], ['Anthropic', 'A second model'], ['GitHub', 'The code it can change'], ['Slack', 'A place to report back']],
-      business: [['OpenAI', 'Team model access'], ['Anthropic', 'A second provider'], ['GitHub', 'Code and review'], ['Slack', 'Team context']],
-    },
-    presentation: {
-      myself: [['Figma', 'The visual source'], ['Google Drive', 'Slides and files'], ['Notion', 'The outline'], ['Loom', 'A quick recording']],
-      business: [['Figma', 'Brand and layout'], ['Google Drive', 'Shared decks'], ['Notion', 'The narrative'], ['Slack', 'Review and feedback']],
-    },
-    document: {
-      myself: [['Notion', 'Long-form writing'], ['Google Drive', 'Files and exports'], ['Dropbox', 'The archive'], ['Readwise', 'The reading trail']],
-      business: [['Notion', 'The team wiki'], ['Google Drive', 'Shared documents'], ['Dropbox', 'The archive'], ['Linear', 'The work it belongs to']],
-    },
+  const fplAuthBase = 'https://sso.fpl.dev';
+  const providerCatalog = {
+    cloudflare: { label: 'Cloudflare', slug: 'cloudflare', note: 'Domains, DNS, and the public edge', href: `${fplAuthBase}/connections/cloudflare/start?owner=user` },
+    github: { label: 'GitHub', slug: 'github', note: 'Repositories, issues, and workflows', href: `${fplAuthBase}/connections/github/start?owner=user` },
+    google: { label: 'Google', slug: 'google', note: 'Gmail, Calendar, and Drive', href: `${fplAuthBase}/connections/google/start?owner=user` },
+    openai: { label: 'OpenAI', slug: 'openai', note: 'ChatGPT / Codex subscription', href: `${fplAuthBase}/connections`, logo: 'https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@latest/icons/openai.svg', light: true },
+    xai: { label: 'xAI', slug: 'x', note: 'Grok / X Premium subscription', href: `${fplAuthBase}/connections` },
+    openrouter: { label: 'OpenRouter', slug: 'openrouter', note: 'Model routing and API keys', href: `${fplAuthBase}/connections` },
+    hue: { label: 'Philips Hue', slug: 'philipshue', note: 'Smart lights and local scenes', href: `${fplAuthBase}/connections/philips-hue/start?owner=user` },
+    spotify: { label: 'Spotify', slug: 'spotify', note: 'Playback, search, and playlists', href: `${fplAuthBase}/connections/spotify/start?owner=user` },
+  };
+
+  const recommendationIds = {
+    website: { myself: ['cloudflare', 'github', 'google', 'openai'], business: ['cloudflare', 'github', 'google', 'openai'] },
+    automation: { myself: ['github', 'google', 'hue', 'spotify'], business: ['github', 'google', 'cloudflare', 'openai'] },
+    agent: { myself: ['openai', 'xai', 'github', 'openrouter'], business: ['openai', 'xai', 'github', 'openrouter'] },
+    presentation: { myself: ['google', 'openai', 'github', 'cloudflare'], business: ['google', 'openai', 'github', 'cloudflare'] },
+    document: { myself: ['google', 'openai', 'github', 'cloudflare'], business: ['google', 'openai', 'github', 'cloudflare'] },
   };
 
   const whatLabels = {
@@ -352,6 +340,13 @@
     agent: 'an agent',
     presentation: 'a presentation',
     document: 'a document',
+  };
+  const whatTitles = {
+    website: 'Website',
+    automation: 'Automation',
+    agent: 'Agent',
+    presentation: 'Presentation',
+    document: 'Document',
   };
 
   function paintWizardChoices() {
@@ -372,56 +367,121 @@
     if (whatNext) whatNext.disabled = !wizardAnswers.what;
   }
 
-  function paintConnections() {
-    if (!connectionsList) return;
-    connectionsList.querySelectorAll('[data-connection]').forEach((node) => {
-      const selected = wizardConnections.has(node.dataset.connection);
-      node.classList.toggle('is-selected', selected);
-      node.setAttribute('aria-pressed', String(selected));
+  function accountLogo(provider) {
+    const mark = document.createElement('span');
+    mark.className = 'account-logo';
+    if (!provider.slug) {
+      mark.textContent = provider.label.slice(0, 1);
+      return mark;
+    }
+    const image = document.createElement('img');
+    image.alt = '';
+    image.loading = 'lazy';
+    image.src = provider.logo || `https://cdn.simpleicons.org/${provider.slug}/e5e7eb`;
+    if (provider.light) image.className = 'is-light';
+    image.addEventListener('error', () => {
+      image.remove();
+      mark.textContent = provider.label.slice(0, 1);
     });
+    mark.append(image);
+    return mark;
   }
 
   function renderConnections() {
     if (!connectionsList) return;
     const where = wizardAnswers.where || 'myself';
     const what = wizardAnswers.what || 'document';
-    const options = connectionCatalog[what]?.[where] || [];
-    wizardConnections = new Set(options.map(([name]) => name));
+    const ids = recommendationIds[what]?.[where] || recommendationIds.document.myself;
     connectionsList.replaceChildren();
-    if (connectionsTitle) connectionsTitle.textContent = 'Start with these.';
+    if (connectionsTitle) connectionsTitle.textContent = 'Connect what you already use.';
     if (connectionsCopy) {
-      connectionsCopy.textContent = `For ${where === 'business' ? 'a business' : 'yourself'}, starting with ${whatLabels[what]}, these are the first connections we would prioritize. You can change them later.`;
+      connectionsCopy.textContent = `For ${where === 'business' ? 'a business' : 'yourself'}, starting with ${whatLabels[what]}, these are the first accounts we would prioritize.`;
     }
-    for (const [name, note] of options) {
-      const button = document.createElement('button');
-      button.className = 'connection';
-      button.type = 'button';
-      button.dataset.connection = name;
-      button.setAttribute('aria-pressed', 'true');
-      const mark = document.createElement('span');
-      mark.className = 'connection-mark';
-      mark.textContent = name.slice(0, 1);
+    for (const id of ids) {
+      const provider = providerCatalog[id];
+      if (!provider) continue;
+      const card = document.createElement('div');
+      card.className = 'account-card';
       const copy = document.createElement('span');
-      copy.className = 'connection-copy';
+      copy.className = 'account-copy';
       const strong = document.createElement('strong');
-      strong.textContent = name;
+      strong.textContent = provider.label;
       const small = document.createElement('small');
-      small.textContent = note;
+      small.textContent = provider.note;
       copy.append(strong, small);
-      const check = document.createElement('span');
-      check.className = 'connection-check';
-      check.textContent = '✓';
-      button.append(mark, copy, check);
-      connectionsList.append(button);
+      const link = document.createElement('a');
+      link.className = 'account-connect';
+      link.href = provider.href;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.textContent = 'Connect';
+      card.append(accountLogo(provider), copy, link);
+      connectionsList.append(card);
     }
-    paintConnections();
+  }
+
+  function buildAgentSeed() {
+    const where = wizardAnswers.where || 'myself';
+    const what = wizardAnswers.what || 'document';
+    const owner = where === 'business' ? 'my business' : 'myself';
+    const prompts = {
+      website: `Set up my first website for ${owner}. Start with the homepage and the accounts I need.`,
+      automation: 'Build my first automation. Connect the tools that already hold the work.',
+      agent: 'Build an agent that can work inside my apps. Start with one useful job.',
+      presentation: 'Help me make my first presentation from what is already on this desk.',
+      document: 'Start my first document and shape it from the workspace.',
+    };
+    const ready = {
+      website: 'I will start with the site files in ~/fungOS. Connect Cloudflare and GitHub through FPL Auth, and Geode will hold the credentials.',
+      automation: 'I will start with the workflow in the workspace. Connect Google and GitHub through FPL Auth so the steps have something real to touch.',
+      agent: 'I will start with Notes and the agent surface. Connect OpenAI or xAI through FPL Auth; Geode owns the provider key.',
+      presentation: 'I will start with Notes and turn the workspace into an outline. Connect Google through FPL Auth when you want slides.',
+      document: 'I will start with Notes and the VFS. Connect Google through FPL Auth when the document needs to leave this Mac.',
+    };
+    const tools = {
+      website: [
+        { label: 'VFS', note: '~/fungOS site files', state: 'preparing' },
+        { label: 'Frontdoor', note: 'local preview', state: 'preparing' },
+        { label: 'FPL Auth', note: 'Cloudflare · GitHub', state: 'waiting' },
+        { label: 'Geode', note: 'credential vault', state: 'preparing' },
+      ],
+      automation: [
+        { label: 'VFS', note: 'workspace and triggers', state: 'preparing' },
+        { label: 'Loam', note: 'run the first step', state: 'preparing' },
+        { label: 'FPL Auth', note: 'Google · GitHub', state: 'waiting' },
+        { label: 'Geode', note: 'credential vault', state: 'preparing' },
+      ],
+      agent: [
+        { label: 'Loam', note: 'agent harness', state: 'preparing' },
+        { label: 'VFS', note: 'notes and files', state: 'preparing' },
+        { label: 'FPL Auth', note: 'OpenAI · xAI', state: 'waiting' },
+        { label: 'Geode', note: 'provider keys', state: 'preparing' },
+      ],
+      presentation: [
+        { label: 'Notes', note: 'outline and slides', state: 'preparing' },
+        { label: 'VFS', note: 'source material', state: 'preparing' },
+        { label: 'FPL Auth', note: 'Google', state: 'waiting' },
+        { label: 'Geode', note: 'credential vault', state: 'preparing' },
+      ],
+      document: [
+        { label: 'Notes', note: 'long-form editor', state: 'preparing' },
+        { label: 'VFS', note: 'workspace', state: 'preparing' },
+        { label: 'FPL Auth', note: 'Google', state: 'waiting' },
+        { label: 'Geode', note: 'credential vault', state: 'preparing' },
+      ],
+    };
+    return {
+      prompt: prompts[what] || prompts.document,
+      ready: ready[what] || ready.document,
+      context: { app: 'This Mac', detail: whatTitles[what] || 'Workspace' },
+      tools: tools[what] || tools.document,
+    };
   }
 
   function saveWizardAnswers() {
     try {
       localStorage.setItem('mycelium.orientation.answers', JSON.stringify({
         ...wizardAnswers,
-        connections: [...wizardConnections],
       }));
     } catch {}
   }
@@ -449,7 +509,6 @@
   function openOrientation() {
     if (!onboarding) return;
     wizardAnswers = { where: null, what: null };
-    wizardConnections = new Set();
     paintWizardChoices();
     setWizardStep(1);
     onboarding.hidden = false;

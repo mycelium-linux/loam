@@ -36,6 +36,7 @@
   let resize = null;
   let loaded = false;
   let fullscreen = false;
+  let pendingSeed = null;
   const savedWidth = Number(localStorage.getItem('mycelium.agent.width'));
   if (Number.isFinite(savedWidth) && savedWidth > 0) {
     root.style.setProperty('--agent-width', `${Math.min(1200, Math.max(320, savedWidth))}px`);
@@ -75,6 +76,20 @@
 
   function sendFullscreenState() {
     post('mycelium:agent-fullscreen-state', { fullscreen });
+  }
+
+  function flushSeed() {
+    if (!loaded || !pendingSeed) return;
+    const payload = pendingSeed;
+    pendingSeed = null;
+    post('mycelium:agent-seed', payload);
+  }
+
+  function seed(payload) {
+    if (payload?.context) window.__MYCELIUM_AGENT_CONTEXT = payload.context;
+    pendingSeed = payload;
+    open();
+    flushSeed();
   }
 
   function setFullscreen(value) {
@@ -179,6 +194,7 @@
     sendPinState();
     sendFullscreenState();
     sendContext();
+    flushSeed();
   });
 
   document.addEventListener('keydown', (event) => {
@@ -199,6 +215,7 @@
     if (data.type === 'mycelium:agent-ready') {
       loaded = true;
       sendContext();
+      flushSeed();
     }
     if (data.type === 'mycelium:agent-pin') {
       pinned = Boolean(data.pinned);
@@ -209,6 +226,13 @@
     if (data.type === 'mycelium:agent-fullscreen-toggle') setFullscreen(!fullscreen);
     if (data.type === 'mycelium:agent-context-request') sendContext();
   });
+
+  window.MyceliumAgent = {
+    open,
+    close: () => close(true),
+    toggle,
+    seed,
+  };
 
   window.addEventListener('mycelium-agent-context', sendContext);
   setInterval(() => {

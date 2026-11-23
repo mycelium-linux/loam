@@ -55,8 +55,89 @@
       expand.setAttribute('aria-pressed', String(fullscreen));
       document.getElementById('agent').dataset.fullscreen = String(fullscreen);
     }
+    if (data.type === 'mycelium:agent-seed') runSeed(data);
   });
   window.addEventListener('mycelium-agent-context', (event) => setContext(event.detail));
+
+
+  function addThinking() {
+    empty?.remove();
+    const message = document.createElement('div');
+    message.className = 'message agent thinking';
+    const who = document.createElement('span');
+    who.className = 'who';
+    who.textContent = 'Agent';
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+    const dots = document.createElement('span');
+    dots.className = 'thinking-dots';
+    dots.innerHTML = '<i></i><i></i><i></i>';
+    bubble.append(dots);
+    message.append(who, bubble);
+    thread.append(message);
+    thread.scrollTop = thread.scrollHeight;
+    return message;
+  }
+
+  function addToolList(tools) {
+    if (!tools?.length) return null;
+    empty?.remove();
+    const list = document.createElement('div');
+    list.className = 'agent-tools';
+    const heading = document.createElement('p');
+    heading.className = 'agent-tools-head';
+    heading.textContent = 'Getting tools ready';
+    list.append(heading);
+    tools.forEach((tool, index) => {
+      const row = document.createElement('div');
+      row.className = 'agent-tool';
+      row.dataset.state = tool.state || 'preparing';
+      const dot = document.createElement('span');
+      dot.className = 'agent-tool-dot';
+      const copy = document.createElement('span');
+      copy.className = 'agent-tool-copy';
+      const strong = document.createElement('strong');
+      strong.textContent = tool.label;
+      const small = document.createElement('small');
+      small.textContent = tool.note || '';
+      copy.append(strong, small);
+      const state = document.createElement('span');
+      state.className = 'agent-tool-state';
+      state.textContent = tool.state === 'waiting' ? 'Waiting' : 'Preparing';
+      row.append(dot, copy, state);
+      list.append(row);
+      window.setTimeout(() => {
+        if (row.dataset.state === 'waiting') return;
+        row.dataset.state = 'ready';
+        state.textContent = 'Ready';
+      }, 360 + index * 280);
+    });
+    thread.append(list);
+    thread.scrollTop = 0;
+    return list;
+  }
+
+  function runSeed(payload = {}) {
+    if (payload.context) setContext(payload.context);
+    if (payload.prompt) addMessage('user', payload.prompt);
+    const thinking = addThinking();
+    const tools = addToolList(payload.tools || []);
+    window.setTimeout(() => {
+      if (thinking) {
+        thinking.classList.remove('thinking');
+        const bubble = thinking.querySelector('.bubble');
+        bubble.replaceChildren();
+        bubble.textContent = payload.ready || "I have the workspace and the first tools ready. The harness isn't connected yet, so this is where I'll start.";
+        thread.append(thinking);
+      }
+      if (tools) {
+        tools.dataset.done = 'true';
+        tools.querySelector('.agent-tools-head').textContent = 'Tools ready';
+      }
+      addMessage('system', 'Harness not connected yet — FPL Auth and Geode are the next wires.');
+      thread.scrollTop = thread.scrollHeight;
+    }, 1900);
+  }
 
   function addMessage(role, text) {
     empty?.remove();

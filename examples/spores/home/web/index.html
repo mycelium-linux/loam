@@ -128,6 +128,12 @@
       <span><strong>This Mac</strong><small id="account-workspace">Local VFS</small></span>
     </header>
     <div class="account-items">
+      <a class="account-item" href="https://sso.fpl.dev/connections" target="_blank" rel="noopener">
+        <span class="account-item-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 8V6a3 3 0 0 1 6 0v2"/><rect x="5" y="8" width="14" height="11" rx="2"/><path d="M12 12v3"/></svg>
+        </span>
+        <span><strong>Accounts</strong><small>Managed by FPL Auth</small></span>
+      </a>
       <button class="account-item" type="button" data-open="desk">
         <span class="account-item-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="4" y="4.5" width="16" height="11.5" rx="1.5"/><path d="M9 20h6M12 16v4"/></svg>
@@ -229,10 +235,11 @@
       </div>
 
       <div class="wizard-step" data-wizard-step="6" hidden>
-        <p class="welcome-kicker">First connections</p>
-        <h2 id="connections-title">Start with these.</h2>
-        <p class="welcome-copy" id="connections-copy">These are the first accounts we would prioritize for this shape of work.</p>
-        <div class="connection-list" id="connections-list"></div>
+        <p class="welcome-kicker">Accounts</p>
+        <h2 id="connections-title">Connect what you already use.</h2>
+        <p class="welcome-copy" id="connections-copy">Based on your answers, these are the first accounts to connect.</p>
+        <div class="account-list" id="connections-list"></div>
+        <p class="account-auth">Accounts are handled by <a href="https://sso.fpl.dev/connections" target="_blank" rel="noopener">FPL Auth</a>. Connections open in a new tab.</p>
         <div class="wizard-actions"><button class="wizard-back" type="button" data-wizard-back>Back</button><button class="btn-wizard" type="button" data-wizard-start>Start building</button><button class="wizard-back" type="button" data-wizard-skip>Not now</button></div>
       </div>
     </div>
