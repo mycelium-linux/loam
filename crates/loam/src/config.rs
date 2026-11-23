@@ -37,6 +37,7 @@ pub struct Config {
     pub roots: Vec<PathBuf>,
     pub max_instances: Option<usize>,
     pub image_runtime: Option<PathBuf>,
+    pub window_runtime: Option<PathBuf>,
     pub web_listen: Option<String>,
     pub log_root: Option<PathBuf>,
     pub log_max_bytes: Option<u64>,
@@ -128,6 +129,9 @@ impl Config {
                 }
                 "image-runtime" => {
                     self.image_runtime = Some(path(pair.get(1), "daemon image-runtime")?)
+                }
+                "window-runtime" => {
+                    self.window_runtime = Some(path(pair.get(1), "daemon window-runtime")?)
                 }
                 "log" => self.parse_log(pair)?,
                 "web" => self.parse_web(pair)?,
@@ -252,6 +256,7 @@ mod tests {
                 (max-instances 4)
                 (roots ("/a" "/b"))
                 (image-runtime "/bin/soil-image")
+                (window-runtime "/bin/loam-window")
                 (log (dir "/var/log/loam") (max-bytes 4096) (keep 2))
                 (web (listen "127.0.0.1:9000")))
               (mycelium
@@ -266,6 +271,10 @@ mod tests {
         assert_eq!(
             config.image_runtime.as_deref(),
             Some(Path::new("/bin/soil-image"))
+        );
+        assert_eq!(
+            config.window_runtime.as_deref(),
+            Some(Path::new("/bin/loam-window"))
         );
         assert_eq!(config.log_root.as_deref(), Some(Path::new("/var/log/loam")));
         assert_eq!(config.log_max_bytes, Some(4096));

@@ -23,6 +23,9 @@ fn usage() -> &'static str {
        loamd image status ID [--socket PATH]
        loamd image stop ID [--socket PATH]
        loamd image list [--socket PATH]
+       loamd window start URL [--id ID] [--title TITLE] [--size WxH] [--socket PATH]
+       loamd window list [--socket PATH]
+       loamd window stop ID [--socket PATH]
        loamd list|ping|inspect ID|logs ID|stop ID|reload|shutdown [--socket PATH]"#
 }
 
@@ -45,7 +48,7 @@ fn run() -> Result<()> {
     let (operation, args) = match args.first().map(String::as_str) {
         Some(
             operation @ ("serve" | "ping" | "list" | "inspect" | "logs" | "start" | "stop"
-            | "reload" | "shutdown" | "image"),
+            | "reload" | "shutdown" | "image" | "window"),
         ) => (operation.to_string(), args[1..].to_vec()),
         _ => ("serve".to_string(), args),
     };
@@ -57,6 +60,16 @@ fn run() -> Result<()> {
 
     if operation == "image" {
         let (socket, request) = parse_image(&args)?;
+        let response = daemon::request(&socket, &request)?;
+        println!("{}", serde_json::to_string_pretty(&response)?);
+        if response["ok"] == false {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
+
+    if operation == "window" {
+        let (socket, request) = parse_window(&args)?;
         let response = daemon::request(&socket, &request)?;
         println!("{}", serde_json::to_string_pretty(&response)?);
         if response["ok"] == false {
@@ -88,6 +101,7 @@ fn parse_options(args: &[String]) -> Result<Options> {
     let mut unibus_config = None;
     let mut web_listen = config.web_listen;
     let mut image_runtime = config.image_runtime;
+    let mut window_runtime = config.window_runtime;
     let mut log_dir = config.log_root;
     let mut log_max_bytes = config.log_max_bytes.unwrap_or(soil::log::DEFAULT_MAX_BYTES);
     let mut log_keep = config.log_keep.unwrap_or(soil::log::DEFAULT_KEEP);
@@ -150,6 +164,12 @@ fn parse_options(args: &[String]) -> Result<Options> {
             "--image-runtime" => {
                 image_runtime = Some(PathBuf::from(
                     args.get(i + 1).context("--image-runtime PATH")?,
+                ));
+                i += 2;
+            }
+            "--window-runtime" => {
+                window_runtime = Some(PathBuf::from(
+                    args.get(i + 1).context("--window-runtime PATH")?,
                 ));
                 i += 2;
             }
@@ -225,6 +245,7 @@ fn parse_options(args: &[String]) -> Result<Options> {
         bus,
         max_instances,
         image_runtime,
+        window_runtime,
         web_listen,
         log_root: log_dir,
         log_max_bytes,
@@ -313,6 +334,65 @@ fn parse_image(args: &[String]) -> Result<(PathBuf, Request)> {
             id: positional.get(1).context("image stop needs ID")?.clone(),
         },
         other => bail!("unknown image operation {other}"),
+    };
+    Ok((socket, request))
+}
+
+fn parse_window(args: &[String]) -> Result<(PathBuf, Request)> {
+    let mut socket = daemon::default_socket();
+    let mut id = None;
+    let mut title = "Loam".to_string();
+    let mut size = (1000, 700);
+    let mut positional = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--socket" => {
+                socket = PathBuf::from(args.get(i + 1).context("--socket PATH")?);
+                i += 2;
+            }
+            "--id" => {
+                id = Some(args.get(i + 1).context("--id ID")?.clone());
+                i += 2;
+            }
+            "--title" => {
+                title = args.get(i + 1).context("--title TITLE")?.clone();
+                i += 2;
+            }
+            "--size" => {
+                let value = args.get(i + 1).context("--size WxH")?;
+                let (width, height) = value.split_once('x').context("--size needs WxH")?;
+                size = (
+                    width.parse().context("--size width")?,
+                    height.parse().context("--size height")?,
+                );
+                i += 2;
+            }
+            other if other.starts_with('-') => bail!("unknown window option {other}"),
+            other => {
+                positional.push(other.to_string());
+                i += 1;
+            }
+        }
+    }
+    let command = positional.first().map(String::as_str).unwrap_or("list");
+    let request = match command {
+        "list" => Request::WindowList,
+        "start" => {
+            let url = positional.get(1).context("window start needs URL")?.clone();
+            let id = id.unwrap_or_else(|| format!("window-{}", positional.len()));
+            Request::WindowStart {
+                id,
+                url,
+                title,
+                width: size.0,
+                height: size.1,
+            }
+        }
+        "stop" => Request::WindowStop {
+            id: positional.get(1).context("window stop needs ID")?.clone(),
+        },
+        other => bail!("unknown window operation {other}"),
     };
     Ok((socket, request))
 }

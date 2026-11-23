@@ -36,6 +36,8 @@ Host defaults can live in `loam.conf.soil`:
     (max-instances 8)
     (roots ("~/.local/share/fungos/commands"
             "~/.local/share/fungos/spores"))
+    (image-runtime "/usr/local/bin/soil-image")
+    (window-runtime "/usr/local/bin/loam-window")
     (log (dir "~/.local/state/loam/logs") (max-bytes 1048576) (keep 4))
     (web (listen "127.0.0.1:8799")))
   (mycelium
