@@ -92,10 +92,12 @@
   const input = document.getElementById('command-input');
 
   function openCommand() {
+    if (!command) return;
     command.hidden = false;
     command.removeAttribute('inert');
     command.setAttribute('aria-hidden', 'false');
-    scrim.hidden = false;
+    root.dataset.command = 'open';
+    if (scrim) scrim.hidden = false;
     input?.focus();
   }
   function closeCommand() {
@@ -103,7 +105,8 @@
     command.hidden = true;
     command.setAttribute('inert', '');
     command.setAttribute('aria-hidden', 'true');
-    scrim.hidden = true;
+    root.dataset.command = 'closed';
+    if (scrim) scrim.hidden = true;
   }
 
   for (const button of document.querySelectorAll('[data-command-toggle]')) {
