@@ -31,9 +31,9 @@
         </aside>
         <section class="note-editor">
           <div class="note-editor-head">
-            <input id="note-title" aria-label="Note title" placeholder="Untitled note" spellcheck="false">
+            <h2 class="note-title" id="note-title">Untitled note</h2>
             <span class="note-status" id="note-meta"></span>
-            <button id="save-note" type="button">Save</button>
+            <button id="reload-note" type="button" hidden>Reload</button>
           </div>
           <textarea id="note-body" aria-label="Note body" placeholder="Write in Markdown…" spellcheck="true" disabled></textarea>
           <div class="note-empty" id="note-empty"><div><strong>No note open</strong>Pick a note or create one. Files live in the <code>notes/</code> workspace root.</div></div>

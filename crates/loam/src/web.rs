@@ -24,6 +24,10 @@ use serde_json::json;
 
 use crate::spore::{Anycast, Manifest, Surface, SurfaceKind, Ui, Web, soil::SoilManifest};
 
+#[cfg(feature = "records")]
+use crate::records_host::{RecordsBookHost, records};
+#[cfg(feature = "records")]
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 #[cfg(feature = "vfs")]
 use fungos_vfs::{Expect, NodeRole, Vfs, normalize_path};
 
@@ -39,6 +43,8 @@ pub struct StaticSurface {
     pub ttl_secs: u64,
     pub web: Option<Web>,
     pub writable: bool,
+    pub records: Option<crate::spore::Records>,
+    pub records_writable: bool,
 }
 
 /// Find static web surfaces in a set of package roots.
@@ -75,6 +81,8 @@ pub fn discover(roots: &[PathBuf]) -> Result<Vec<StaticSurface>> {
                             None,
                             None,
                             false,
+                            None,
+                            false,
                         )
                     })
             } else if toml.is_file() {
@@ -84,6 +92,8 @@ pub fn discover(roots: &[PathBuf]) -> Result<Vec<StaticSurface>> {
                     .and_then(|manifest| {
                         let anycast = manifest.anycast.clone()?;
                         let writable = manifest.grants.contains_key("soil:vfs-mut");
+                        let records_writable = manifest.grants.contains_key("soil:records")
+                            || manifest.grants.contains_key("soil:records.write");
                         static_surface(
                             &package,
                             manifest.spore.id,
@@ -93,6 +103,8 @@ pub fn discover(roots: &[PathBuf]) -> Result<Vec<StaticSurface>> {
                             manifest.ui.as_ref(),
                             manifest.web.clone(),
                             writable,
+                            manifest.records.clone(),
+                            records_writable,
                         )
                     })
             } else {
@@ -117,6 +129,8 @@ fn static_surface(
     ui: Option<&Ui>,
     web: Option<Web>,
     writable: bool,
+    records: Option<crate::spore::Records>,
+    records_writable: bool,
 ) -> Option<StaticSurface> {
     let surface = surfaces
         .iter()
@@ -136,6 +150,8 @@ fn static_surface(
         entry,
         web: web.filter(|web| !web.vfs_root.contains("..")),
         writable,
+        records,
+        records_writable,
     })
 }
 
@@ -215,6 +231,21 @@ fn handle(mut stream: TcpStream, sites: &[(StaticSurface, PathBuf)]) -> Result<(
             &mut stream,
         );
     }
+    if path == "/v1/call" {
+        if request.method == "OPTIONS" {
+            return respond(&mut stream, 204, "text/plain", b"", origin);
+        }
+        if request.method != "POST" {
+            return respond(
+                &mut stream,
+                405,
+                "text/plain",
+                b"method not allowed",
+                origin,
+            );
+        }
+        return records_api(site, &request.body, origin, &mut stream);
+    }
     if request.method == "OPTIONS" {
         return respond(&mut stream, 204, "text/plain", b"", origin);
     }
@@ -253,6 +284,428 @@ fn handle(mut stream: TcpStream, sites: &[(StaticSurface, PathBuf)]) -> Result<(
         }
         Err(_) => respond(&mut stream, 404, "text/plain", b"not found", origin),
     }
+}
+
+#[cfg(feature = "records")]
+#[derive(serde::Deserialize)]
+struct WireCallRequest {
+    v: u32,
+    call: WireCall,
+}
+
+#[cfg(feature = "records")]
+#[derive(serde::Deserialize)]
+struct WireCall {
+    id: String,
+    interface: String,
+    function: String,
+    #[serde(default)]
+    params: serde_json::Value,
+}
+
+#[cfg(feature = "records")]
+#[derive(serde::Deserialize, serde::Serialize)]
+struct WireKey {
+    collection: String,
+    id: String,
+}
+
+#[cfg(feature = "records")]
+#[derive(serde::Deserialize, serde::Serialize)]
+struct WireVersion {
+    revision: u64,
+    origin: String,
+}
+
+#[cfg(feature = "records")]
+#[derive(serde::Deserialize)]
+struct WireFilter {
+    field: String,
+    op: String,
+    #[serde(default)]
+    value: Option<String>,
+}
+
+#[cfg(feature = "records")]
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WireEntry {
+    key: WireKey,
+    #[serde(default)]
+    schema: String,
+    #[serde(default)]
+    revision: u64,
+    #[serde(default)]
+    updated_at_ms: u64,
+    #[serde(default)]
+    origin: String,
+    #[serde(default)]
+    deleted: bool,
+    #[serde(default)]
+    body: String,
+}
+
+#[cfg(feature = "records")]
+impl WireEntry {
+    fn from_entry(entry: records::Entry) -> Self {
+        Self {
+            key: WireKey {
+                collection: entry.key.collection,
+                id: entry.key.id,
+            },
+            schema: entry.schema,
+            revision: entry.revision,
+            updated_at_ms: entry.updated_at_ms,
+            origin: entry.origin,
+            deleted: entry.deleted,
+            body: STANDARD.encode(entry.body),
+        }
+    }
+
+    fn into_entry(self) -> std::result::Result<records::Entry, serde_json::Value> {
+        let body = STANDARD
+            .decode(self.body.as_bytes())
+            .map_err(|_| call_error("invalid", "body is not base64"))?;
+        Ok(records::Entry {
+            key: records::Key {
+                collection: self.key.collection,
+                id: self.key.id,
+            },
+            schema: self.schema,
+            revision: self.revision,
+            updated_at_ms: self.updated_at_ms,
+            origin: self.origin,
+            deleted: self.deleted,
+            body,
+        })
+    }
+}
+
+#[cfg(feature = "records")]
+fn call_error(code: &str, message: &str) -> serde_json::Value {
+    json!({"err": {"code": code, "message": message}})
+}
+
+#[cfg(feature = "records")]
+fn records_error(error: records::Error) -> serde_json::Value {
+    let code = match error {
+        records::Error::Denied => "denied",
+        records::Error::NotFound => "not-found",
+        records::Error::OverBudget => "over-budget",
+        records::Error::Invalid => "invalid",
+        records::Error::Stale => "stale",
+        records::Error::Io => "io",
+        records::Error::Unsupported => "unsupported",
+    };
+    call_error(code, "records call failed")
+}
+
+#[cfg(feature = "records")]
+fn records_root() -> PathBuf {
+    if let Some(path) = std::env::var_os("MYCELIUM_RECORDS_ROOT") {
+        return PathBuf::from(path);
+    }
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default()
+        .join(".local/share/fungos/records")
+}
+
+#[cfg(feature = "records")]
+fn records_api(
+    site: &StaticSurface,
+    body: &[u8],
+    origin: Option<&str>,
+    stream: &mut TcpStream,
+) -> Result<()> {
+    let Ok(request) = serde_json::from_slice::<WireCallRequest>(body) else {
+        return respond(
+            stream,
+            400,
+            "application/json",
+            br#"{"error":"malformed call"}"#,
+            origin,
+        );
+    };
+    if request.v != 1 {
+        return json_response(
+            stream,
+            200,
+            &json!({"v": 1, "id": request.call.id, "result": call_error("invalid", "unsupported protocol version")}),
+            origin,
+        );
+    }
+    if request.call.interface != "soil:records" {
+        return json_response(
+            stream,
+            200,
+            &json!({"v": 1, "id": request.call.id, "result": call_error("unsupported", "this surface serves soil:records only")}),
+            origin,
+        );
+    }
+    let Some(records_decl) = site.records.as_ref() else {
+        return json_response(
+            stream,
+            200,
+            &json!({"v": 1, "id": request.call.id, "result": call_error("unsupported", "no records declaration")}),
+            origin,
+        );
+    };
+    let Some(book) = records_decl.book.clone() else {
+        return json_response(
+            stream,
+            200,
+            &json!({"v": 1, "id": request.call.id, "result": call_error("unsupported", "records.book is not declared")}),
+            origin,
+        );
+    };
+    let declared = records_decl.names();
+
+    // The collection is part of every call's key/params; open the host once the
+    // collection is known so a records Spore can serve more than one schema.
+    let collection_hint = request
+        .call
+        .params
+        .get("collection")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            request
+                .call
+                .params
+                .get("key")
+                .and_then(|key| key.get("collection"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .or_else(|| {
+            request
+                .call
+                .params
+                .get("entry")
+                .and_then(|entry| entry.get("key"))
+                .and_then(|key| key.get("collection"))
+                .and_then(serde_json::Value::as_str)
+        })
+        .unwrap_or("");
+    if !declared.iter().any(|name| *name == collection_hint) {
+        return json_response(
+            stream,
+            200,
+            &json!({"v": 1, "id": request.call.id, "result": call_error("invalid", "collection is not declared by this Spore")}),
+            origin,
+        );
+    }
+    let mut host = match RecordsBookHost::open(records_root(), book, collection_hint) {
+        Ok(host) => host,
+        Err(error) => {
+            return json_response(
+                stream,
+                200,
+                &json!({"v": 1, "id": request.call.id, "result": call_error("io", &error.to_string())}),
+                origin,
+            );
+        }
+    };
+
+    let result = (|| -> serde_json::Value {
+        match request.call.function.as_str() {
+            "scan" => {
+                #[derive(serde::Deserialize)]
+                struct Params {
+                    #[serde(default)]
+                    cursor: Option<String>,
+                    #[serde(default)]
+                    limit: Option<u32>,
+                }
+                let Ok(params) = serde_json::from_value::<Params>(request.call.params.clone())
+                else {
+                    return call_error("invalid", "scan params");
+                };
+                let limit = params.limit.unwrap_or(50).clamp(1, 200);
+                match records::Host::scan(
+                    &mut host,
+                    collection_hint.to_owned(),
+                    params.cursor,
+                    limit,
+                ) {
+                    Ok(page) => {
+                        json!({"ok": {"entries": page.entries.into_iter().map(WireEntry::from_entry).collect::<Vec<_>>(), "next": page.next}})
+                    }
+                    Err(error) => records_error(error),
+                }
+            }
+            "query" => {
+                #[derive(serde::Deserialize)]
+                struct Params {
+                    #[serde(default)]
+                    prefix: Option<String>,
+                    #[serde(default)]
+                    filters: Vec<WireFilter>,
+                    #[serde(default)]
+                    fields: Vec<String>,
+                    #[serde(default)]
+                    cursor: Option<String>,
+                    #[serde(default)]
+                    limit: Option<u32>,
+                }
+                let Ok(params) = serde_json::from_value::<Params>(request.call.params.clone())
+                else {
+                    return call_error("invalid", "query params");
+                };
+                let mut filters = Vec::with_capacity(params.filters.len());
+                for filter in params.filters {
+                    let op = match filter.op.as_str() {
+                        "eq" => records::FilterOp::Eq,
+                        "prefix" => records::FilterOp::Prefix,
+                        "contains" => records::FilterOp::Contains,
+                        "exists" => records::FilterOp::Exists,
+                        "lt" => records::FilterOp::Lt,
+                        "lte" => records::FilterOp::Lte,
+                        "gt" => records::FilterOp::Gt,
+                        "gte" => records::FilterOp::Gte,
+                        _ => return call_error("invalid", "unknown query filter"),
+                    };
+                    filters.push(records::Filter {
+                        field: filter.field,
+                        op,
+                        value: filter.value,
+                    });
+                }
+                let spec = records::QuerySpec {
+                    collection: collection_hint.to_owned(),
+                    prefix: params.prefix,
+                    filters,
+                    fields: params.fields,
+                    cursor: params.cursor,
+                    limit: params.limit.unwrap_or(50).clamp(1, 200),
+                };
+                match records::Host::query(&mut host, spec) {
+                    Ok(page) => {
+                        json!({"ok": {"entries": page.entries.into_iter().map(WireEntry::from_entry).collect::<Vec<_>>(), "next": page.next}})
+                    }
+                    Err(error) => records_error(error),
+                }
+            }
+            "get" => {
+                #[derive(serde::Deserialize)]
+                struct Params {
+                    key: WireKey,
+                }
+                let Ok(params) = serde_json::from_value::<Params>(request.call.params.clone())
+                else {
+                    return call_error("invalid", "get params");
+                };
+                match records::Host::get(
+                    &mut host,
+                    records::Key {
+                        collection: params.key.collection,
+                        id: params.key.id,
+                    },
+                ) {
+                    Ok(entry) => json!({"ok": WireEntry::from_entry(entry)}),
+                    Err(error) => records_error(error),
+                }
+            }
+            "upsert" => {
+                if !site.records_writable {
+                    return call_error("denied", "soil:records.write is not granted");
+                }
+                #[derive(serde::Deserialize)]
+                struct Params {
+                    entry: WireEntry,
+                }
+                let Ok(params) = serde_json::from_value::<Params>(request.call.params.clone())
+                else {
+                    return call_error("invalid", "upsert params");
+                };
+                let Ok(entry) = params.entry.into_entry() else {
+                    return call_error("invalid", "entry body");
+                };
+                match records::Host::upsert(&mut host, entry) {
+                    Ok(entry) => json!({"ok": WireEntry::from_entry(entry)}),
+                    Err(error) => records_error(error),
+                }
+            }
+            "compare-and-swap" => {
+                if !site.records_writable {
+                    return call_error("denied", "soil:records.write is not granted");
+                }
+                #[derive(serde::Deserialize)]
+                struct Params {
+                    key: WireKey,
+                    #[serde(default)]
+                    expected: Option<WireVersion>,
+                    entry: WireEntry,
+                }
+                let Ok(params) = serde_json::from_value::<Params>(request.call.params.clone())
+                else {
+                    return call_error("invalid", "compare-and-swap params");
+                };
+                let Ok(entry) = params.entry.into_entry() else {
+                    return call_error("invalid", "entry body");
+                };
+                let expected = params.expected.map(|version| records::Version {
+                    revision: version.revision,
+                    origin: version.origin,
+                });
+                let key = records::Key {
+                    collection: params.key.collection,
+                    id: params.key.id,
+                };
+                match records::Host::compare_and_swap(&mut host, key, expected, entry) {
+                    Ok(result) => {
+                        json!({"ok": {"applied": result.applied, "entry": WireEntry::from_entry(result.entry)}})
+                    }
+                    Err(error) => records_error(error),
+                }
+            }
+            "delete" => {
+                if !site.records_writable {
+                    return call_error("denied", "soil:records.write is not granted");
+                }
+                #[derive(serde::Deserialize)]
+                struct Params {
+                    key: WireKey,
+                }
+                let Ok(params) = serde_json::from_value::<Params>(request.call.params.clone())
+                else {
+                    return call_error("invalid", "delete params");
+                };
+                match records::Host::delete(
+                    &mut host,
+                    records::Key {
+                        collection: params.key.collection,
+                        id: params.key.id,
+                    },
+                ) {
+                    Ok(()) => json!({"ok": null}),
+                    Err(error) => records_error(error),
+                }
+            }
+            _ => call_error("unsupported", "unsupported soil:records function"),
+        }
+    })();
+    json_response(
+        stream,
+        200,
+        &json!({"v": 1, "id": request.call.id, "result": result}),
+        origin,
+    )
+}
+
+#[cfg(not(feature = "records"))]
+fn records_api(
+    _site: &StaticSurface,
+    _body: &[u8],
+    origin: Option<&str>,
+    stream: &mut TcpStream,
+) -> Result<()> {
+    respond(
+        stream,
+        501,
+        "application/json",
+        br#"{"error":"records feature is not built"}"#,
+        origin,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -765,7 +1218,7 @@ fn cors(origin: Option<&str>) -> String {
         .is_some_and(|host| host == "myc" || host.ends_with(".myc"));
     if allowed {
         format!(
-            "Access-Control-Allow-Origin: {origin}\r\nAccess-Control-Allow-Methods: GET, PUT, DELETE, OPTIONS\r\nAccess-Control-Allow-Headers: content-type\r\nVary: Origin\r\n"
+            "Access-Control-Allow-Origin: {origin}\r\nAccess-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS\r\nAccess-Control-Allow-Headers: content-type\r\nVary: Origin\r\n"
         )
     } else {
         String::new()

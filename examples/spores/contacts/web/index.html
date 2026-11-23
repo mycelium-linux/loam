@@ -13,13 +13,18 @@
 <body>
   <main class="contacts-page">
     <header class="contacts-head">
-      <div><p class="eyebrow">Personal</p><h1>People</h1><p id="status">Loading contacts…</p></div>
-      <div><span class="contact-count" id="count">0 contacts</span> <button id="new-contact" type="button">New contact</button></div>
+      <div><p class="eyebrow">Personal</p><h1>People</h1><p id="status">Loading records…</p></div>
+      <div class="contacts-head-tools">
+        <input id="contact-search" type="search" placeholder="Search names" aria-label="Search contacts by name" autocomplete="off">
+        <span class="contact-count" id="count">0 contacts</span>
+        <button id="load-more" type="button" hidden>Load more</button>
+        <button id="new-contact" type="button">New contact</button>
+      </div>
     </header>
     <div class="contacts-grid">
       <aside class="contacts-list" id="contact-list" aria-label="Contacts"></aside>
       <section class="contact-detail" id="detail">
-        <div class="contact-empty" id="empty"><strong>Your contacts live on this Mac.</strong><br>Select a person or add one. The book is stored in <code>contacts/contacts.json</code>.</div>
+        <div class="contact-empty" id="empty"><strong>Your contacts live in the Soil records book.</strong><br>Select a person or add one. Pages load from <code>soil:records</code> as you go.</div>
         <div id="form" hidden>
           <h2 id="detail-name">Contact</h2>
           <p class="contact-sub" id="detail-sub"></p>
@@ -30,7 +35,15 @@
             <label>Role<input id="field-role" autocomplete="off"></label>
             <label class="wide">Note<textarea id="field-note"></textarea></label>
           </div>
-          <div class="contact-actions"><button id="save-contact" type="button">Save contact</button><button id="delete-contact" type="button">Delete</button></div>
+          <div class="contact-tags" id="tag-editor" hidden>
+            <p class="tag-label">Tags</p>
+            <div class="tag-list" id="tag-list"></div>
+            <form class="tag-form" id="tag-form">
+              <input id="tag-input" placeholder="Add a tag" autocomplete="off" aria-label="Add a tag">
+              <button type="submit">Add</button>
+            </form>
+          </div>
+          <div class="contact-actions"><button id="reload-contacts" type="button" hidden>Reload</button><button id="delete-contact" type="button">Delete</button></div>
         </div>
       </section>
     </div>

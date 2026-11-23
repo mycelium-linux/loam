@@ -6,7 +6,7 @@ Three manifest-declared web surfaces used by `loamd` and the local frontdoor:
 |---|---|---|
 | `home` | `home.myc` | desktop shell; iframes `notes.myc`, `contacts.myc`, `files.myc` |
 | `notes` | `notes.myc` | Markdown under `<desktop>/notes/` |
-| `contacts` | `contacts.myc` | `<desktop>/contacts/contacts.json` |
+| `contacts` | `contacts.myc` | `soil:records` book `personal/avery/contacts` |
 | `agent` | `agent.myc` | right-edge agent sidebar; embed it in any Spore |
 
 Install a package by copying its directory under `~/.mycelium/spores/` and run:
@@ -58,6 +58,30 @@ desktop may carry `<desktop>/desktop.json` for its display name and kind.
 `home.myc` keeps the active desktop in local storage and appends `?desktop=` to
 its iframe URLs. The app only ever sees paths inside that desktop, so the
 desktop can be renamed or moved without changing the app's internal paths.
+
+## Records surfaces
+
+A web Spore may declare a records book:
+
+```toml
+[records]
+book = "personal/avery/contacts"
+collection = "contact"
+```
+
+`loamd` then serves the canonical `soil:records` call shape at
+`POST /v1/call`:
+
+```json
+{"v":1,"call":{"id":"7","interface":"soil:records","function":"scan",
+                "params":{"collection":"contact","limit":50}}}
+```
+
+Supported functions are `scan`, `query`, `get`, `upsert`, `compare-and-swap`,
+and `delete`. `query` takes the canonical filters/cursor/limit shape, which is
+what the People search box uses for paged name search. Reads require a records
+grant; writes require `soil:records.write`. The page only sees the declared
+collection and never names the book itself.
 
 The pages are static assets and talk only to their own origin. A desktop shell
 embeds them as iframes; the gateway forwards the browser Host as

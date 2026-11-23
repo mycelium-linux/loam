@@ -98,6 +98,7 @@ fn parse_options(args: &[String]) -> Result<Options> {
     let mut records_root = None;
     let mut book = None;
     let mut collection = None;
+    let mut vfs_root = None;
     let mut unibus_config = None;
     let mut web_listen = config.web_listen;
     let mut image_runtime = config.image_runtime;
@@ -149,6 +150,10 @@ fn parse_options(args: &[String]) -> Result<Options> {
             }
             "--collection" => {
                 collection = Some(args.get(i + 1).context("--collection NAME")?.clone());
+                i += 2;
+            }
+            "--vfs-root" => {
+                vfs_root = Some(PathBuf::from(args.get(i + 1).context("--vfs-root DIR")?));
                 i += 2;
             }
             "--unibus-config" => {
@@ -242,6 +247,7 @@ fn parse_options(args: &[String]) -> Result<Options> {
         socket,
         roots,
         records,
+        vfs_root,
         bus,
         max_instances,
         image_runtime,
