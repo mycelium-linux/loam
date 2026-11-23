@@ -16,7 +16,7 @@ allowed = {
     "loam-ble-host",
     "loam-ble-sim",
 }
-allowed_bins = {"loam", "loam-ble-host", "loam-mcp"}
+allowed_bins = {"loam", "loam-ble-host", "loam-mcp", "loamd"}
 forbidden = (
     "soil-lang", "soil-abi", "soil-ui", "soil-layout", "soil-scene",
     "soil-canvas", "soil-terminal", "soil-marbles", "soil-crm",

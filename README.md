@@ -82,6 +82,19 @@ loam doctor                    # print the linked capability profile
 loam help
 ```
 
+`loamd` is the per-user supervisor for command instances:
+
+```sh
+loamd
+loamd start mb --id mb-1 -- ready --json
+loamd list
+loamd logs mb-1
+loamd stop mb-1
+```
+
+It listens on `$XDG_RUNTIME_DIR/loam/loamd.sock` and accepts only peers with the
+daemon's Unix uid. See [`docs/loamd.md`](docs/loamd.md).
+
 Command packages live in the usual roots:
 
 ```text

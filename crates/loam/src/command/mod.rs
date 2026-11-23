@@ -702,6 +702,12 @@ impl CommandRunner {
         self
     }
 
+    /// The engine this runner uses. A supervisor that needs per-instance
+    /// cancellation can keep a clone and call [`wasmtime::Engine::increment_epoch`].
+    pub fn engine(&self) -> &Engine {
+        &self.engine
+    }
+
     pub fn run(&self, entry: &CommandEntry, request: &RunRequest) -> Result<RunOutput> {
         self.run_with_limits(entry, request, RunLimits::from_entry(entry))
     }
