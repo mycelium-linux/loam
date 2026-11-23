@@ -56,6 +56,8 @@ mod command_service;
 pub mod context;
 #[cfg(feature = "wasi")]
 pub mod creds;
+#[cfg(all(unix, feature = "wasi"))]
+pub mod daemon;
 pub mod edit;
 #[cfg(feature = "wasi")]
 mod gateway;
@@ -63,6 +65,8 @@ mod gateway;
 mod host;
 #[cfg(any(feature = "http", feature = "wasi"))]
 pub mod http_host;
+pub mod install;
+pub mod instance;
 #[cfg(feature = "principal")]
 pub mod local_identity;
 pub mod metrics;

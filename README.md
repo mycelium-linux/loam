@@ -43,6 +43,11 @@ First-party native plugins:
 | BLE | `loam-ble-api`, `loam-ble-host`, `loam-ble-sim` | native |
 | Audio + codec | `loam-media` | native |
 
+`soil:process` is a plugin/extra contract in `wit/`. `soil:http` and
+`soil:streams` already live with their opt-in host implementations under
+`crates/loam/wit/`. None of them are linked by the default runner or advertised
+in `loam doctor`.
+
 The runtime also provides WASI p2 and `wasi:http` through Wasmtime:
 
 ```text
@@ -72,11 +77,38 @@ Those are Soil code, Spores, or plugins.
 
 ```sh
 loam run NAME [ARGS...]        # run an installed wasm command
+loam install PATH --root DIR   # verify, compose, warm, install atomically
+loam status --root DIR [--json]
+loam rollback ID --root DIR
 loam surface FILE [--size WxH] # open a native winit + WebGPU surface
 loam edit <op> ... [--json]    # edit a personal source overlay
 loam doctor                    # print the linked capability profile
 loam help
 ```
+
+`loam install` is local-only and source-preserving. It keeps generations and a
+previous digest for rollback:
+
+```sh
+loam install spores/marbles --root ~/.local/share/fungos/commands
+loam status --root ~/.local/share/fungos/commands --json
+loam rollback acme:marbles --root ~/.local/share/fungos/commands
+```
+
+See [`docs/installer.md`](docs/installer.md).
+
+`loamd` is the per-user supervisor for command instances:
+
+```sh
+loamd
+loamd start mb --id mb-1 -- ready --json
+loamd list
+loamd logs mb-1
+loamd stop mb-1
+```
+
+It listens on `$XDG_RUNTIME_DIR/loam/loamd.sock` and accepts only peers with the
+daemon's Unix uid. See [`docs/loamd.md`](docs/loamd.md).
 
 Command packages live in the usual roots:
 
