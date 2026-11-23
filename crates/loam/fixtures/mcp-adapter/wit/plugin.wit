@@ -1,0 +1,6 @@
+package fungos:mcp@0.1.0;
+
+world plugin {
+  export soil:mcp/mcp@0.1.0;
+  import loam:plugin/ipc@0.1.0;
+}

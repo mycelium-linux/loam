@@ -1,0 +1,27 @@
+schema = 1
+
+[spore]
+id = "dev.fungos.mcp"
+name = "mcp"
+title = "MCP"
+version = "0.1.0"
+license = "MIT"
+summary = "MCP capability adapter"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+
+[module]
+path = "module.wasm"
+
+[launch]
+default = "canvas"
+surfaces = ["canvas"]
+
+[plugin]
+sidecar = "bin/loam-mcp"
+
+[grants]
+"loam:plugin" = "0.1.0"
+"soil:mcp" = "0.1.0"

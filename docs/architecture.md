@@ -61,60 +61,95 @@ soil:surface
 soil:ble
 wasi:audio
 soil:codec
-soil:inference
 ```
 
 They are native implementations today. They are still plugins: a build without them still provides the core runtime.
 
+Optional plugin contracts are not linked by the runtime:
+
+```text
+soil:process          wit/soil-process.wit
+soil:http             crates/loam/wit/http
+soil:streams          crates/loam/wit/stream
+```
+
+`soil:process` is the opt-in process/pipe contract, `soil:http` is bounded
+host-mediated HTTP, and `soil:streams` is the host-accepted byte-stream queue.
+The HTTP and stream contracts stay beside their host implementations rather than
+being duplicated at the root. A host that wants one links it explicitly; the
+default `loam run` profile does not expose them.
+
 ## Plugin forms
+
+A plugin is a role, not a package type. It is a Spore that exports one or more
+capability interfaces. The same manifest, lock and signature cover it.
 
 ### Wasm plugin
 
 A component that exports the capability WIT:
 
 ```text
-guest imports soil:ble@1.2.0
+guest imports soil:mcp/mcp@0.1.0
         ↓
-loam finds a plugin exporting soil:ble@1.2.0
+loam indexes a Spore exporting soil:mcp/mcp@0.1.0
         ↓
-loam instantiates it and links its exports as guest imports
+loam instantiates the provider and links its exports
 ```
 
-The plugin may import a small stable plugin host surface for logging, IPC, clocks, and randomness. It may import core capabilities only if its signed grant allows them.
+The provider may import a small stable host surface for IPC. It may import core
+capabilities only if its own signed grant allows them.
 
 ### Native sidecar
 
-Hardware capabilities use a native process plus a generated wasm adapter:
+A native implementation stays behind a wasm adapter:
 
 ```text
-native BLE service
-        ↕ plugin IPC
-wasm adapter exporting soil:ble
+native MCP service
+        ↕ loam:plugin/ipc (line-delimited JSON)
+wasm adapter exporting soil:mcp
         ↕ component linking
-guest importing soil:ble
+guest importing soil:mcp
 ```
 
-The adapter is generated from WIT. The native service can be written in any language that can speak the plugin protocol.
+The adapter is still a Spore and still has grants. The sidecar is not a Spore:
+it runs with the user's privileges and must be installed as a trusted native
+package. The package format is shared; the execution model is not.
 
 ## Plugin manifest
+
+There is no `plugin.toml`. A plugin Spore uses the normal `spore.toml`:
 
 ```toml
 schema = 1
 
-[plugin]
-id = "dev.fungos.ble"
+[spore]
+id = "dev.fungos.mcp"
+name = "mcp"
 version = "0.1.0"
-abi = "loam-plugin/1"
-provides = ["soil:ble@1.2.0"]
-requires = ["loam:plugin/ipc"]
+license = "MIT"
+summary = "MCP capability adapter"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+
+[module]
+path = "module.wasm"
 
 [launch]
-mode = "process"          # or "wasm"
-command = "loam-ble-host"
-transport = "unix"
+default = "canvas"
+surfaces = ["canvas"]
+
+[plugin]
+sidecar = "bin/loam-mcp"    # optional; relative to the package
+
+[grants]
+"loam:plugin" = "0.1.0"
 ```
 
-The signed package binds the plugin id, version, module hash, provided interfaces, and requested grants. The runtime refuses duplicate providers, version mismatches, and undeclared imports.
+Exports are read from the module, not copied into the manifest. `spore.lock`
+covers the module and sidecar bytes. The runtime refuses duplicate providers,
+unsealed packages, and undeclared imports.
 
 ## Linking rules
 
@@ -124,14 +159,15 @@ For each guest component:
 2. Check them against the signed grant.
 3. Resolve each import:
    - core linker
-   - installed plugin
    - WASI
-4. Refuse unknown imports with a named error.
-5. Instantiate plugins in dependency order.
-6. Link plugin exports to the guest.
+   - an installed Spore export
+4. Refuse duplicate providers and unknown imports.
+5. Instantiate providers in dependency order.
+6. Link provider exports to the guest.
 7. Run.
 
-There is no compile-time feature list that decides this. The component and the installed registry do.
+There is no compile-time feature list that decides this. The component and the
+installed registry do. **Exports are declarations, not grants.**
 
 ## Packaging
 
@@ -144,7 +180,7 @@ command.grant.sig
 module.wasm
 ```
 
-`loam-spore` owns the package identity, lock, manifest, and signature checks. `loam-command` owns the installed command registry and the wasm command runner.
+`loam::spore` owns package identity, lock, manifest, and signature checks. `loam::command` owns the installed command registry and the wasm command runner.
 
 ## Non-goals
 

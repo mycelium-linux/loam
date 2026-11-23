@@ -8,8 +8,8 @@ Read `docs/architecture.md` before changing runtime code.
 - One binary: `loam`.
 - Core: `soil:vfs`, `soil:vfs-mut`, `soil:records`, `soil:unibus`,
   `soil:surface`, `soil:principal`, `soil:creds`, `soil:index`.
-- First-party plugins: `loam-surface`, `loam-ble`, `loam-media`,
-  `loam-inference`.
+- First-party plugins: `loam-surface`, `loam-ble`, `loam-media`, `loam-mcp`.
+- `soil:inference` is a wasm plugin contract, not a core host implementation.
 - Everything else belongs in Soil, a Spore, or an external plugin.
 
 ## Do not add
@@ -26,8 +26,10 @@ Read `docs/architecture.md` before changing runtime code.
   architecture allowlist.
 - No dependency without a capability reason.
 - Do not reintroduce deleted crates from `archive/pre-loam` without a port plan.
+- A plugin is a Spore that exports WIT; there is no `plugin.toml`.
 - Native hardware goes behind a first-party plugin or sidecar, not the kernel.
-- Keep the plugin boundary real: linking is not granting.
+- Keep the plugin boundary real: linking is not granting. Exports are
+  declarations, not grants.
 
 ## Verify
 
@@ -39,4 +41,5 @@ cargo test --workspace
 scripts/check-architecture.sh
 scripts/check-wit.sh
 scripts/check-surface-fixture.sh
+scripts/build-mcp-plugin.sh
 ```
