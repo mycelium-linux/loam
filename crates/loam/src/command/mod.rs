@@ -14,8 +14,8 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
-use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder};
 use wasmtime::component::Resource;
+use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder};
 use wasmtime_wasi::{
     WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView,
     p2::{
@@ -148,7 +148,16 @@ pub mod plugin_ipc;
 
 /// What the runner can link for a command. A package that requires anything
 /// else is refused by the registry instead of failing at instantiation.
-pub const RUNNER_CAPABILITIES: &[&str] = &["soil:records", "soil:time", "soil:unibus", "soil:mcp", "soil:vfs", "soil:vfs-mut", "soil:index"];
+pub const RUNNER_CAPABILITIES: &[&str] = &[
+    "soil:records",
+    "soil:time",
+    "soil:unibus",
+    "soil:mcp",
+    "soil:http",
+    "soil:vfs",
+    "soil:vfs-mut",
+    "soil:index",
+];
 
 #[derive(Debug, Clone)]
 pub struct CommandRegistry {
@@ -770,6 +779,8 @@ pub struct CommandRunner {
     records: Option<RecordsBinding>,
     /// Workspace root for `soil:vfs` / `soil:vfs-mut` / `soil:index`.
     vfs_root: Option<PathBuf>,
+    /// Origins a command may reach through `soil:http`. Empty means none.
+    http_origins: Vec<String>,
     /// The bus a command may publish on. Linked (possibly as an unavailable
     /// bus) for a command that declares `soil:unibus`, so a missing hub costs
     /// a publish, not the command run.
@@ -787,6 +798,7 @@ impl CommandRunner {
             plugins: None,
             records,
             vfs_root: None,
+            http_origins: Vec::new(),
             bus,
             components: Mutex::new(BTreeMap::new()),
         })
@@ -801,6 +813,12 @@ impl CommandRunner {
     /// Link `soil:vfs`, `soil:vfs-mut` and `soil:index` from this workspace.
     pub fn with_vfs_root(mut self, root: impl Into<PathBuf>) -> Self {
         self.vfs_root = Some(root.into());
+        self
+    }
+
+    /// Link `soil:http` for commands that declare it.
+    pub fn with_http_origins(mut self, origins: impl IntoIterator<Item = String>) -> Self {
+        self.http_origins = origins.into_iter().collect();
         self
     }
 
@@ -886,6 +904,22 @@ impl CommandRunner {
         if bus.is_some() {
             crate::unibus::add_to_linker::<Host>(&mut linker)?;
         }
+        let http = if entry.requires.iter().any(|cap| cap == "soil:http")
+            || !self.http_origins.is_empty()
+        {
+            let policy = crate::http_host::HttpPolicy::new(
+                self.http_origins.iter().cloned(),
+                16 * 1024 * 1024,
+                Duration::from_secs(120),
+            )?;
+            crate::http_host::api::add_to_linker::<Host, wasmtime::component::HasSelf<Host>>(
+                &mut linker,
+                |host| host,
+            )?;
+            Some(crate::http_host::HttpHost::new(policy))
+        } else {
+            None
+        };
 
         let stdout = MemoryOutputPipe::new(limits.max_stdout_bytes);
         let stderr = MemoryOutputPipe::new(limits.max_stderr_bytes);
@@ -923,6 +957,7 @@ impl CommandRunner {
                 records,
                 vfs,
                 bus,
+                http,
                 ipc,
             },
         );
@@ -982,6 +1017,8 @@ struct Host {
     /// bus. The command publishes through this; the records host never learns
     /// the bus exists, which is what keeps the two capabilities independent.
     bus: Option<crate::unibus::BusHost>,
+    /// `soil:http`, when the command declared it. The policy is the grant.
+    http: Option<crate::http_host::HttpHost>,
     /// `loam:plugin/ipc` backend, when a plugin provider named a sidecar.
     ipc: Option<Box<dyn crate::command::plugin_ipc::Backend>>,
 }
@@ -1002,6 +1039,98 @@ impl WasiView for Host {
             ctx: &mut self.wasi,
             table: &mut self.table,
         }
+    }
+}
+
+impl crate::http_host::api::Host for Host {
+    fn fetch(
+        &mut self,
+        request: crate::http_host::api::Request,
+    ) -> std::result::Result<crate::http_host::api::Response, crate::http_host::api::Error> {
+        let http = self
+            .http
+            .as_mut()
+            .ok_or(crate::http_host::api::Error::Unsupported)?;
+        crate::http_host::api::Host::fetch(http, request)
+    }
+
+    fn open(
+        &mut self,
+        request: crate::http_host::api::Request,
+    ) -> std::result::Result<
+        wasmtime::component::Resource<crate::http_host::api::ResponseStream>,
+        crate::http_host::api::Error,
+    > {
+        let http = self
+            .http
+            .as_mut()
+            .ok_or(crate::http_host::api::Error::Unsupported)?;
+        crate::http_host::api::Host::open(http, request)
+    }
+}
+
+impl crate::http_host::api::HostResponseStream for Host {
+    fn status(
+        &mut self,
+        stream: wasmtime::component::Resource<crate::http_host::api::ResponseStream>,
+    ) -> u16 {
+        self.http
+            .as_mut()
+            .map(|http| crate::http_host::api::HostResponseStream::status(http, stream))
+            .unwrap_or_default()
+    }
+
+    fn final_url(
+        &mut self,
+        stream: wasmtime::component::Resource<crate::http_host::api::ResponseStream>,
+    ) -> String {
+        self.http
+            .as_mut()
+            .map(|http| crate::http_host::api::HostResponseStream::final_url(http, stream))
+            .unwrap_or_default()
+    }
+
+    fn headers(
+        &mut self,
+        stream: wasmtime::component::Resource<crate::http_host::api::ResponseStream>,
+    ) -> Vec<crate::http_host::api::Header> {
+        self.http
+            .as_mut()
+            .map(|http| crate::http_host::api::HostResponseStream::headers(http, stream))
+            .unwrap_or_default()
+    }
+
+    fn read(
+        &mut self,
+        stream: wasmtime::component::Resource<crate::http_host::api::ResponseStream>,
+        max: u32,
+    ) -> std::result::Result<Option<Vec<u8>>, crate::http_host::api::Error> {
+        let http = self
+            .http
+            .as_mut()
+            .ok_or(crate::http_host::api::Error::Unsupported)?;
+        crate::http_host::api::HostResponseStream::read(http, stream, max)
+    }
+
+    fn close(
+        &mut self,
+        stream: wasmtime::component::Resource<crate::http_host::api::ResponseStream>,
+    ) -> std::result::Result<(), crate::http_host::api::Error> {
+        let http = self
+            .http
+            .as_mut()
+            .ok_or(crate::http_host::api::Error::Unsupported)?;
+        crate::http_host::api::HostResponseStream::close(http, stream)
+    }
+
+    fn drop(
+        &mut self,
+        stream: wasmtime::component::Resource<crate::http_host::api::ResponseStream>,
+    ) -> std::result::Result<(), wasmtime::Error> {
+        if let Some(http) = self.http.as_mut() {
+            return crate::http_host::api::HostResponseStream::drop(http, stream);
+        }
+        Ok(())
     }
 }
 

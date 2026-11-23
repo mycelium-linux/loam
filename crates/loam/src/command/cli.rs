@@ -66,6 +66,7 @@ fn run_as(args: Vec<String>, subcommand: &[&str]) -> Result<i32> {
     let mut collection = None;
     let mut vfs_root: Option<PathBuf> = None;
     let mut unibus_config: Option<PathBuf> = None;
+    let mut http_origins: Vec<String> = Vec::new();
     // Nothing is inherited: a command gets exactly the variables a caller names.
     let mut env = Vec::new();
     let mut list = false;
@@ -131,6 +132,10 @@ fn run_as(args: Vec<String>, subcommand: &[&str]) -> Result<i32> {
                 unibus_config = Some(PathBuf::from(
                     args.get(i + 1).context("--unibus-config FILE")?,
                 ));
+                i += 2;
+            }
+            "--http-allow" => {
+                http_origins.push(args.get(i + 1).context("--http-allow ORIGIN")?.clone());
                 i += 2;
             }
             "--list" => {
@@ -259,18 +264,18 @@ fn run_as(args: Vec<String>, subcommand: &[&str]) -> Result<i32> {
         Some(root) => runner.with_vfs_root(root),
         None => runner,
     };
-    let output = runner
-        .run(
-            &entry,
-            &RunRequest {
-                args: args[i + 1..].to_vec(),
-                stdin,
-                // Commands do not inherit the host environment; `--env` is the only
-                // way a variable reaches one.
-                env,
-                cwd: None,
-            },
-        )?;
+    let runner = runner.with_http_origins(http_origins);
+    let output = runner.run(
+        &entry,
+        &RunRequest {
+            args: args[i + 1..].to_vec(),
+            stdin,
+            // Commands do not inherit the host environment; `--env` is the only
+            // way a variable reaches one.
+            env,
+            cwd: None,
+        },
+    )?;
     std::io::stdout().write_all(&output.stdout)?;
     std::io::stderr().write_all(&output.stderr)?;
     if output.code != 0 {
