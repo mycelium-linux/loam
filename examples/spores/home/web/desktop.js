@@ -24,6 +24,7 @@
     const el = windows.get(kind);
     if (!el) return;
     el.hidden = false;
+    el.classList.add('is-open');
     const frame = el.querySelector('iframe[data-src]');
     if (frame && !frame.src) frame.src = frame.dataset.src;
     focusWindow(el);
@@ -33,6 +34,7 @@
     const el = windows.get(kind);
     if (!el) return;
     el.hidden = true;
+    el.classList.remove('is-open');
     const frame = el.querySelector('iframe');
     if (frame) frame.src = 'about:blank';
   }
