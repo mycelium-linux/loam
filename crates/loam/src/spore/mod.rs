@@ -1125,9 +1125,16 @@ impl Manifest {
                 ));
             }
             for name in names {
-                if name.trim().is_empty() || !name.contains('/') {
+                // A collection is the Spore-defined namespace in the WIT
+                // (`contact`, `worklog.event`), not the schema id. The schema
+                // travels on each entry and is validated by the records host.
+                if name.trim().is_empty()
+                    || !name
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '/' | '.' | '_' | '-'))
+                {
                     return Err(Error::Invalid(format!(
-                        "records collection {name:?} is not a schema id (area/name@version)"
+                        "records collection {name:?} is not a collection name"
                     )));
                 }
             }

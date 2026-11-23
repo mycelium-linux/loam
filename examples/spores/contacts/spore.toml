@@ -5,7 +5,7 @@ id = "org.mycelium.contacts"
 name = "contacts"
 version = "0.1.0"
 license = "Apache-2.0 OR MIT"
-summary = "Personal contacts over the workspace VFS"
+summary = "Personal contacts over the Soil records book"
 
 [engine]
 soil = ">=0.1"
@@ -20,8 +20,9 @@ name = "web"
 kind = "web"
 entry = "web/index.html"
 
-[web]
-vfs_root = "contacts"
+[records]
+book = "personal/avery/contacts"
+collection = "contact"
 
 [anycast]
 name = "contacts"
@@ -30,12 +31,12 @@ alpns = ["soil/http/1"]
 ttl_secs = 240
 
 [grants]
-"soil:vfs" = "read the personal contacts book from the workspace"
-"soil:vfs-mut" = "save personal contacts in the workspace"
+"soil:records.read" = "read contacts from the personal records book"
+"soil:records.write" = "save individual contacts with compare-and-swap"
 
 [denied]
 "soil:http" = ["contact data has no network authority"]
-"wasi:filesystem" = ["the host owns the contacts namespace"]
+"wasi:filesystem" = ["the host owns the records store"]
 
 [presentation]
 badge = "C"

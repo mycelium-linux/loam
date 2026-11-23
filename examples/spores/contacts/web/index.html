@@ -13,13 +13,13 @@
 <body>
   <main class="contacts-page">
     <header class="contacts-head">
-      <div><p class="eyebrow">Personal</p><h1>People</h1><p id="status">Loading contacts…</p></div>
-      <div><span class="contact-count" id="count">0 contacts</span> <button id="new-contact" type="button">New contact</button></div>
+      <div><p class="eyebrow">Personal</p><h1>People</h1><p id="status">Loading records…</p></div>
+      <div><span class="contact-count" id="count">0 contacts</span> <button id="load-more" type="button" hidden>Load more</button> <button id="new-contact" type="button">New contact</button></div>
     </header>
     <div class="contacts-grid">
       <aside class="contacts-list" id="contact-list" aria-label="Contacts"></aside>
       <section class="contact-detail" id="detail">
-        <div class="contact-empty" id="empty"><strong>Your contacts live on this Mac.</strong><br>Select a person or add one. The book is stored in <code>contacts/contacts.json</code>.</div>
+        <div class="contact-empty" id="empty"><strong>Your contacts live in the Soil records book.</strong><br>Select a person or add one. Pages load from <code>soil:records</code> as you go.</div>
         <div id="form" hidden>
           <h2 id="detail-name">Contact</h2>
           <p class="contact-sub" id="detail-sub"></p>
