@@ -21,9 +21,23 @@ soil:index            derived VFS index
 soil:ble              Bluetooth LE host
 wasi:audio            draft bounded PCM sink
 soil:codec            audio/image codec boundary
-soil:inference        model/tool/completion host
 soil:mcp              generic MCP catalog and tool invocation
 ```
+
+## Plugin / extra
+
+Contracts a host or plugin may provide, but `loam` does not link by default:
+
+```text
+soil:process          wit/soil-process.wit
+soil:http             crates/loam/wit/http/soil-http.wit
+soil:streams          crates/loam/wit/stream/stream.wit
+```
+
+`soil:http` and `soil:streams` already live beside their opt-in host
+implementations, so they are not duplicated here. They stay out of `loam doctor`
+and the runner's capability profile. Supplying one is an explicit host/plugin
+decision, not an ambient grant.
 
 ## Runtime support
 
@@ -56,7 +70,7 @@ wasi:http
 These are Soil code, Spores, optional third-party plugins, or WASI equivalents:
 
 ```text
-soil:http, soil:net, soil:stream       -> wasi:http, wasi:sockets, wasi:io
+soil:net                              -> wasi:sockets
 soil:time                              -> wasi:clocks at the core edge
 soil:canvas, soil:scene, soil:view     -> UI is Soil
 soil:terminal*                         -> terminal Spore/plugin

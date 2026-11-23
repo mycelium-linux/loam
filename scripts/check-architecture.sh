@@ -10,21 +10,13 @@ import sys
 
 allowed = {
     "loam",
-    "loam-cli",
-    "loam-command",
-    "loam-spore",
     "loam-surface",
-    "loam-codec",
-    "loam-inference",
-    "loam-inference-host",
-    "loam-scrub",
-    "loam-audio",
+    "loam-media",
     "loam-ble-api",
     "loam-ble-host",
     "loam-ble-sim",
-    "loam-mcp",
 }
-allowed_bins = {"loam", "loam-ble-host", "loam-mcp"}
+allowed_bins = {"loam", "loam-ble-host", "loam-mcp", "loamd"}
 forbidden = (
     "soil-lang", "soil-abi", "soil-ui", "soil-layout", "soil-scene",
     "soil-canvas", "soil-terminal", "soil-marbles", "soil-crm",

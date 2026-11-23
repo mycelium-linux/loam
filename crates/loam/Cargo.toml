@@ -9,6 +9,20 @@ publish = false
 [lib]
 name = "soil"
 
+[[bin]]
+name = "loam"
+path = "src/bin/loam.rs"
+required-features = ["surface"]
+
+[[bin]]
+name = "loam-mcp"
+path = "src/bin/loam-mcp.rs"
+
+[[bin]]
+name = "loamd"
+path = "src/bin/loamd.rs"
+required-features = ["wasi"]
+
 [features]
 # Everything a host can be, which is what the `soil` front door links.
 default = [
@@ -26,7 +40,7 @@ default = [
 # picks the subset it actually grants.
 vfs = ["dep:blake3", "dep:fungos-vfs", "dep:regex", "dep:rusqlite"]
 records = ["dep:fungos-records"]
-principal = ["dep:libc", "dep:serde", "dep:mycelium-peer-protocol"]
+principal = ["dep:libc", "dep:mycelium-peer-protocol"]
 # A principal verified by Mycelium identity rather than an OIDC claim set.
 mycelium = ["principal", "dep:mycelium-peer-protocol"]
 http = [
@@ -42,7 +56,7 @@ http = [
     "dep:wasmtime-wasi",
 ]
 unibus = ["dep:unibus", "dep:unibus-sdk"]
-creds = ["dep:base64", "dep:ed25519-dalek", "dep:hmac", "dep:sha2", "dep:tempfile"]
+creds = ["dep:base64", "dep:hmac"]
 # The WASI p2 profile around the capabilities: `wasi:http` in and out,
 # clocks, filesystem, sockets, the credential and bus sessions, and the policy
 # that bounds what a preopen or a socket may reach. It is the part that turns a
@@ -61,16 +75,21 @@ wasi = [
 # The embedding models `soil:index` reaches for, and the remote alternative.
 model2vec = ["vfs", "dep:model2vec-rs"]
 remote = ["vfs"]
+surface = ["dep:loam-surface"]
 
 [dependencies]
-soil-codec = { package = "loam-codec", path = "../loam-codec" }
-soil-inference-host = { package = "loam-inference-host", path = "../loam-inference-host" }
+loam-media = { path = "../loam-media" }
+loam-surface = { path = "../loam-surface", optional = true }
 anyhow = "1"
+tar = "0.4"
+toml = "0.8"
+wit-component = "0.247"
+wit-parser = "0.247"
 base64 = { version = "0.22", optional = true }
 blake3 = { version = "1", optional = true }
 bytes = { version = "1", optional = true }
 libc = { version = "0.2", optional = true }
-ed25519-dalek = { version = "2", default-features = false, features = ["std"], optional = true }
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 fungos-records = { workspace = true, optional = true }
 fungos-vfs = { git = "https://github.com/mycelium-linux/fungos-vfs.git", rev = "8ad45a7fb1ce01fbbc6f764d10524baf5a24c0af", optional = true }
 hmac = { version = "0.12", optional = true }
@@ -84,18 +103,20 @@ mycelium-peer-protocol = { git = "https://github.com/ajmwagar/mycelium.git", rev
 percent-encoding = { version = "2", optional = true }
 regex = { version = "1", optional = true }
 rusqlite = { version = "0.41", features = ["bundled"], optional = true }
-serde = { version = "1", features = ["derive"], optional = true }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = { version = "0.10", optional = true }
-tempfile = { version = "3", optional = true }
+sha2 = { version = "0.10" }
+tempfile = { version = "3" }
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"], optional = true }
 tracing = "0.1"
 unibus = { git = "https://github.com/mycelium-linux/unibus.git", rev = "8bf8f79", optional = true }
 unibus-sdk = { git = "https://github.com/mycelium-linux/unibus.git", rev = "8bf8f79", optional = true }
 url = { version = "2", optional = true }
 ureq = { version = "2", features = ["json"] }
+wasm-compose = "0.261"
 wasmtime = { version = "50", default-features = false, features = [
     "anyhow",
+    "cache",
     "component-model",
     "cranelift",
     "runtime",
@@ -109,4 +130,8 @@ wasmtime-wasi-http = { version = "50", default-features = false, features = [
 
 [dev-dependencies]
 tempfile = "3"
+wat = "1"
+
+[target.'cfg(unix)'.dependencies]
+signal-hook = "0.3"
 
