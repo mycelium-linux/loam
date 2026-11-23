@@ -19,6 +19,7 @@ use std::{
         net::{UnixListener, UnixStream},
     },
     path::{Path, PathBuf},
+    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
     sync::{
         Arc, Mutex, RwLock,
         atomic::{AtomicBool, Ordering},
@@ -78,6 +79,24 @@ pub enum Request {
     Stop {
         id: String,
     },
+    ImageList,
+    ImagePlan {
+        spore: String,
+    },
+    ImageStart {
+        id: String,
+        spore: String,
+    },
+    ImageEval {
+        id: String,
+        source: String,
+    },
+    ImageStatus {
+        id: String,
+    },
+    ImageStop {
+        id: String,
+    },
     Reload,
     Shutdown,
 }
@@ -89,6 +108,8 @@ pub struct Options {
     pub records: Option<RecordsBinding>,
     pub bus: Option<Arc<dyn Bus>>,
     pub max_instances: usize,
+    /// The live Soil image runtime. `None` means use `soil-image` on PATH.
+    pub image_runtime: Option<PathBuf>,
 }
 
 impl Options {
@@ -99,6 +120,7 @@ impl Options {
             records: None,
             bus: None,
             max_instances: DEFAULT_MAX_INSTANCES,
+            image_runtime: None,
         }
     }
 }
@@ -145,7 +167,9 @@ pub fn serve(options: Options) -> Result<()> {
         records: options.records,
         bus: options.bus,
         max_instances: options.max_instances,
+        image_runtime: options.image_runtime,
         instances: Mutex::new(BTreeMap::new()),
+        images: Mutex::new(BTreeMap::new()),
         shutdown: AtomicBool::new(false),
     });
     let listener = bind_socket(&options.socket)?;
@@ -258,7 +282,9 @@ struct Daemon {
     records: Option<RecordsBinding>,
     bus: Option<Arc<dyn Bus>>,
     max_instances: usize,
+    image_runtime: Option<PathBuf>,
     instances: Mutex<BTreeMap<String, InstanceRecord>>,
+    images: Mutex<BTreeMap<String, ImageRecord>>,
     shutdown: AtomicBool,
 }
 
@@ -283,6 +309,71 @@ struct InstanceRecord {
     cancel: Option<Engine>,
     output: Option<RunOutput>,
     error: Option<String>,
+}
+
+struct ImageRecord {
+    id: String,
+    spore: String,
+    plan: Value,
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+    started_ms: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct ImageView {
+    id: String,
+    spore: String,
+    started_ms: u64,
+    imports: Vec<String>,
+    refused: Vec<String>,
+}
+
+impl ImageRecord {
+    fn view(&self) -> ImageView {
+        ImageView {
+            id: self.id.clone(),
+            spore: self.spore.clone(),
+            started_ms: self.started_ms,
+            imports: self
+                .plan
+                .get("imports")
+                .and_then(Value::as_array)
+                .map(|imports| {
+                    imports
+                        .iter()
+                        .filter_map(|import| import.get("interface").and_then(Value::as_str))
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            refused: self
+                .plan
+                .get("refused")
+                .and_then(Value::as_array)
+                .map(|refused| {
+                    refused
+                        .iter()
+                        .filter_map(|item| item.get("interface").and_then(Value::as_str))
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
+    }
+
+    fn request(&mut self, request: Value) -> Result<Value> {
+        let line = serde_json::to_string(&request)?;
+        self.stdin.write_all(line.as_bytes())?;
+        self.stdin.write_all(b"\n")?;
+        self.stdin.flush()?;
+        let mut response = String::new();
+        if self.stdout.read_line(&mut response)? == 0 {
+            bail!("image runtime closed stdout");
+        }
+        Ok(serde_json::from_str(&response)?)
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -383,6 +474,12 @@ impl Daemon {
                 max_memory_bytes,
             ),
             Request::Stop { id } => self.stop(&id),
+            Request::ImageList => self.image_list(),
+            Request::ImagePlan { spore } => self.image_plan(&spore),
+            Request::ImageStart { id, spore } => self.image_start(id, spore),
+            Request::ImageEval { id, source } => self.image_eval(&id, &source),
+            Request::ImageStatus { id } => self.image_status(&id),
+            Request::ImageStop { id } => self.image_stop(&id),
             Request::Reload => self.reload_request(),
             Request::Shutdown => self.shutdown(),
         }
@@ -513,6 +610,157 @@ impl Daemon {
         ok(json!({"id": id, "state": "running"}))
     }
 
+    fn image_list(&self) -> Value {
+        let images = self.images.lock().expect("image lock poisoned");
+        ok(json!({
+            "images": images.values().map(ImageRecord::view).collect::<Vec<_>>(),
+        }))
+    }
+
+    fn plan_for(&self, spore: &str) -> Result<crate::image::ImageHostPlan> {
+        let plugins = self.plugins.read().expect("plugin lock poisoned");
+        crate::image::ImageHostPlan::build(Path::new(spore), &plugins)
+    }
+
+    fn image_plan(&self, spore: &str) -> Value {
+        match self.plan_for(spore) {
+            Ok(plan) => match serde_json::to_value(plan) {
+                Ok(plan) => ok(plan),
+                Err(failure) => error(format!("serialize image plan: {failure}")),
+            },
+            Err(failure) => error(format!("{failure:#}")),
+        }
+    }
+
+    fn image_start(&self, id: String, spore: String) -> Value {
+        if id.trim().is_empty() {
+            return error("image id must not be empty");
+        }
+        let plan = match self.plan_for(&spore) {
+            Ok(plan) => plan,
+            Err(failure) => return error(format!("{failure:#}")),
+        };
+        let plan = match serde_json::to_value(&plan) {
+            Ok(plan) => plan,
+            Err(failure) => return error(format!("serialize image plan: {failure}")),
+        };
+        if !plan["refused"].as_array().is_none_or(Vec::is_empty) {
+            return error(format!(
+                "image has refused imports: {}",
+                plan["refused"]
+                    .as_array()
+                    .map(|refused| refused
+                        .iter()
+                        .filter_map(|item| item["interface"].as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "))
+                    .unwrap_or_default()
+            ));
+        }
+        let runtime = self
+            .image_runtime
+            .clone()
+            .or_else(|| std::env::var_os("LOAM_IMAGE_RUNTIME").map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from("soil-image"));
+        let mut images = self.images.lock().expect("image lock poisoned");
+        if images.contains_key(&id) {
+            return error(format!("image {id:?} already exists"));
+        }
+        let started_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_millis() as u64);
+        let mut child = match Command::new(&runtime)
+            .env("LOAM_IMAGE_SPORE", &spore)
+            .env("LOAM_IMAGE_PLAN", plan.to_string())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(failure) => {
+                return error(format!(
+                    "start image runtime {}: {failure}",
+                    runtime.display()
+                ));
+            }
+        };
+        let stdin = match child.stdin.take() {
+            Some(stdin) => stdin,
+            None => {
+                let _ = child.kill();
+                return error("image runtime has no stdin");
+            }
+        };
+        let stdout = match child.stdout.take() {
+            Some(stdout) => stdout,
+            None => {
+                let _ = child.kill();
+                return error("image runtime has no stdout");
+            }
+        };
+        let mut record = ImageRecord {
+            id: id.clone(),
+            spore,
+            plan,
+            child,
+            stdin,
+            stdout: BufReader::new(stdout),
+            started_ms,
+        };
+        let response = record.request(json!({
+            "op": "start",
+            "id": id,
+            "plan": record.plan,
+        }));
+        match response {
+            Ok(response) => {
+                images.insert(id.clone(), record);
+                ok(json!({"id": id, "response": response, "view": images[&id].view()}))
+            }
+            Err(failure) => {
+                let _ = record.child.kill();
+                error(format!("start image: {failure:#}"))
+            }
+        }
+    }
+
+    fn image_eval(&self, id: &str, source: &str) -> Value {
+        let mut images = self.images.lock().expect("image lock poisoned");
+        let Some(image) = images.get_mut(id) else {
+            return error(format!("unknown image {id:?}"));
+        };
+        match image.request(json!({"op": "eval", "source": source})) {
+            Ok(response) => ok(response),
+            Err(failure) => error(format!("{failure:#}")),
+        }
+    }
+
+    fn image_status(&self, id: &str) -> Value {
+        let mut images = self.images.lock().expect("image lock poisoned");
+        let Some(image) = images.get_mut(id) else {
+            return error(format!("unknown image {id:?}"));
+        };
+        match image.request(json!({"op": "status"})) {
+            Ok(response) => ok(json!({"view": image.view(), "runtime": response})),
+            Err(failure) => error(format!("{failure:#}")),
+        }
+    }
+
+    fn image_stop(&self, id: &str) -> Value {
+        let mut images = self.images.lock().expect("image lock poisoned");
+        let Some(mut image) = images.remove(id) else {
+            return error(format!("unknown image {id:?}"));
+        };
+        let response = image.request(json!({"op": "stop"}));
+        let _ = image.child.kill();
+        let _ = image.child.wait();
+        match response {
+            Ok(response) => ok(json!({"id": id, "response": response})),
+            Err(failure) => error(format!("{failure:#}")),
+        }
+    }
+
     fn reload(&self) -> Result<()> {
         let registry = Arc::new(CommandRegistry::scan_roots(&self.roots)?);
         let plugins = PluginRegistry::scan_roots(&self.roots)?;
@@ -574,6 +822,13 @@ impl Daemon {
         for engine in engines {
             engine.increment_epoch();
         }
+        let mut images = self.images.lock().expect("image lock poisoned");
+        for image in images.values_mut() {
+            let _ = image.request(json!({"op": "stop"}));
+            let _ = image.child.kill();
+            let _ = image.child.wait();
+        }
+        images.clear();
         self.shutdown.store(true, Ordering::Relaxed);
         ok(json!({"shutdown": true}))
     }

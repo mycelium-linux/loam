@@ -14,6 +14,12 @@ const DEFAULT_MAX_INSTANCES: usize = 8;
 fn usage() -> &'static str {
     r#"usage: loamd [serve] [--socket PATH] [--root DIR]...
        loamd start COMMAND [ARGS...] [--id ID] [--socket PATH]
+       loamd image plan SPORE [--socket PATH]
+       loamd image start SPORE [--id ID] [--socket PATH]
+       loamd image eval ID SOURCE [--socket PATH]
+       loamd image status ID [--socket PATH]
+       loamd image stop ID [--socket PATH]
+       loamd image list [--socket PATH]
        loamd list|ping|inspect ID|logs ID|stop ID|reload|shutdown [--socket PATH]"#
 }
 
@@ -36,7 +42,7 @@ fn run() -> Result<()> {
     let (operation, args) = match args.first().map(String::as_str) {
         Some(
             operation @ ("serve" | "ping" | "list" | "inspect" | "logs" | "start" | "stop"
-            | "reload" | "shutdown"),
+            | "reload" | "shutdown" | "image"),
         ) => (operation.to_string(), args[1..].to_vec()),
         _ => ("serve".to_string(), args),
     };
@@ -44,6 +50,16 @@ fn run() -> Result<()> {
     if operation == "serve" {
         let options = parse_options(&args)?;
         return daemon::serve(options);
+    }
+
+    if operation == "image" {
+        let (socket, request) = parse_image(&args)?;
+        let response = daemon::request(&socket, &request)?;
+        println!("{}", serde_json::to_string_pretty(&response)?);
+        if response["ok"] == false {
+            std::process::exit(1);
+        }
+        return Ok(());
     }
 
     let (socket, request) = parse_client(&operation, &args)?;
@@ -63,6 +79,7 @@ fn parse_options(args: &[String]) -> Result<Options> {
     let mut book = None;
     let mut collection = None;
     let mut unibus_config = None;
+    let mut image_runtime = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -100,6 +117,12 @@ fn parse_options(args: &[String]) -> Result<Options> {
             "--unibus-config" => {
                 unibus_config = Some(PathBuf::from(
                     args.get(i + 1).context("--unibus-config FILE")?,
+                ));
+                i += 2;
+            }
+            "--image-runtime" => {
+                image_runtime = Some(PathBuf::from(
+                    args.get(i + 1).context("--image-runtime PATH")?,
                 ));
                 i += 2;
             }
@@ -144,7 +167,68 @@ fn parse_options(args: &[String]) -> Result<Options> {
         records,
         bus,
         max_instances,
+        image_runtime,
     })
+}
+
+fn parse_image(args: &[String]) -> Result<(PathBuf, Request)> {
+    let mut socket = daemon::default_socket();
+    let mut id = None;
+    let mut positional = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--socket" => {
+                socket = PathBuf::from(args.get(i + 1).context("--socket PATH")?);
+                i += 2;
+            }
+            "--id" => {
+                id = Some(args.get(i + 1).context("--id ID")?.clone());
+                i += 2;
+            }
+            other if other.starts_with('-') => bail!("unknown image option {other}"),
+            other => {
+                positional.push(other.to_string());
+                i += 1;
+            }
+        }
+    }
+    let command = positional.first().map(String::as_str).unwrap_or("list");
+    let request = match command {
+        "list" => Request::ImageList,
+        "plan" => Request::ImagePlan {
+            spore: positional.get(1).context("image plan needs SPORE")?.clone(),
+        },
+        "start" => {
+            let spore = positional
+                .get(1)
+                .context("image start needs SPORE")?
+                .clone();
+            let id = id.unwrap_or_else(|| {
+                PathBuf::from(&spore)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "image".to_string())
+            });
+            Request::ImageStart { id, spore }
+        }
+        "eval" => {
+            let id = positional.get(1).context("image eval needs ID")?.clone();
+            let source = positional
+                .get(2)
+                .context("image eval needs SOURCE")?
+                .clone();
+            Request::ImageEval { id, source }
+        }
+        "status" => Request::ImageStatus {
+            id: positional.get(1).context("image status needs ID")?.clone(),
+        },
+        "stop" => Request::ImageStop {
+            id: positional.get(1).context("image stop needs ID")?.clone(),
+        },
+        other => bail!("unknown image operation {other}"),
+    };
+    Ok((socket, request))
 }
 
 fn parse_client(operation: &str, args: &[String]) -> Result<(PathBuf, Request)> {
