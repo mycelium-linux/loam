@@ -108,7 +108,9 @@ loamd stop mb-1
 ```
 
 It listens on `$XDG_RUNTIME_DIR/loam/loamd.sock` and accepts only peers with the
-daemon's Unix uid. See [`docs/loamd.md`](docs/loamd.md).
+daemon's Unix uid. Host defaults can live in `~/.config/loam/loam.conf.soil`;
+logs and instances publish their durable state under the per-user state
+directory. See [`docs/loamd.md`](docs/loamd.md).
 
 Command packages live in the usual roots:
 

@@ -22,8 +22,46 @@ loamd --socket /tmp/loamd.sock --root ~/.local/share/fungos/commands
 
 `loamd` scans command and Spore roots at startup. `loamd reload` rescans them
 without restarting the daemon, and `start` retries the scan once when a command
-appeared after the daemon started. Records and Unibus can be configured the
-same way as `loam run`:
+appeared after the daemon started.
+
+## Configuration
+
+Host defaults can live in `loam.conf.soil`:
+
+```soil
+(loam
+  (version 1)
+  (daemon
+    (socket "~/.local/share/loam/loamd.sock")
+    (max-instances 8)
+    (roots ("~/.local/share/fungos/commands"
+            "~/.local/share/fungos/spores"))
+    (image-runtime "/usr/local/bin/soil-image")
+    (window-runtime "/usr/local/bin/loam-window")
+    (log (dir "~/.local/state/loam/logs") (max-bytes 1048576) (keep 4))
+    (web (listen "127.0.0.1:8799")))
+  (mycelium
+    (home "~/.mycelium")
+    (publish-leases #t)))
+```
+
+`loamd` looks for `$XDG_CONFIG_HOME/loam/loam.conf.soil`, then
+`~/.config/loam/loam.conf.soil`. `--config FILE` overrides the search, and
+`LOAM_CONFIG` names a file explicitly. Explicit files must exist; a missing
+default file is not an error.
+
+Precedence is:
+
+```text
+command line > loam.conf.soil > built-in defaults
+```
+
+A first `--root` replaces the configured roots; later `--root` flags append.
+`--no-publish-leases` disables the Mycelium lease publisher independently of
+whether the web surface is served. Live leases, log files, the socket, and
+installed package state are runtime state, not configuration.
+
+Records and Unibus can be configured the same way as `loam run`:
 
 ```sh
 loamd \
@@ -74,7 +112,13 @@ Instances are one-shot commands for now. Long-lived `wasi:http` service Spores,
 restart policy, and service routing are not part of this slice.
 
 Output is captured in memory, bounded by the per-instance stdout/stderr limits.
-`logs` returns the captured text after the instance finishes.
+When the instance finishes, the same output is appended to
+`<log-dir>/<id>.log` with its exit code or error. The file rotates before it
+crosses `--log-max-bytes`, keeping `--log-keep` generations. The default log
+directory is `$XDG_STATE_HOME/loam/logs` or `~/.local/state/loam/logs`.
+
+`loamd logs <id>` returns the in-memory record while the daemon is running and
+falls back to the durable file after a restart.
 
 ### Plugin sidecars
 

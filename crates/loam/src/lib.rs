@@ -53,6 +53,8 @@ pub mod command;
 #[cfg(feature = "wasi")]
 mod command_service;
 #[cfg(feature = "wasi")]
+pub mod config;
+#[cfg(feature = "wasi")]
 pub mod context;
 #[cfg(feature = "wasi")]
 pub mod creds;
