@@ -1,0 +1,28 @@
+; SPDX-License-Identifier: MIT OR Apache-2.0
+; The desktop shell is a web surface: the launcher UI is HTML/CSS/JS and the
+; host catalog is `soil:spore/catalog` over `/api/spore/*`. There is no wasm
+; controller behind it.
+(spore
+  (schema 1)
+  (id "org.mycelium.home")
+  (name "home")
+  (version "0.1.0")
+  (license "Apache-2.0 OR MIT")
+  (summary "The Mycelium desktop shell, served as a local web Spore")
+
+  (surfaces
+    (surface "web" (kind "web") (entry "web/index.html")))
+
+  (anycast
+    (name "home")
+    (kind "home")
+    (alpns ("soil/http/1"))
+    (ttl_secs 240))
+
+  (web
+    (vfs-root ""))
+
+  (grants
+    ("soil:vfs" "read the workspace desktop index")
+    ("soil:vfs-mut" "create and update desktop metadata")
+    ("soil:spore.catalog" "read installed Spores and launch surfaces from the launcher")))

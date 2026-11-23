@@ -67,6 +67,14 @@
   }
 
   document.addEventListener('click', (event) => {
+    const sporeButton = event.target.closest('[data-spore]');
+    if (sporeButton) {
+      event.preventDefault();
+      void openSpore(sporeButton.dataset.spore);
+      closeAccountMenu();
+      closeCommand();
+      return;
+    }
     const openButton = event.target.closest('[data-open]');
     if (openButton) {
       event.preventDefault();
@@ -647,8 +655,119 @@
     refreshWizardControls();
   });
 
+  // The launcher reads the host catalog instead of hard-coding a dock. The
+  // bridge is the JSON face of `soil:spore/catalog`, so a Spore installed by
+  // loamd appears here on the next load with no package edit.
+  const catalog = new Map();
+
+  function catalogKey(id) {
+    return `spore-${id.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`;
+  }
+
+  function primarySurface(entry) {
+    return entry.surfaces?.find((surface) => surface.name === entry.default_surface)
+      || entry.surfaces?.find((surface) => surface.kind === 'web')
+      || entry.surfaces?.[0]
+      || null;
+  }
+
+  function catalogWindow(entry) {
+    const key = catalogKey(entry.id);
+    let el = windows.get(key);
+    if (el) return el;
+    el = document.createElement('section');
+    el.className = 'window window--catalog';
+    el.dataset.window = key;
+    el.hidden = true;
+    const offset = windows.size % 5;
+    el.style.left = `calc(12vw + ${offset * 26}px)`;
+    el.style.top = `calc(14vh + ${offset * 24}px)`;
+    el.style.width = 'min(760px, 74vw)';
+    el.style.height = 'min(560px, 68vh)';
+    el.innerHTML = `
+      <header class="window-bar">
+        <div class="traffic">
+          <button class="close" type="button" data-close="${key}" aria-label="Close"><span aria-hidden="true">×</span></button>
+          <button class="minimize" type="button" data-minimize="${key}" aria-label="Minimize"><span aria-hidden="true">−</span></button>
+          <button class="zoom" type="button" data-zoom="${key}" aria-label="Zoom"><span aria-hidden="true">+</span></button>
+        </div>
+        <h2 class="window-title"></h2>
+        <span class="window-bar-spacer" aria-hidden="true"></span>
+      </header>
+      <iframe title="" loading="lazy"></iframe>
+      <span class="window-resize" data-resize="${key}" aria-hidden="true"></span>`;
+    el.querySelector('.window-title').textContent = entry.title || entry.name;
+    el.querySelector('iframe').title = entry.title || entry.name;
+    document.querySelector('main.desktop')?.append(el);
+    windows.set(key, el);
+    return el;
+  }
+
+  async function openSpore(id) {
+    const entry = catalog.get(id);
+    const surface = entry && primarySurface(entry);
+    if (!surface) return;
+    try {
+      const response = await fetch('/api/spore/launch', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id, surface: surface.name }),
+      });
+      const launched = await response.json();
+      if (!response.ok || launched.error) {
+        console.warn('spore launch failed', launched.error);
+        return;
+      }
+      if (launched.kind === 'web') {
+        const el = catalogWindow(entry);
+        const frame = el.querySelector('iframe');
+        if (frame && frame.getAttribute('src') !== launched.target) frame.src = launched.target;
+        el.hidden = false;
+        el.classList.add('is-open');
+        focusWindow(el);
+      }
+    } catch (error) {
+      console.warn('spore launch failed', error);
+    }
+  }
+
+  async function loadCatalog() {
+    try {
+      const response = await fetch('/api/spore/entries', { headers: { accept: 'application/json' } });
+      if (!response.ok) return;
+      const body = await response.json();
+      const entries = Array.isArray(body.entries) ? body.entries : [];
+      const host = document.querySelector('.desktop-icons');
+      if (!host) return;
+      for (const entry of entries) {
+        const surface = primarySurface(entry);
+        if (!surface || entry.id === 'org.mycelium.home') continue;
+        catalog.set(entry.id, entry);
+        if (document.querySelector(`[data-spore="${CSS.escape(entry.id)}"]`)) continue;
+        const button = document.createElement('button');
+        button.className = 'desktop-icon catalog-icon';
+        button.type = 'button';
+        button.dataset.spore = entry.id;
+        button.setAttribute('aria-label', `Open ${entry.title || entry.name}`);
+        const tile = document.createElement('span');
+        tile.className = 'app-tile';
+        tile.style.setProperty('--app-bg', entry.color || '#8b9dff');
+        tile.style.setProperty('--app-bg-2', entry.color || '#8b9dff');
+        tile.style.setProperty('--app-ink', '#10141c');
+        tile.textContent = entry.badge || (entry.title || entry.name || '?').slice(0, 1).toUpperCase();
+        const label = document.createElement('span');
+        label.textContent = entry.title || entry.name;
+        button.append(tile, label);
+        host.append(button);
+      }
+    } catch (error) {
+      console.warn('launcher catalog unavailable', error);
+    }
+  }
+
   setAgentContext('desk');
   void loadDesktops();
+  void loadCatalog();
 
   const clock = document.getElementById('clock');
   function tick() {

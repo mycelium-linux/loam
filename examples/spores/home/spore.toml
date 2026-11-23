@@ -23,6 +23,7 @@ entry = "web/index.html"
 [grants]
 "soil:vfs" = "read the workspace desktop index"
 "soil:vfs-mut" = "create and update desktop metadata"
+"soil:spore.catalog" = "read installed Spores and launch surfaces from the launcher"
 
 [web]
 vfs_root = ""

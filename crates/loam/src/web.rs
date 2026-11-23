@@ -20,7 +20,8 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use serde_json::json;
+use serde::Deserialize;
+use serde_json::{Value, json};
 
 use crate::spore::{Anycast, Manifest, Surface, SurfaceKind, Ui, Web, soil::SoilManifest};
 
@@ -39,6 +40,8 @@ pub struct StaticSurface {
     pub ttl_secs: u64,
     pub web: Option<Web>,
     pub writable: bool,
+    /// This surface may read the installed-Spore catalog and launch surfaces.
+    pub spore_catalog: bool,
 }
 
 /// Find static web surfaces in a set of package roots.
@@ -67,6 +70,7 @@ pub fn discover(roots: &[PathBuf]) -> Result<Vec<StaticSurface>> {
                     .and_then(|manifest| {
                         let anycast = manifest.anycast.clone()?;
                         let writable = manifest.grants.contains_key("soil:vfs-mut");
+                        let spore_catalog = has_spore_catalog(&manifest.grants);
                         static_surface(
                             &package,
                             manifest.id,
@@ -76,6 +80,7 @@ pub fn discover(roots: &[PathBuf]) -> Result<Vec<StaticSurface>> {
                             None,
                             manifest.web,
                             writable,
+                            spore_catalog,
                         )
                     })
             } else if toml.is_file() {
@@ -85,6 +90,7 @@ pub fn discover(roots: &[PathBuf]) -> Result<Vec<StaticSurface>> {
                     .and_then(|manifest| {
                         let anycast = manifest.anycast.clone()?;
                         let writable = manifest.grants.contains_key("soil:vfs-mut");
+                        let spore_catalog = has_spore_catalog(&manifest.grants);
                         static_surface(
                             &package,
                             manifest.spore.id,
@@ -94,6 +100,7 @@ pub fn discover(roots: &[PathBuf]) -> Result<Vec<StaticSurface>> {
                             manifest.ui.as_ref(),
                             manifest.web.clone(),
                             writable,
+                            spore_catalog,
                         )
                     })
             } else {
@@ -118,6 +125,7 @@ fn static_surface(
     ui: Option<&Ui>,
     web: Option<Web>,
     writable: bool,
+    spore_catalog: bool,
 ) -> Option<StaticSurface> {
     let surface = surfaces
         .iter()
@@ -137,7 +145,20 @@ fn static_surface(
         entry,
         web: web.filter(|web| !web.vfs_root.contains("..")),
         writable,
+        spore_catalog,
     })
+}
+
+/// Host operations a browser surface may call without importing WIT.
+///
+/// The launcher is HTML/CSS/JS, so it cannot call `soil:spore/catalog` itself.
+/// This is the same catalog and launch policy over JSON: one host
+/// implementation, two transports.
+pub trait SporeApi: Send + Sync {
+    fn entries(&self) -> std::result::Result<Value, String>;
+    fn launch(&self, id: &str, surface: &str) -> std::result::Result<Value, String>;
+    fn running(&self) -> std::result::Result<Value, String>;
+    fn stop(&self, id: &str) -> std::result::Result<Value, String>;
 }
 
 /// Serve one or more static surfaces. The first surface is the fallback when
@@ -145,10 +166,15 @@ fn static_surface(
 ///
 /// The surface list is shared rather than captured so an install can add a
 /// Spore without restarting the listener.
-pub fn serve(surfaces: Arc<RwLock<Vec<StaticSurface>>>, listener: TcpListener) -> Result<()> {
+pub fn serve(
+    surfaces: Arc<RwLock<Vec<StaticSurface>>>,
+    api: Arc<dyn SporeApi>,
+    listener: TcpListener,
+) -> Result<()> {
     loop {
         let (mut stream, _) = listener.accept()?;
         let sites = sites(&surfaces.read().expect("web surface lock poisoned"));
+        let api = Arc::clone(&api);
         std::thread::spawn(move || {
             if sites.is_empty() {
                 let _ = respond(
@@ -160,9 +186,13 @@ pub fn serve(surfaces: Arc<RwLock<Vec<StaticSurface>>>, listener: TcpListener) -
                 );
                 return;
             }
-            let _ = handle(stream, &sites);
+            let _ = handle(stream, &sites, &api);
         });
     }
+}
+
+fn has_spore_catalog(grants: &std::collections::BTreeMap<String, String>) -> bool {
+    grants.contains_key("soil:spore") || grants.contains_key("soil:spore.catalog")
 }
 
 fn sites(surfaces: &[StaticSurface]) -> Vec<(StaticSurface, PathBuf)> {
@@ -179,7 +209,11 @@ fn sites(surfaces: &[StaticSurface]) -> Vec<(StaticSurface, PathBuf)> {
         .collect()
 }
 
-fn handle(mut stream: TcpStream, sites: &[(StaticSurface, PathBuf)]) -> Result<()> {
+fn handle(
+    mut stream: TcpStream,
+    sites: &[(StaticSurface, PathBuf)],
+    api: &Arc<dyn SporeApi>,
+) -> Result<()> {
     let Some(request) = read_request(&mut stream)? else {
         return Ok(());
     };
@@ -205,6 +239,18 @@ fn handle(mut stream: TcpStream, sites: &[(StaticSurface, PathBuf)]) -> Result<(
         .target
         .split_once('?')
         .unwrap_or((&request.target, ""));
+    if path == "/api/spore" || path.starts_with("/api/spore/") {
+        if !site.spore_catalog {
+            return respond(
+                &mut stream,
+                403,
+                "application/json",
+                br#"{"error":"this surface has no soil:spore.catalog grant"}"#,
+                origin,
+            );
+        }
+        return spore_api(&request, path, api, origin, &mut stream);
+    }
     if path == "/api/vfs" || path.starts_with("/api/vfs/") {
         return vfs_api(
             site,
@@ -254,6 +300,44 @@ fn handle(mut stream: TcpStream, sites: &[(StaticSurface, PathBuf)]) -> Result<(
         }
         Err(_) => respond(&mut stream, 404, "text/plain", b"not found", origin),
     }
+}
+
+#[derive(Deserialize)]
+struct LaunchRequest {
+    id: String,
+    #[serde(default)]
+    surface: String,
+}
+
+#[derive(Deserialize)]
+struct StopRequest {
+    id: String,
+}
+
+fn spore_api(
+    request: &Request,
+    path: &str,
+    api: &Arc<dyn SporeApi>,
+    origin: Option<&str>,
+    stream: &mut TcpStream,
+) -> Result<()> {
+    let result = match (request.method.as_str(), path) {
+        ("GET", "/api/spore/entries") => api.entries(),
+        ("GET", "/api/spore/running") => api.running(),
+        ("POST", "/api/spore/launch") => serde_json::from_slice::<LaunchRequest>(&request.body)
+            .map_err(|error| format!("invalid launch request: {error}"))
+            .and_then(|launch| api.launch(&launch.id, &launch.surface)),
+        ("POST", "/api/spore/stop") => serde_json::from_slice::<StopRequest>(&request.body)
+            .map_err(|error| format!("invalid stop request: {error}"))
+            .and_then(|stop| api.stop(&stop.id)),
+        _ => return respond(stream, 404, "text/plain", b"unknown spore route", origin),
+    };
+    let (status, value) = match result {
+        Ok(value) => (200, value),
+        Err(error) => (400, json!({ "error": error })),
+    };
+    let body = serde_json::to_vec(&value)?;
+    respond(stream, status, "application/json", &body, origin)
 }
 
 #[allow(clippy::too_many_arguments)]
