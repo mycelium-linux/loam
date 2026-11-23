@@ -98,6 +98,17 @@ pub enum Request {
     ImageStop {
         id: String,
     },
+    WindowList,
+    WindowStart {
+        id: String,
+        url: String,
+        title: String,
+        width: u32,
+        height: u32,
+    },
+    WindowStop {
+        id: String,
+    },
     Reload,
     Shutdown,
 }
@@ -111,6 +122,8 @@ pub struct Options {
     pub max_instances: usize,
     /// The live Soil image runtime. `None` means use `soil-image` on PATH.
     pub image_runtime: Option<PathBuf>,
+    /// The native webview host. `None` means use `loam-window` on PATH.
+    pub window_runtime: Option<PathBuf>,
     /// Static web surface listener. `None` leaves manifest web surfaces unserved.
     pub web_listen: Option<String>,
     /// Durable instance logs. `None` uses the per-user state directory.
@@ -130,6 +143,7 @@ impl Options {
             bus: None,
             max_instances: DEFAULT_MAX_INSTANCES,
             image_runtime: None,
+            window_runtime: None,
             web_listen: None,
             log_root: None,
             log_max_bytes: crate::log::DEFAULT_MAX_BYTES,
@@ -195,9 +209,11 @@ pub fn serve(options: Options) -> Result<()> {
         bus: options.bus,
         max_instances: options.max_instances,
         image_runtime: options.image_runtime,
+        window_runtime: options.window_runtime,
         logs: logs.clone(),
         instances: Mutex::new(BTreeMap::new()),
         images: Mutex::new(BTreeMap::new()),
+        windows: Mutex::new(BTreeMap::new()),
         shutdown: AtomicBool::new(false),
     });
     let listener = bind_socket(&options.socket)?;
@@ -455,9 +471,11 @@ struct Daemon {
     bus: Option<Arc<dyn Bus>>,
     max_instances: usize,
     image_runtime: Option<PathBuf>,
+    window_runtime: Option<PathBuf>,
     logs: LogStore,
     instances: Mutex<BTreeMap<String, InstanceRecord>>,
     images: Mutex<BTreeMap<String, ImageRecord>>,
+    windows: Mutex<BTreeMap<String, WindowRecord>>,
     shutdown: AtomicBool,
 }
 
@@ -492,6 +510,66 @@ struct ImageRecord {
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
     started_ms: u64,
+}
+
+struct WindowRecord {
+    id: String,
+    url: String,
+    title: String,
+    width: u32,
+    height: u32,
+    child: Child,
+    started_ms: u64,
+    state: State,
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct WindowView {
+    id: String,
+    url: String,
+    title: String,
+    width: u32,
+    height: u32,
+    state: State,
+    started_ms: u64,
+    pid: u32,
+    error: Option<String>,
+}
+
+impl WindowRecord {
+    fn refresh(&mut self) {
+        if self.state != State::Running {
+            return;
+        }
+        match self.child.try_wait() {
+            Ok(Some(status)) => {
+                self.state = State::Exited;
+                if !status.success() {
+                    self.error = Some(format!("window exited: {status}"));
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                self.state = State::Failed;
+                self.error = Some(format!("wait for window: {error}"));
+            }
+        }
+    }
+
+    fn view(&self) -> WindowView {
+        WindowView {
+            id: self.id.clone(),
+            url: self.url.clone(),
+            title: self.title.clone(),
+            width: self.width,
+            height: self.height,
+            state: self.state,
+            started_ms: self.started_ms,
+            pid: self.child.id(),
+            error: self.error.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -686,6 +764,15 @@ impl Daemon {
             Request::ImageEval { id, source } => self.image_eval(&id, &source),
             Request::ImageStatus { id } => self.image_status(&id),
             Request::ImageStop { id } => self.image_stop(&id),
+            Request::WindowList => self.window_list(),
+            Request::WindowStart {
+                id,
+                url,
+                title,
+                width,
+                height,
+            } => self.window_start(id, url, title, width, height),
+            Request::WindowStop { id } => self.window_stop(&id),
             Request::Reload => self.reload_request(),
             Request::Shutdown => self.shutdown(),
         }
@@ -972,6 +1059,90 @@ impl Daemon {
         }
     }
 
+    fn window_list(&self) -> Value {
+        let mut windows = self.windows.lock().expect("window lock poisoned");
+        for window in windows.values_mut() {
+            window.refresh();
+        }
+        ok(json!({
+            "windows": windows.values().map(WindowRecord::view).collect::<Vec<_>>(),
+        }))
+    }
+
+    fn window_start(
+        &self,
+        id: String,
+        url: String,
+        title: String,
+        width: u32,
+        height: u32,
+    ) -> Value {
+        if id.trim().is_empty() {
+            return error("window id must not be empty");
+        }
+        if url.trim().is_empty() {
+            return error("window url must not be empty");
+        }
+        if width == 0 || height == 0 {
+            return error("window size must be greater than zero");
+        }
+        let runtime = self
+            .window_runtime
+            .clone()
+            .or_else(|| std::env::var_os("LOAM_WINDOW_RUNTIME").map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from("loam-window"));
+        let mut windows = self.windows.lock().expect("window lock poisoned");
+        if windows.contains_key(&id) {
+            return error(format!("window {id:?} already exists"));
+        }
+        let started_ms = now_millis();
+        let child = match Command::new(&runtime)
+            .arg("--url")
+            .arg(&url)
+            .arg("--title")
+            .arg(&title)
+            .arg("--size")
+            .arg(format!("{width}x{height}"))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(failure) => {
+                return error(format!(
+                    "start window runtime {}: {failure}",
+                    runtime.display()
+                ));
+            }
+        };
+        windows.insert(
+            id.clone(),
+            WindowRecord {
+                id: id.clone(),
+                url,
+                title,
+                width,
+                height,
+                child,
+                started_ms,
+                state: State::Running,
+                error: None,
+            },
+        );
+        ok(json!({"id": id, "state": "running"}))
+    }
+
+    fn window_stop(&self, id: &str) -> Value {
+        let mut windows = self.windows.lock().expect("window lock poisoned");
+        let Some(mut window) = windows.remove(id) else {
+            return error(format!("unknown window {id:?}"));
+        };
+        let _ = window.child.kill();
+        let _ = window.child.wait();
+        ok(json!({"id": id, "state": "stopped"}))
+    }
+
     fn reload(&self) -> Result<()> {
         let registry = Arc::new(CommandRegistry::scan_roots(&self.roots)?);
         let plugins = PluginRegistry::scan_roots(&self.roots)?;
@@ -1040,6 +1211,12 @@ impl Daemon {
             let _ = image.child.wait();
         }
         images.clear();
+        let mut windows = self.windows.lock().expect("window lock poisoned");
+        for window in windows.values_mut() {
+            let _ = window.child.kill();
+            let _ = window.child.wait();
+        }
+        windows.clear();
         self.shutdown.store(true, Ordering::Relaxed);
         ok(json!({"shutdown": true}))
     }
