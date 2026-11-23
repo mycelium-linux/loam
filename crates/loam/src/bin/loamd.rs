@@ -11,6 +11,12 @@ use soil::{
 
 const DEFAULT_MAX_INSTANCES: usize = 8;
 
+fn usage() -> &'static str {
+    r#"usage: loamd [serve] [--socket PATH] [--root DIR]...
+       loamd start COMMAND [ARGS...] [--id ID] [--socket PATH]
+       loamd list|ping|inspect ID|logs ID|stop ID|shutdown [--socket PATH]"#
+}
+
 fn main() {
     if let Err(error) = run() {
         eprintln!("loamd: {error:#}");
@@ -20,6 +26,13 @@ fn main() {
 
 fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args
+        .first()
+        .is_some_and(|arg| matches!(arg.as_str(), "help" | "--help" | "-h"))
+    {
+        println!("{}", usage());
+        return Ok(());
+    }
     let (operation, args) = match args.first().map(String::as_str) {
         Some(
             operation @ ("serve" | "ping" | "list" | "inspect" | "logs" | "start" | "stop"

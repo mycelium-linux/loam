@@ -11,6 +11,10 @@ fn usage() -> &'static str {
     r#"usage: loam <command>
 commands:
   run [OPTIONS] NAME [ARGS...]    run an installed wasm command
+  install PATH --root DIR [--allow-unsigned-dev] [--provider-root DIR]...
+                                  verify, compose, warm, and atomically install a package
+  status --root DIR [--json]      show managed installs
+  rollback ID --root DIR          switch an install back one generation
   surface FILE [--size WxH] [--capture FILE.rgba]
                                   open a native surface or capture one frame
   plugin [list|verify|roots|pack DIR|compose ROOT PROVIDER IMPORT OUT|compose-cached ROOT PROVIDER IMPORT OUT]
