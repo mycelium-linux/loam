@@ -352,6 +352,20 @@ pub fn compose_cached(
     Ok(hit)
 }
 
+/// Default cache location for compiled compositions.
+///
+/// `LOAM_COMPOSE_CACHE` overrides it. Otherwise use the user cache dir on Unix,
+/// with a stable fallback for hosts that do not set XDG_CACHE_HOME.
+pub fn default_composition_cache() -> PathBuf {
+    if let Some(path) = std::env::var_os("LOAM_COMPOSE_CACHE") {
+        return PathBuf::from(path);
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home).join(".cache/loam/compose");
+    }
+    std::env::temp_dir().join("loam-compose")
+}
+
 /// Compose one provider component into a root component at install/build time.
 ///
 /// `import` is the canonical WIT instance import the provider satisfies.
@@ -496,6 +510,31 @@ pub fn cli(args: &[String]) -> Result<()> {
         }
     }
     let command = positional.first().map(String::as_str).unwrap_or("list");
+    if command == "compose-cached" {
+        let root = PathBuf::from(positional.get(1).context("plugin compose-cached ROOT")?);
+        let provider = PathBuf::from(
+            positional
+                .get(2)
+                .context("plugin compose-cached ROOT PROVIDER")?,
+        );
+        let import = positional
+            .get(3)
+            .context("plugin compose-cached ROOT PROVIDER IMPORT")?;
+        let out = PathBuf::from(
+            positional
+                .get(4)
+                .context("plugin compose-cached ROOT PROVIDER IMPORT OUT")?,
+        );
+        let hit = compose_cached(
+            &root,
+            &provider,
+            import,
+            &default_composition_cache(),
+            &out,
+        )?;
+        println!("{} cached={hit}", out.display());
+        return Ok(());
+    }
     if command == "compose" {
         let root = PathBuf::from(positional.get(1).context("plugin compose ROOT")?);
         let provider = PathBuf::from(positional.get(2).context("plugin compose ROOT PROVIDER")?);
