@@ -1064,6 +1064,35 @@ mod tests {
         socket
     }
 
+    /// Close with an RST instead of a polite FIN. A FIN can leave the peer's
+    /// next writes succeeding until its kernel decides to reset; the test is
+    /// about detecting a dead session, not about TCP's close handshake.
+    #[cfg(unix)]
+    fn reset(socket: std::net::TcpStream) {
+        use std::os::fd::AsRawFd;
+
+        let linger = libc::linger {
+            l_onoff: 1,
+            l_linger: 0,
+        };
+        let result = unsafe {
+            libc::setsockopt(
+                socket.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_LINGER,
+                &linger as *const _ as *const libc::c_void,
+                std::mem::size_of::<libc::linger>() as libc::socklen_t,
+            )
+        };
+        assert_eq!(
+            result,
+            0,
+            "set SO_LINGER: {}",
+            std::io::Error::last_os_error()
+        );
+        drop(socket);
+    }
+
     fn wait_until(what: &str, deadline: Duration, mut check: impl FnMut() -> bool) {
         let until = Instant::now() + deadline;
         while Instant::now() < until {
@@ -1089,7 +1118,7 @@ mod tests {
             when_to_die
                 .recv()
                 .expect("the test decides when the hub dies");
-            drop(first);
+            reset(first);
             // A reconnect must re-register, not resume a dead socket. A retry
             // that gave up mid-handshake is expected, so keep accepting until
             // one completes.
