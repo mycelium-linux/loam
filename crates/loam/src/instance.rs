@@ -179,6 +179,8 @@ mod tests {
             package: PathBuf::from("/tmp/test"),
             requires: Vec::new(),
             module: PathBuf::from("/tmp/test/module.wasm"),
+            runtime_module: None,
+            composition_key: None,
             timeout_ms: 1_000,
             max_stdout_bytes: 1024,
             max_stderr_bytes: 1024,
