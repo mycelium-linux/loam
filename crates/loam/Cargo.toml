@@ -18,6 +18,11 @@ required-features = ["surface"]
 name = "loam-mcp"
 path = "src/bin/loam-mcp.rs"
 
+[[bin]]
+name = "loamd"
+path = "src/bin/loamd.rs"
+required-features = ["wasi"]
+
 [features]
 # Everything a host can be, which is what the `soil` front door links.
 default = [

@@ -15,6 +15,7 @@ The archive contains:
 
 ```text
 bin/loam
+bin/loamd
 bin/loam-ble-host
 share/loam/wit/
 LICENSE-APACHE
