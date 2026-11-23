@@ -31,13 +31,14 @@ jobs:
       - name: build
         run: |
           cargo build --release --target "${{ matrix.target }}" \
-            -p loam-cli -p loam-ble-host -p loam-mcp
+            -p loam --features loam/surface -p loam-ble-host
       - name: package
         run: |
           set -euo pipefail
           name="loam-${GITHUB_REF_NAME}-${TARGET}"
           mkdir -p "dist/$name/bin" "dist/$name/share/loam"
           cp "target/${TARGET}/release/loam" "dist/$name/bin/"
+          cp "target/${TARGET}/release/loamd" "dist/$name/bin/"
           cp "target/${TARGET}/release/loam-ble-host" "dist/$name/bin/"
           cp "target/${TARGET}/release/loam-mcp" "dist/$name/bin/"
           cp -R wit "dist/$name/share/loam/wit"

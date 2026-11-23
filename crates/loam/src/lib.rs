@@ -49,18 +49,24 @@
 mod clock;
 #[cfg(feature = "wasi")]
 pub mod codec_host;
+pub mod command;
 #[cfg(feature = "wasi")]
-mod command;
+mod command_service;
 #[cfg(feature = "wasi")]
 pub mod context;
 #[cfg(feature = "wasi")]
 pub mod creds;
+#[cfg(all(unix, feature = "wasi"))]
+pub mod daemon;
+pub mod edit;
 #[cfg(feature = "wasi")]
 mod gateway;
 #[cfg(feature = "wasi")]
 mod host;
 #[cfg(any(feature = "http", feature = "wasi"))]
 pub mod http_host;
+pub mod install;
+pub mod instance;
 #[cfg(feature = "principal")]
 pub mod local_identity;
 pub mod metrics;
@@ -72,6 +78,7 @@ pub mod principal_host;
 pub mod records_host;
 #[cfg(feature = "wasi")]
 mod service;
+pub mod spore;
 #[cfg(feature = "wasi")]
 pub mod stream;
 #[cfg(feature = "wasi")]
@@ -82,7 +89,7 @@ pub mod unibus;
 pub mod vfs_host;
 
 #[cfg(feature = "wasi")]
-pub use command::{CommandOutcome, CommandService};
+pub use command_service::{CommandOutcome, CommandService};
 #[cfg(feature = "wasi")]
 pub use context::HttpContext;
 #[cfg(feature = "wasi")]

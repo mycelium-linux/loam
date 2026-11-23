@@ -13,7 +13,7 @@ FPL_BOB_LOCAL=1 CARGO_TARGET_DIR="$TARGET/surface-fixture" \
     cargo build --manifest-path "$FIXTURE/Cargo.toml" \
     --target wasm32-wasip2 --release
 
-cargo build -p loam-cli
+cargo build -p loam --features surface --bin loam
 BIN="$TARGET/debug/loam"
 "$BIN" surface "$WASM" --size 64x64 --capture "$OUT"
 

@@ -30,8 +30,12 @@ jobs:
         run: cargo fmt --all --check
       - name: check
         run: cargo check --workspace
+      - name: check binaries
+        run: cargo check -p loam --features surface --bins
       - name: clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: clippy binaries
+        run: cargo clippy -p loam --features surface --all-targets -- -D warnings
       - name: test
         run: cargo test --workspace
       - name: architecture gate

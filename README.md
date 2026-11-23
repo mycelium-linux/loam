@@ -41,8 +41,12 @@ First-party native plugins:
 |---|---|---|
 | Surface | `loam-surface` | native |
 | BLE | `loam-ble-api`, `loam-ble-host`, `loam-ble-sim` | native |
-| Audio | `loam-audio` | native |
-| Codec | `loam-codec` | native |
+| Audio + codec | `loam-media` | native |
+
+`soil:process` is a plugin/extra contract in `wit/`. `soil:http` and
+`soil:streams` already live with their opt-in host implementations under
+`crates/loam/wit/`. None of them are linked by the default runner or advertised
+in `loam doctor`.
 
 The runtime also provides WASI p2 and `wasi:http` through Wasmtime:
 
@@ -73,10 +77,38 @@ Those are Soil code, Spores, or plugins.
 
 ```sh
 loam run NAME [ARGS...]        # run an installed wasm command
+loam install PATH --root DIR   # verify, compose, warm, install atomically
+loam status --root DIR [--json]
+loam rollback ID --root DIR
 loam surface FILE [--size WxH] # open a native winit + WebGPU surface
+loam edit <op> ... [--json]    # edit a personal source overlay
 loam doctor                    # print the linked capability profile
 loam help
 ```
+
+`loam install` is local-only and source-preserving. It keeps generations and a
+previous digest for rollback:
+
+```sh
+loam install spores/marbles --root ~/.local/share/fungos/commands
+loam status --root ~/.local/share/fungos/commands --json
+loam rollback acme:marbles --root ~/.local/share/fungos/commands
+```
+
+See [`docs/installer.md`](docs/installer.md).
+
+`loamd` is the per-user supervisor for command instances:
+
+```sh
+loamd
+loamd start mb --id mb-1 -- ready --json
+loamd list
+loamd logs mb-1
+loamd stop mb-1
+```
+
+It listens on `$XDG_RUNTIME_DIR/loam/loamd.sock` and accepts only peers with the
+daemon's Unix uid. See [`docs/loamd.md`](docs/loamd.md).
 
 Command packages live in the usual roots:
 
@@ -86,6 +118,25 @@ Command packages live in the usual roots:
 ```
 
 `loam run` is the virtual PATH. It does not compile or interpret Soil source.
+
+## Editing
+
+A signed Spore is immutable. `loam edit` copies its `source/` into a personal
+session, checkpoints that work tree, saves full-file overlays, and applies them
+under the personal patch root:
+
+```sh
+loam edit open spores/marbles --json
+loam edit read acme:marbles/<base-digest> mb.soil --json
+loam edit list acme:marbles/<base-digest> --json
+loam edit checkpoint acme:marbles/<base-digest> --message "first change" --json
+loam edit save acme:marbles/<base-digest> --message "overlay" --json
+loam edit apply acme:marbles/<base-digest> --json
+```
+
+Every command writes JSON to stdout. `build` is unsupported until a builder is
+configured; source-only overlays can still be saved. The signed package is never
+written to.
 
 ## Plugins
 
@@ -129,15 +180,10 @@ See [`docs/architecture.md`](docs/architecture.md).
 ## Repository layout
 
 ```text
-crates/loam              runtime host and linker
-crates/loam-cli          the one `loam` binary
-crates/loam-command      command registry and wasm command runner
-crates/loam-spore        package identity, locks, signatures
+crates/loam              runtime, host, command runner, plugin linker, Spore package
 crates/loam-surface      winit + WebGPU surface host
 crates/loam-ble-*        first-party BLE plugin
-crates/loam-audio        first-party audio plugin
-crates/loam-codec        first-party codec plugin
-crates/loam-mcp          MCP adapter package and native stdio sidecar
+crates/loam-media        first-party audio + codec plugin
 wit/                     canonical capability contracts
 ```
 
@@ -155,7 +201,7 @@ See [`docs/install.md`](docs/install.md).
 ```sh
 cargo check --workspace
 cargo test --workspace
-cargo build -p loam-cli
+cargo build -p loam --features surface --bin loam
 scripts/check-architecture.sh
 scripts/check-wit.sh
 scripts/check-surface-fixture.sh

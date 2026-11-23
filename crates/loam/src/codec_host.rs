@@ -18,16 +18,16 @@ const MAX_PCM: usize = 11520 * 2;
 
 #[derive(Default)]
 pub struct CodecHost {
-    decoders: HashMap<String, soil_codec::OpusDecoder>,
-    encoders: HashMap<String, soil_codec::OpusEncoder>,
+    decoders: HashMap<String, loam_media::codec::OpusDecoder>,
+    encoders: HashMap<String, loam_media::codec::OpusEncoder>,
 }
 
-fn error(error: soil_codec::CodecError) -> api::Error {
+fn error(error: loam_media::codec::CodecError) -> api::Error {
     match error {
-        soil_codec::CodecError::SampleRate(_)
-        | soil_codec::CodecError::Channels(_)
-        | soil_codec::CodecError::Opus(_) => api::Error::Unsupported,
-        soil_codec::CodecError::Closed => api::Error::Invalid,
+        loam_media::codec::CodecError::SampleRate(_)
+        | loam_media::codec::CodecError::Channels(_)
+        | loam_media::codec::CodecError::Opus(_) => api::Error::Unsupported,
+        loam_media::codec::CodecError::Closed => api::Error::Invalid,
     }
 }
 
@@ -46,7 +46,7 @@ impl api::Host for CodecHost {
             decoder
         } else {
             let decoder =
-                soil_codec::OpusDecoder::new(sample_rate as i32, channels).map_err(error)?;
+                loam_media::codec::OpusDecoder::new(sample_rate as i32, channels).map_err(error)?;
             self.decoders.entry(session).or_insert(decoder)
         };
         let pcm = decoder.decode(&packet).map_err(error)?;
@@ -71,7 +71,7 @@ impl api::Host for CodecHost {
             encoder
         } else {
             let encoder =
-                soil_codec::OpusEncoder::new(sample_rate as i32, channels).map_err(error)?;
+                loam_media::codec::OpusEncoder::new(sample_rate as i32, channels).map_err(error)?;
             self.encoders.entry(session).or_insert(encoder)
         };
         let (pairs, _) = pcm.as_chunks::<2>();
