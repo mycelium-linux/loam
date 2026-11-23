@@ -87,6 +87,29 @@ loamd \
   --collection ''
 ```
 
+## Spore catalog bridge
+
+A web surface cannot import WIT, so `loamd` exposes the installed catalog over
+the same listener. The responses come from the host-side catalog that backs
+`soil:spore/catalog`:
+
+```text
+GET  /api/spore/entries
+GET  /api/spore/running
+POST /api/spore/launch   {"id":"org.mycelium.notes","surface":"web"}
+POST /api/spore/stop     {"id":"org.mycelium.notes"}
+```
+
+`entries` includes id, title, version, summary, surfaces, role
+(`app`/`plugin`/`package`), provided WIT interfaces and installed commands.
+A web surface launches with a URL target; a canvas surface is started through
+`loam surface` and appears in `running` until it exits or `stop` ends it.
+
+The bridge is not ambient: a web surface reaches it only when its manifest
+grants `soil:spore` or `soil:spore.catalog`. The launcher Spore
+(`examples/spores/home`) declares that grant and reads the catalog instead of
+hard-coding a dock, so an install appears on the next page load.
+
 ## Control
 
 The same binary is the local control client:

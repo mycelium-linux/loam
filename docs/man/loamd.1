@@ -99,6 +99,13 @@ the set of web surfaces changes. Renewal reuses the local CA, so adding a Spore
 does not create a new trust decision. An older installation without
 \fIca-key.pem\fR cannot renew silently; loamd logs the one-time migration:
 \fBmycelium frontdoor install --write --trust-cert\fR.
+.SH SPORE CATALOG BRIDGE
+Web surfaces cannot import WIT, so the listener exposes the host catalog as JSON:
+\fBGET /api/spore/entries\fR, \fBGET /api/spore/running\fR,
+\fBPOST /api/spore/launch\fR and \fBPOST /api/spore/stop\fR. The entries are
+the same installed-Spore view used to launch surfaces; they include plugins and
+commands as roles, not as a second package format. A web surface must declare
+`soil:spore` or `soil:spore.catalog` in its grants to reach the bridge.
 .SH FILES
 .TP
 .I ~/.config/loam/loam.conf.soil
