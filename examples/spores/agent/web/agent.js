@@ -39,6 +39,11 @@
     if (!embedded) return;
     const data = event.data || {};
     if (data.type === 'mycelium:agent-context') setContext(data.context);
+    if (data.type === 'mycelium:agent-pin-state') {
+      pinned = Boolean(data.pinned);
+      pin.setAttribute('aria-pressed', String(pinned));
+      document.getElementById('agent').dataset.pinned = String(pinned);
+    }
   });
   window.addEventListener('mycelium-agent-context', (event) => setContext(event.detail));
 

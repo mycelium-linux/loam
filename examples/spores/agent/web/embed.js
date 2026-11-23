@@ -61,6 +61,10 @@
     root.dataset.teaser = 'false';
   }
 
+  function sendPinState() {
+    post('mycelium:agent-pin-state', { pinned });
+  }
+
   function open() {
     clearTimeout(closeTimer);
     clearTimeout(teaserTimer);
@@ -68,14 +72,22 @@
     root.dataset.teaser = 'false';
     panel.hidden = false;
     root.dataset.open = 'true';
+    pinned = true;
+    sendPinState();
     sendContext();
+  }
+
+  function toggle() {
+    root.dataset.open === 'true' ? close(true) : open();
   }
 
   function close(force = false) {
     clearTimeout(closeTimer);
     if (pinned && !force) return;
+    pinned = false;
     root.dataset.open = 'false';
     root.dataset.teaser = 'false';
+    sendPinState();
     closeTimer = setTimeout(() => {
       if (root.dataset.open !== 'true') panel.hidden = true;
     }, 280);
@@ -93,8 +105,8 @@
       if (!panel.matches(':hover')) hideTeaser();
     }, 140);
   });
-  rail.addEventListener('click', open);
-  teaser.addEventListener('click', open);
+  rail.addEventListener('click', toggle);
+  teaser.addEventListener('click', toggle);
   panel.addEventListener('pointerenter', () => clearTimeout(closeTimer));
   panel.addEventListener('pointerleave', () => close());
   document.addEventListener('pointerdown', (event) => {
@@ -105,13 +117,14 @@
 
   frame.addEventListener('load', () => {
     loaded = true;
+    sendPinState();
     sendContext();
   });
 
   document.addEventListener('keydown', (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key === '.') {
       event.preventDefault();
-      root.dataset.open === 'true' ? close(true) : open();
+      toggle();
     }
     if (event.key === 'Escape' && root.dataset.open === 'true') close(true);
   });
@@ -126,6 +139,7 @@
     if (data.type === 'mycelium:agent-pin') {
       pinned = Boolean(data.pinned);
       if (pinned) clearTimeout(closeTimer);
+      sendPinState();
     }
     if (data.type === 'mycelium:agent-close') close(true);
     if (data.type === 'mycelium:agent-context-request') sendContext();
