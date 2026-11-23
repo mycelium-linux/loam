@@ -15,6 +15,8 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use serde::Serialize;
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use wasm_compose::{
     composer::ComponentComposer,
@@ -29,7 +31,7 @@ use wasmtime::{
 };
 
 /// Where an installed Spore's module lives and what it exports.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PluginEntry {
     pub id: String,
     pub version: String,
@@ -37,11 +39,18 @@ pub struct PluginEntry {
     pub module: PathBuf,
     pub provides: Vec<String>,
     pub requires: Vec<String>,
+    /// The declared sidecar command, if this is a native-sidecar plugin.
     pub native: Option<String>,
+    /// Resolved local sidecar path. `None` for a wasm-only plugin or a bare
+    /// program name resolved on PATH.
+    pub sidecar_path: Option<PathBuf>,
+    pub lock_digest: String,
+    pub signed: bool,
+    pub dev: bool,
 }
 
 /// Exports found on one Spore that could not be indexed, and why.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PluginRefusal {
     pub name: String,
     pub reason: String,
@@ -53,6 +62,7 @@ pub struct PluginRegistry {
     roots: Vec<PathBuf>,
     plugins: BTreeMap<String, PluginEntry>,
     refused: Vec<PluginRefusal>,
+    allow_unsigned_dev: bool,
 }
 
 impl PluginRegistry {
@@ -61,18 +71,31 @@ impl PluginRegistry {
             roots: Vec::new(),
             plugins: BTreeMap::new(),
             refused: Vec::new(),
+            allow_unsigned_dev: false,
         }
     }
 
     /// Scan roots in order. The first package to claim an interface wins; a
     /// later claim is refused rather than silently shadowing it.
     pub fn scan_roots(roots: &[PathBuf]) -> Result<Self> {
+        Self::scan_roots_with(roots, false)
+    }
+
+    /// Scan roots, allowing an unsigned package only when the caller explicitly
+    /// asked for a development install.
+    pub fn scan_roots_dev(roots: &[PathBuf], allow_unsigned_dev: bool) -> Result<Self> {
+        Self::scan_roots_with(roots, allow_unsigned_dev)
+    }
+
+    fn scan_roots_with(roots: &[PathBuf], allow_unsigned_dev: bool) -> Result<Self> {
         let mut registry = Self {
             roots: roots.to_vec(),
             plugins: BTreeMap::new(),
             refused: Vec::new(),
+            allow_unsigned_dev,
         };
         for root in roots {
+            let dev_packages = crate::install::dev_packages(root)?;
             let directory = match std::fs::read_dir(root) {
                 Ok(directory) => directory,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
@@ -89,7 +112,11 @@ impl PluginRegistry {
                 }
                 let package = entry.path();
                 if package.is_dir() {
-                    registry.collect(&package);
+                    let name = package
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    registry.collect(&package, dev_packages.contains(&name));
                 }
             }
         }
@@ -99,6 +126,10 @@ impl PluginRegistry {
     /// Scan the same roots a shell uses: hand-installed commands first, then
     /// Spores installed by a store.
     pub fn scan_default() -> Result<Self> {
+        Self::scan_default_dev(false)
+    }
+
+    pub fn scan_default_dev(allow_unsigned_dev: bool) -> Result<Self> {
         let command_root = std::env::var_os("FUNGOS_COMMAND_ROOT")
             .map(PathBuf::from)
             .unwrap_or_else(|| {
@@ -107,71 +138,22 @@ impl PluginRegistry {
                     .unwrap_or_default()
                     .join(".local/share/fungos/commands")
             });
-        Self::scan_roots(&super::roots(command_root))
+        Self::scan_roots_dev(&super::roots(command_root), allow_unsigned_dev)
     }
 
-    fn collect(&mut self, package: &Path) {
-        let manifest_path = package.join("spore.toml");
-        if !manifest_path.is_file() {
-            return;
+    fn collect(&mut self, package: &Path, installed_dev: bool) {
+        match inspect_package(package, self.allow_unsigned_dev || installed_dev) {
+            Ok(Some(entry)) => self.offer(entry),
+            Ok(None) => {}
+            Err(error) => self.refuse(package, format!("{error:#}")),
         }
-        let manifest = match crate::spore::Manifest::load(package) {
-            Ok(manifest) => manifest,
-            Err(error) => {
-                self.refuse(package, format!("{error}"));
-                return;
-            }
-        };
-        let Some(module) = &manifest.module else {
-            return;
-        };
-        let module_path = package.join(&module.path);
-        let bytes = match std::fs::read(&module_path) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                self.refuse(
-                    package,
-                    format!("read module {}: {error}", module_path.display()),
-                );
-                return;
-            }
-        };
-        let exports = match crate::spore::exported_interfaces(&bytes) {
-            Ok(exports) => exports,
-            Err(error) => {
-                self.refuse(package, format!("{error}"));
-                return;
-            }
-        };
-        // A command exports `wasi:cli/run`; an HTTP service exports
-        // `wasi:http/incoming-handler`. Those are faces, not plugin
-        // capabilities. A plugin is a Spore exporting something outside WASI.
-        let provides: Vec<String> = exports
-            .into_iter()
-            .filter(|interface| !interface.starts_with("wasi:"))
-            .collect();
-        if provides.is_empty() {
-            return;
-        }
-        if let Err(error) = crate::spore::check(package) {
-            self.refuse(package, format!("package is not sealed: {error}"));
-            return;
-        }
-        // Installed packages are trusted after install; the signature check is
-        // at install time. This scan rejects an unsealed tree so a half-copied
-        // package cannot become a provider.
-        if !package.join("spore.lock").is_file() {
-            self.refuse(package, "plugin Spore has no spore.lock".into());
-            return;
-        }
-        if !has_signature(package) {
-            self.refuse(package, "plugin Spore has no signatures/*.asc".into());
-            return;
-        }
-        for interface in &provides {
+    }
+
+    fn offer(&mut self, entry: PluginEntry) {
+        for interface in &entry.provides {
             if let Some(existing) = self.plugins.get(interface) {
                 self.refuse(
-                    package,
+                    &entry.package,
                     format!(
                         "{interface} is already provided by {}",
                         existing.package.display()
@@ -180,18 +162,6 @@ impl PluginRegistry {
                 return;
             }
         }
-        let entry = PluginEntry {
-            id: manifest.spore.id.clone(),
-            version: manifest.spore.version.clone(),
-            package: package.to_path_buf(),
-            module: module_path,
-            provides,
-            requires: manifest.grants.keys().cloned().collect(),
-            native: manifest
-                .plugin
-                .as_ref()
-                .and_then(|plugin| plugin.sidecar.clone()),
-        };
         for interface in &entry.provides {
             self.plugins.insert(interface.clone(), entry.clone());
         }
@@ -203,6 +173,14 @@ impl PluginRegistry {
             |name| name.to_string_lossy().into_owned(),
         );
         self.refused.push(PluginRefusal { name, reason });
+    }
+
+    /// Find a provider by package id or by one of its interfaces.
+    pub fn inspect(&self, target: &str) -> Vec<&PluginEntry> {
+        self.plugins
+            .values()
+            .filter(|entry| entry.id == target || entry.provides.iter().any(|i| i == target))
+            .collect()
     }
 
     pub fn roots(&self) -> &[PathBuf] {
@@ -306,6 +284,130 @@ impl PluginRegistry {
         }
         Ok(linked)
     }
+}
+
+/// Check one directory as a plugin package.
+///
+/// `Ok(None)` means the directory is a ordinary Spore (or command) with no
+/// non-WASI export, not a broken plugin. `Err` is the reason a package that
+/// claims to be a plugin is not usable.
+pub fn inspect_package(package: &Path, allow_unsigned_dev: bool) -> Result<Option<PluginEntry>> {
+    let manifest_path = package.join("spore.toml");
+    if !manifest_path.is_file() {
+        return Ok(None);
+    }
+    let manifest = crate::spore::Manifest::load(package)?;
+    let Some(module) = &manifest.module else {
+        return Ok(None);
+    };
+    let module_path = package.join(&module.path);
+    let bytes = std::fs::read(&module_path)
+        .with_context(|| format!("read module {}", module_path.display()))?;
+    let exports = crate::spore::exported_interfaces(&bytes)?;
+    // A command exports `wasi:cli/run`; an HTTP service exports
+    // `wasi:http/incoming-handler`. Those are faces, not plugin capabilities.
+    let provides: Vec<String> = exports
+        .into_iter()
+        .filter(|interface| !interface.starts_with("wasi:"))
+        .collect();
+    if provides.is_empty() {
+        return Ok(None);
+    }
+
+    let lock_path = package.join(crate::spore::LOCK_NAME);
+    if !lock_path.is_file() {
+        bail!("plugin Spore has no spore.lock");
+    }
+    let lock = crate::spore::check(package)
+        .map_err(|error| anyhow::anyhow!("plugin Spore is not sealed: {error}"))?;
+    let signed = has_signature(package);
+    if !signed && !allow_unsigned_dev {
+        bail!("plugin Spore has no signatures/*.asc; pass --allow-unsigned-dev");
+    }
+
+    let imported = crate::spore::imported_interfaces(&bytes)?;
+    let sidecar = manifest
+        .plugin
+        .as_ref()
+        .and_then(|plugin| plugin.sidecar.clone());
+    let mut sidecar_path = None;
+    if let Some(sidecar) = &sidecar {
+        let is_package_path =
+            Path::new(sidecar).components().count() > 1 || sidecar.starts_with('.');
+        if is_package_path {
+            let local = package.join(sidecar);
+            if !local.is_file() {
+                bail!("declared sidecar {sidecar} is missing from the package");
+            }
+            if !executable(&local) {
+                bail!("declared sidecar {sidecar} is not executable");
+            }
+            let normalized = sidecar.trim_start_matches("./").replace('\\', "/");
+            if !lock.files.iter().any(|file| file.path == normalized) {
+                bail!("declared sidecar {sidecar} is not covered by spore.lock");
+            }
+            sidecar_path = Some(local);
+        } else {
+            let Some(found) = resolve_program(sidecar) else {
+                bail!("declared sidecar {sidecar} was not found on PATH");
+            };
+            if !executable(&found) {
+                bail!("declared sidecar {sidecar} is not executable");
+            }
+            sidecar_path = Some(found);
+        }
+        if !imported
+            .iter()
+            .any(|interface| interface == "loam:plugin/ipc@0.1.0")
+        {
+            bail!("a native-sidecar plugin must import loam:plugin/ipc@0.1.0");
+        }
+    }
+
+    Ok(Some(PluginEntry {
+        id: manifest.spore.id.clone(),
+        version: manifest.spore.version.clone(),
+        package: package.to_path_buf(),
+        module: module_path,
+        provides,
+        requires: manifest.grants.keys().cloned().collect(),
+        native: sidecar,
+        sidecar_path,
+        lock_digest: lock.digest,
+        signed,
+        dev: !signed,
+    }))
+}
+
+fn executable(path: &Path) -> bool {
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(_) => return false,
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+fn resolve_program(program: &str) -> Option<PathBuf> {
+    if program.contains('/') {
+        let path = Path::new(program);
+        return path.is_file().then(|| path.to_path_buf());
+    }
+    std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .map(|dir| dir.join(program))
+        .find(|candidate| candidate.is_file())
 }
 
 /// Stable cache key for one provider/consumer/import composition.
@@ -500,12 +602,22 @@ where
 pub fn cli(args: &[String]) -> Result<()> {
     let mut roots = Vec::new();
     let mut positional = Vec::new();
+    let mut json = false;
+    let mut allow_unsigned_dev = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--root" => {
                 roots.push(PathBuf::from(args.get(i + 1).context("--root DIR")?));
                 i += 2;
+            }
+            "--json" => {
+                json = true;
+                i += 1;
+            }
+            "--allow-unsigned-dev" => {
+                allow_unsigned_dev = true;
+                i += 1;
             }
             value if value.starts_with('-') => bail!("unknown plugin option {value}"),
             value => {
@@ -559,20 +671,52 @@ pub fn cli(args: &[String]) -> Result<()> {
         println!("{}", lock.digest);
         return Ok(());
     }
+    if command == "verify"
+        && let Some(path) = positional.get(1)
+    {
+        let entry = inspect_package(Path::new(path), allow_unsigned_dev)?
+            .with_context(|| format!("{path} is not a plugin package"))?;
+        if json {
+            println!("{}", serde_json::to_string_pretty(&entry)?);
+        } else {
+            println!(
+                "plugin ok: {} {} {}",
+                entry.id,
+                entry.version,
+                entry.provides.join(", ")
+            );
+        }
+        return Ok(());
+    }
+
     let registry = if roots.is_empty() {
-        PluginRegistry::scan_default()?
+        PluginRegistry::scan_default_dev(allow_unsigned_dev)?
     } else {
-        PluginRegistry::scan_roots(&roots)?
+        PluginRegistry::scan_roots_dev(&roots, allow_unsigned_dev)?
     };
     match command {
         "list" => {
-            for (interface, entry) in registry.interfaces() {
+            if json {
+                let plugins: Vec<_> = registry
+                    .interfaces()
+                    .map(|(interface, entry)| plugin_row(interface, entry))
+                    .collect();
                 println!(
-                    "{interface}\t{}\t{}\t{}",
-                    entry.id,
-                    entry.version,
-                    entry.package.display()
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                        "plugins": plugins,
+                        "refused": registry.refused(),
+                    }))?
                 );
+            } else {
+                for (interface, entry) in registry.interfaces() {
+                    println!(
+                        "{interface}\t{}\t{}\t{}",
+                        entry.id,
+                        entry.version,
+                        entry.package.display()
+                    );
+                }
             }
             for refusal in registry.refused() {
                 eprintln!("plugin: {}: {}", refusal.name, refusal.reason);
@@ -586,7 +730,51 @@ pub fn cli(args: &[String]) -> Result<()> {
             if !registry.refused().is_empty() {
                 bail!("{} plugin package(s) refused", registry.refused().len());
             }
-            println!("plugins ok: {} interfaces", registry.interfaces().count());
+            if json {
+                let plugins: Vec<_> = registry
+                    .interfaces()
+                    .map(|(interface, entry)| plugin_row(interface, entry))
+                    .collect();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({ "plugins": plugins }))?
+                );
+            } else {
+                println!("plugins ok: {} interfaces", registry.interfaces().count());
+            }
+            Ok(())
+        }
+        "inspect" => {
+            let target = positional
+                .get(1)
+                .context("plugin inspect ID-OR-INTERFACE")?;
+            let entries = registry.inspect(target);
+            if entries.is_empty() {
+                bail!("no plugin provides {target:?}");
+            }
+            let rows: Vec<_> = entries
+                .iter()
+                .flat_map(|entry| {
+                    entry
+                        .provides
+                        .iter()
+                        .map(move |interface| plugin_row(interface, entry))
+                })
+                .collect();
+            if json {
+                println!("{}", serde_json::to_string_pretty(&rows)?);
+            } else {
+                for row in rows {
+                    println!(
+                        "{}\t{}\t{}\t{}\t{}",
+                        row["interface"].as_str().unwrap_or_default(),
+                        row["provider_id"].as_str().unwrap_or_default(),
+                        row["provider_version"].as_str().unwrap_or_default(),
+                        row["package"].as_str().unwrap_or_default(),
+                        row["kind"].as_str().unwrap_or_default(),
+                    );
+                }
+            }
             Ok(())
         }
         "roots" => {
@@ -597,6 +785,27 @@ pub fn cli(args: &[String]) -> Result<()> {
         }
         other => bail!("unknown plugin command {other}"),
     }
+}
+
+fn plugin_row(interface: &str, entry: &PluginEntry) -> serde_json::Value {
+    let kind = if entry.native.is_some() {
+        "native-sidecar"
+    } else {
+        "wasm"
+    };
+    json!({
+        "interface": interface,
+        "provider_id": entry.id,
+        "provider_version": entry.version,
+        "package": entry.package,
+        "module": entry.module,
+        "sidecar": entry.sidecar_path.as_ref().map(|path| path.display().to_string()).or(entry.native.clone()),
+        "kind": kind,
+        "lock_digest": entry.lock_digest,
+        "signed": entry.signed,
+        "dev": entry.dev,
+        "requires": entry.requires,
+    })
 }
 
 #[cfg(test)]
@@ -672,6 +881,71 @@ mod tests {
         let entry = registry.get("test:echo/echo@0.1.0").expect("provider");
         assert_eq!(entry.id, "test.echo");
         assert_eq!(entry.provides, vec!["test:echo/echo@0.1.0"]);
+    }
+
+    fn package_with_sidecar(root: &Path, name: &str, signed: bool, executable: bool) -> PathBuf {
+        let package = package(root, name, signed);
+        let manifest_path = package.join("spore.toml");
+        let mut manifest = fs::read_to_string(&manifest_path).unwrap();
+        manifest.push_str("\n[plugin]\nsidecar = \"bin/helper\"\n");
+        fs::write(&manifest_path, manifest).unwrap();
+        fs::create_dir_all(package.join("bin")).unwrap();
+        let helper = package.join("bin/helper");
+        fs::write(&helper, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = if executable { 0o755 } else { 0o644 };
+            fs::set_permissions(&helper, fs::Permissions::from_mode(mode)).unwrap();
+        }
+        let manifest = crate::spore::Manifest::load(&package).unwrap();
+        let lock = crate::spore::compute_lock(&package, &manifest).unwrap();
+        fs::write(package.join("spore.lock"), lock.render()).unwrap();
+        package
+    }
+
+    #[test]
+    fn a_sidecar_must_import_the_plugin_ipc_interface() {
+        let dir = tempfile::tempdir().unwrap();
+        let package = package_with_sidecar(dir.path(), "echo", true, true);
+        let error = inspect_package(&package, false).unwrap_err().to_string();
+        assert!(error.contains("loam:plugin/ipc"), "{error}");
+    }
+
+    #[test]
+    fn a_sidecar_must_exist_and_be_executable() {
+        let dir = tempfile::tempdir().unwrap();
+        let package = package_with_sidecar(dir.path(), "echo", true, true);
+        fs::remove_file(package.join("bin/helper")).unwrap();
+        let error = inspect_package(&package, false).unwrap_err().to_string();
+        assert!(error.contains("missing"), "{error}");
+
+        let package = package_with_sidecar(dir.path(), "echo2", true, false);
+        let error = inspect_package(&package, false).unwrap_err().to_string();
+        assert!(error.contains("not executable"), "{error}");
+    }
+
+    #[test]
+    fn unsigned_plugins_require_an_explicit_dev_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let package = package(dir.path(), "echo", false);
+        assert!(inspect_package(&package, false).is_err());
+        let entry = inspect_package(&package, true).unwrap().unwrap();
+        assert!(entry.dev);
+        assert!(!entry.signed);
+        assert_eq!(entry.lock_digest.len(), 64);
+    }
+
+    #[test]
+    fn a_stale_lock_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let package = package(dir.path(), "echo", true);
+        let manifest = package.join("spore.toml");
+        let mut source = fs::read_to_string(&manifest).unwrap();
+        source.push_str("\n# changed after the lock was written\n");
+        fs::write(&manifest, source).unwrap();
+        let error = inspect_package(&package, false).unwrap_err().to_string();
+        assert!(error.contains("not sealed"), "{error}");
     }
 
     #[test]

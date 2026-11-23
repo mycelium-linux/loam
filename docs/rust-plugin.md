@@ -1,5 +1,8 @@
 # Writing a Rust WIT plugin for loam
 
+See also [`plugins.md`](plugins.md), [`plugin-package.md`](plugin-package.md),
+[`plugin-ipc.md`](plugin-ipc.md), and [`plugin-compat.md`](plugin-compat.md).
+
 A loam plugin is a Spore that **exports** one or more WIT interfaces. There is
 no `plugin.toml` and no second package format. The same `spore.toml`,
 `spore.lock`, signature and install roots cover plugins, commands and services.
@@ -206,11 +209,10 @@ The local seal is enough for local plugin discovery, but it is **not a trusted
 publisher signature**. Real publication still requires the publisher signature
 path. Do not ship `local.asc`.
 
-Install it into a plugin root:
+Install it into the Spore root:
 
 ```sh
-mkdir -p ~/.local/share/fungos/spores
-cp -R acme-font-plugin ~/.local/share/fungos/spores/fonts
+loam install acme-font-plugin
 loam plugin list
 ```
 
