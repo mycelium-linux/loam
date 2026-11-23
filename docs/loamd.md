@@ -22,7 +22,24 @@ loamd --socket /tmp/loamd.sock --root ~/.local/share/fungos/commands
 
 `loamd` scans command and Spore roots at startup. `loamd reload` rescans them
 without restarting the daemon, and `start` retries the scan once when a command
-appeared after the daemon started.
+appeared after the daemon started. `loam install` asks a running daemon to
+reload, so a finished install is visible without a second command.
+
+Manifest web surfaces are re-scanned every five seconds as well. When a new
+Spore adds a `.myc` name, `loamd` starts the listener if needed, publishes the
+new lease, and asks Mycelium to renew the frontdoor leaf certificate:
+
+```sh
+mycelium frontdoor renew --write
+```
+
+Renewal reuses the local CA, so adding a Spore never turns into a new trust
+decision. An install made before `ca-key.pem` was persisted has no way to sign
+a new leaf; on that host `loamd` logs the one-time migration command:
+
+```sh
+mycelium frontdoor install --write --trust-cert
+```
 
 ## Configuration
 

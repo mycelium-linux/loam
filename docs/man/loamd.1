@@ -82,16 +82,23 @@ Return captured stdout/stderr. Falls back to the durable log after restart.
 Stop a running instance.
 .TP
 .B reload
-Rescan command and plugin roots without restarting the daemon. Static web
-surfaces are discovered at startup; see the note below.
+Rescan command, plugin, and static web roots without restarting the daemon.
+See the note below about web surfaces and certificates.
 .TP
 .B shutdown
 Stop the daemon and its instances.
 .SH WEB SURFACES
 A web surface is served only when its package declares both a web surface and
 an anycast claim. See the Spore manifest documentation or the Soil skill for
-the manifest shape. The listener scans roots at startup;
-a newly installed web package needs one daemon restart. Static file edits do not.
+the manifest shape. The listener rescans roots at startup, on reload, and every
+five seconds. A newly installed web package is served and leased without a
+daemon restart. Static file edits do not require a reload.
+.PP
+The lease publisher asks Mycelium to renew the frontdoor leaf certificate when
+the set of web surfaces changes. Renewal reuses the local CA, so adding a Spore
+does not create a new trust decision. An older installation without
+\fIca-key.pem\fR cannot renew silently; loamd logs the one-time migration:
+\fBmycelium frontdoor install --write --trust-cert\fR.
 .SH FILES
 .TP
 .I ~/.config/loam/loam.conf.soil
