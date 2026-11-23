@@ -62,6 +62,8 @@
       const result = await api('/api/vfs/list?path=');
       render(result.entries);
       setStatus('Workspace ready');
+      const first = list.querySelector('.note-row');
+      if (!selected && first) await openNote(first.dataset.path);
     } catch (error) {
       setStatus(error.message, true);
     }
