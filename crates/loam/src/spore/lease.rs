@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 use super::identity::Identity;
 use super::publisher::TrustedPublisher;
-use super::{Error, Lock, Manifest, Result};
+use super::{Anycast, Error, Lock, Manifest, Result};
 
 /// Endpoint schemes Mycelium accepts on an application lease.
 const SCHEMES: [&str; 5] = ["http", "https", "tcp", "quic", "iroh"];
@@ -39,8 +39,32 @@ pub fn document(
             "this Spore declares no [anycast] claim".into(),
         ));
     };
+    document_for(
+        &manifest.spore.id,
+        &manifest.spore.version,
+        anycast,
+        lock,
+        publisher,
+        identity,
+        endpoints,
+        now_unix_s,
+    )
+}
+
+/// Build a lease for a claim read from either manifest form.
+#[allow(clippy::too_many_arguments)]
+pub fn document_for(
+    id: &str,
+    version: &str,
+    anycast: &Anycast,
+    lock: &Lock,
+    publisher: &TrustedPublisher,
+    identity: &Identity,
+    endpoints: &[String],
+    now_unix_s: u64,
+) -> Result<Value> {
     let node_id = identity.node_id.as_str();
-    let service_id = service_id(manifest, identity)?;
+    let service_id = service_id_for(anycast, identity)?;
     if endpoints.is_empty() || endpoints.len() > MAX_ENDPOINTS {
         return Err(Error::Invalid(format!(
             "an anycast lease needs 1..={MAX_ENDPOINTS} endpoints"
@@ -57,8 +81,8 @@ pub fn document(
     let expires_at = now_unix_s + anycast.ttl_secs;
     let mut attributes = json!({
         "node_id": node_id,
-        "spore_id": manifest.spore.id.clone(),
-        "spore_version": manifest.spore.version.clone(),
+        "spore_id": id,
+        "spore_version": version,
         "package_digest": lock.digest.clone(),
         "principal": publisher.principal.clone(),
         "grant_id": publisher.grant_id.clone(),
@@ -83,7 +107,7 @@ pub fn document(
             "provenance": {
                 "provider": "soil-spore",
                 "observer": node_id,
-                "source_id": format!("{}/{}@{}", manifest.spore.id, anycast.kind, lock.digest),
+                "source_id": format!("{id}/{}@{}", anycast.kind, lock.digest),
             },
             "confidence": "strong",
             "value": {
@@ -108,6 +132,11 @@ pub fn service_id(manifest: &Manifest, identity: &Identity) -> Result<String> {
             "this Spore declares no [anycast] claim".into(),
         ));
     };
+    service_id_for(anycast, identity)
+}
+
+/// The service identity for a claim from either manifest form.
+pub fn service_id_for(anycast: &Anycast, identity: &Identity) -> Result<String> {
     let node_id = identity.node_id.as_str();
     if node_id.is_empty() || !node_id.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
         return Err(Error::Invalid(format!("{node_id:?} is not a node id")));

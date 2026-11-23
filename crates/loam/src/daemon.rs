@@ -291,13 +291,15 @@ fn publish_web_leases(surfaces: &[crate::web::StaticSurface], endpoint: &str) {
             .ok()
             .and_then(|source| crate::spore::Lock::parse(&source).ok())
             .unwrap_or_else(|| crate::spore::Lock {
-                id: surface.manifest.spore.id.clone(),
-                version: surface.manifest.spore.version.clone(),
+                id: surface.spore_id.clone(),
+                version: surface.version.clone(),
                 files: Vec::new(),
                 digest: "sha256:local".into(),
             });
-        let rendered = match crate::spore::lease::document(
-            &surface.manifest,
+        let rendered = match crate::spore::lease::document_for(
+            &surface.spore_id,
+            &surface.version,
+            &surface.anycast,
             &lock,
             &publisher,
             &identity,
@@ -310,7 +312,7 @@ fn publish_web_leases(surfaces: &[crate::web::StaticSurface], endpoint: &str) {
                 continue;
             }
         };
-        let service_id = match crate::spore::lease::service_id(&surface.manifest, &identity) {
+        let service_id = match crate::spore::lease::service_id_for(&surface.anycast, &identity) {
             Ok(service_id) => service_id,
             Err(_) => continue,
         };
@@ -325,10 +327,10 @@ fn publish_web_leases(surfaces: &[crate::web::StaticSurface], endpoint: &str) {
             observations.push(observation);
         }
     }
-    if let Ok(text) = serde_json::to_vec_pretty(&document) {
-        if let Err(error) = fs::write(&path, text) {
-            eprintln!("loamd: write {}: {error}", path.display());
-        }
+    if let Ok(text) = serde_json::to_vec_pretty(&document)
+        && let Err(error) = fs::write(&path, text)
+    {
+        eprintln!("loamd: write {}: {error}", path.display());
     }
 }
 

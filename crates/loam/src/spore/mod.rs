@@ -30,6 +30,7 @@ pub mod identity;
 pub mod lease;
 pub mod manual;
 pub mod publisher;
+pub mod soil;
 
 pub const SCHEMA: u32 = 1;
 pub const LOCK_NAME: &str = "spore.lock";

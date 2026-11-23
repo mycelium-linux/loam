@@ -14,12 +14,14 @@ use std::{
 
 use anyhow::{Context, Result};
 
-use crate::spore::{Manifest, SurfaceKind};
+use crate::spore::{Anycast, Manifest, Surface, SurfaceKind, Ui, soil::SoilManifest};
 
 #[derive(Debug, Clone)]
 pub struct StaticSurface {
     pub package: PathBuf,
-    pub manifest: Manifest,
+    pub spore_id: String,
+    pub version: String,
+    pub anycast: Anycast,
     pub entry: PathBuf,
     pub name: String,
     pub kind: String,
@@ -27,6 +29,10 @@ pub struct StaticSurface {
 }
 
 /// Find static web surfaces in a set of package roots.
+///
+/// `spore.soil` wins when a package carries both forms: it is the source
+/// manifest the author edits, and a lease should follow the file being edited.
+/// `spore.toml` remains the installed-package form.
 pub fn discover(roots: &[PathBuf]) -> Result<Vec<StaticSurface>> {
     let mut found = Vec::new();
     for root in roots {
@@ -36,49 +42,78 @@ pub fn discover(roots: &[PathBuf]) -> Result<Vec<StaticSurface>> {
         };
         for entry in entries.flatten() {
             let package = entry.path();
-            if !package.is_dir() || !package.join("spore.toml").is_file() {
+            if !package.is_dir() {
                 continue;
             }
-            let source = match fs::read_to_string(package.join("spore.toml")) {
-                Ok(source) => source,
-                Err(_) => continue,
+            let soil = package.join("spore.soil");
+            let toml = package.join("spore.toml");
+            let surface = if soil.is_file() {
+                fs::read_to_string(&soil)
+                    .ok()
+                    .and_then(|source| SoilManifest::parse(&source).ok())
+                    .and_then(|manifest| {
+                        let anycast = manifest.anycast.clone()?;
+                        static_surface(
+                            &package,
+                            manifest.id,
+                            manifest.version,
+                            anycast,
+                            &manifest.surfaces,
+                            None,
+                        )
+                    })
+            } else if toml.is_file() {
+                fs::read_to_string(&toml)
+                    .ok()
+                    .and_then(|source| Manifest::parse(&source).ok())
+                    .and_then(|manifest| {
+                        let anycast = manifest.anycast.clone()?;
+                        static_surface(
+                            &package,
+                            manifest.spore.id,
+                            manifest.spore.version,
+                            anycast,
+                            &manifest.surfaces,
+                            manifest.ui.as_ref(),
+                        )
+                    })
+            } else {
+                None
             };
-            let manifest = match Manifest::parse(&source) {
-                Ok(manifest) => manifest,
-                Err(_) => continue,
-            };
-            let Some(anycast) = &manifest.anycast else {
-                continue;
-            };
-            let Some(surface) = manifest
-                .surfaces
-                .iter()
-                .find(|surface| surface.kind == SurfaceKind::Web)
-            else {
-                continue;
-            };
-            let Some(entry) = surface.entry(manifest.ui.as_ref()) else {
-                continue;
-            };
-            let entry = package.join(entry);
-            if !entry.is_file() {
-                continue;
+            if let Some(surface) = surface {
+                found.push(surface);
             }
-            let name = anycast.name.clone();
-            let kind = anycast.kind.clone();
-            let ttl_secs = anycast.ttl_secs;
-            found.push(StaticSurface {
-                package,
-                manifest,
-                entry,
-                name,
-                kind,
-                ttl_secs,
-            });
         }
     }
     found.sort_by(|left, right| left.name.cmp(&right.name));
     Ok(found)
+}
+
+fn static_surface(
+    package: &Path,
+    spore_id: String,
+    version: String,
+    anycast: Anycast,
+    surfaces: &[Surface],
+    ui: Option<&Ui>,
+) -> Option<StaticSurface> {
+    let surface = surfaces
+        .iter()
+        .find(|surface| surface.kind == SurfaceKind::Web)?;
+    let entry = package.join(surface.entry(ui)?);
+    if !entry.is_file() {
+        return None;
+    }
+    Some(StaticSurface {
+        package: package.to_path_buf(),
+        spore_id,
+        version,
+        name: anycast.name.clone(),
+        kind: anycast.kind.clone(),
+        ttl_secs: anycast.ttl_secs,
+        anycast,
+        entry,
+    })
 }
 
 /// Serve one or more static surfaces. The first surface is the fallback when
@@ -200,4 +235,57 @@ fn media_type(path: &Path) -> &'static str {
 pub fn loopback_endpoint(listener: &TcpListener) -> Result<String> {
     let addr = listener.local_addr().context("web listener address")?;
     Ok(format!("http://{addr}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn package(root: &Path, manifest_name: &str, manifest: &str) {
+        let package = root.join("site");
+        fs::create_dir_all(&package).expect("package");
+        fs::write(package.join(manifest_name), manifest).expect("manifest");
+        fs::write(package.join("index.html"), "<h1>site</h1>").expect("page");
+    }
+
+    #[test]
+    fn discovers_a_web_surface_from_spore_soil() {
+        let temp = tempfile::tempdir().expect("temp");
+        package(
+            temp.path(),
+            "spore.soil",
+            r#"(spore
+                 (id "org.mycelium.web")
+                 (version "0.1.0")
+                 (anycast (name "web") (kind "web") (alpns ("soil/http/1")))
+                 (surfaces (surface "web" (kind "web") (entry "index.html"))))"#,
+        );
+        let surfaces = discover(&[temp.path().to_path_buf()]).expect("discover");
+        assert_eq!(surfaces.len(), 1);
+        let surface = &surfaces[0];
+        assert_eq!(surface.spore_id, "org.mycelium.web");
+        assert_eq!(surface.version, "0.1.0");
+        assert_eq!(surface.name, "web");
+        assert_eq!(surface.kind, "web");
+        assert_eq!(surface.anycast.alpns, vec!["soil/http/1"]);
+        assert_eq!(surface.entry, temp.path().join("site/index.html"));
+    }
+
+    #[test]
+    fn a_soil_package_without_an_anycast_claim_is_not_leased() {
+        let temp = tempfile::tempdir().expect("temp");
+        package(
+            temp.path(),
+            "spore.soil",
+            r#"(spore
+                 (id "org.mycelium.web")
+                 (version "0.1.0")
+                 (surfaces (surface "web" (kind "web") (entry "index.html"))))"#,
+        );
+        assert!(
+            discover(&[temp.path().to_path_buf()])
+                .expect("discover")
+                .is_empty()
+        );
+    }
 }
