@@ -81,6 +81,9 @@ fn run() -> Result<()> {
                 loam_surface::run_window(&path, Some(size))
             }
         }
+        "install" => install_cli(&args[1..]),
+        "status" => status_cli(&args[1..]),
+        "rollback" => rollback_cli(&args[1..]),
         "plugin" => soil::command::plugin::cli(&args[1..]),
         "edit" => std::process::exit(soil::edit::run(&args[1..])),
         "doctor" => {
@@ -96,4 +99,128 @@ fn run() -> Result<()> {
         }
         other => bail!("unknown loam command {other}\n{}", usage()),
     }
+}
+
+fn install_cli(args: &[String]) -> Result<()> {
+    let mut path = None;
+    let mut root = None;
+    let mut allow_unsigned_dev = false;
+    let mut provider_roots = Vec::new();
+    let mut composition_cache = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--root" => {
+                root = Some(std::path::PathBuf::from(
+                    args.get(i + 1).context("--root DIR")?,
+                ));
+                i += 2;
+            }
+            "--provider-root" => {
+                provider_roots.push(std::path::PathBuf::from(
+                    args.get(i + 1).context("--provider-root DIR")?,
+                ));
+                i += 2;
+            }
+            "--compose-cache" => {
+                composition_cache = Some(std::path::PathBuf::from(
+                    args.get(i + 1).context("--compose-cache DIR")?,
+                ));
+                i += 2;
+            }
+            "--allow-unsigned-dev" => {
+                allow_unsigned_dev = true;
+                i += 1;
+            }
+            other if other.starts_with('-') => bail!("unknown install option {other}"),
+            other => {
+                if path.replace(std::path::PathBuf::from(other)).is_some() {
+                    bail!("install takes one package path");
+                }
+                i += 1;
+            }
+        }
+    }
+    let report = soil::install::install(soil::install::InstallOptions {
+        path: path.context("install needs PATH")?,
+        root: root.context("install needs --root DIR")?,
+        allow_unsigned_dev,
+        provider_roots,
+        composition_cache,
+    })?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
+}
+
+fn status_cli(args: &[String]) -> Result<()> {
+    let mut root = None;
+    let mut json = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--root" => {
+                root = Some(std::path::PathBuf::from(
+                    args.get(i + 1).context("--root DIR")?,
+                ));
+                i += 2;
+            }
+            "--json" => {
+                json = true;
+                i += 1;
+            }
+            other => bail!("unknown status option {other}"),
+        }
+    }
+    let report = soil::install::status(&root.context("status needs --root DIR")?)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        if report.installs.is_empty() {
+            println!("no managed installs in {}", report.root.display());
+            return Ok(());
+        }
+        println!(
+            "{:<24} {:<12} {:<24} {:>5}",
+            "ID", "VERSION", "PACKAGE", "WARM"
+        );
+        for record in &report.installs {
+            println!(
+                "{:<24} {:<12} {:<24} {:>5}",
+                record.id,
+                record.version,
+                record.package,
+                if record.warm { "yes" } else { "no" }
+            );
+        }
+    }
+    Ok(())
+}
+
+fn rollback_cli(args: &[String]) -> Result<()> {
+    let mut id = None;
+    let mut root = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--root" => {
+                root = Some(std::path::PathBuf::from(
+                    args.get(i + 1).context("--root DIR")?,
+                ));
+                i += 2;
+            }
+            other if other.starts_with('-') => bail!("unknown rollback option {other}"),
+            other => {
+                if id.replace(other.to_string()).is_some() {
+                    bail!("rollback takes one install id");
+                }
+                i += 1;
+            }
+        }
+    }
+    let report = soil::install::rollback(
+        &root.context("rollback needs --root DIR")?,
+        &id.context("rollback needs ID")?,
+    )?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
 }

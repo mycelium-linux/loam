@@ -585,6 +585,62 @@ fn installed_runtime(package: &Path) -> (Option<PathBuf>, Option<String>) {
     (Some(runtime), key)
 }
 
+/// Read every command declared by one package directory.
+///
+/// A standalone command package is one command. A Spore package is every
+/// `[[commands]]` entry it declares. The caller supplies the package root; this
+/// does not scan a parent directory.
+pub fn package_commands(package: &Path) -> Result<Vec<CommandEntry>> {
+    if package.join("command.toml").is_file() {
+        standalone_command(package).map(|entry| vec![entry])
+    } else if package.join("spore.toml").is_file() {
+        spore_commands(package)
+    } else {
+        bail!(
+            "{} is neither a command package nor a Spore package",
+            package.display()
+        )
+    }
+}
+
+/// Compile one command module and write its warm marker for `package`.
+///
+/// The installer uses this before swapping a new generation into place, so a
+/// compile failure cannot disturb the active install. The marker is written
+/// beside the final package path, not the staging path.
+pub fn warm_entry(entry: &CommandEntry, package: &Path) -> Result<PathBuf> {
+    let module = entry.runtime_module.as_ref().unwrap_or(&entry.module);
+    let bytes =
+        std::fs::read(module).with_context(|| format!("read module {}", module.display()))?;
+    let digest = hex(&Sha256::digest(&bytes));
+    let marker = warm_marker(package, &entry.name);
+    if marker_digest(&marker).as_deref() == Some(digest.as_str())
+        && marker_key(&marker).as_deref() == entry.composition_key.as_deref()
+    {
+        return Ok(marker);
+    }
+    let engine = Engine::new(&caching_config())?;
+    wasmtime::component::Component::from_file(&engine, module)
+        .map_err(|error| anyhow::anyhow!("compile module {}: {error}", module.display()))?;
+    let body = serde_json::json!({
+        "name": entry.name,
+        "module": module.display().to_string(),
+        "sha256": digest,
+        "composition_key": entry.composition_key,
+        "warmed_at": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_secs())
+            .unwrap_or_default(),
+    });
+    if let Some(dir) = marker.parent() {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("create warm directory {}", dir.display()))?;
+    }
+    std::fs::write(&marker, serde_json::to_vec_pretty(&body)?)
+        .with_context(|| format!("write {}", marker.display()))?;
+    Ok(marker)
+}
+
 /// One package that stands alone: `command.toml` beside its module.
 fn standalone_command(package: &Path) -> Result<CommandEntry> {
     let manifest_path = package.join("command.toml");
@@ -725,10 +781,9 @@ impl CommandRunner {
                 component.clone()
             } else {
                 let component = Arc::new(
-                    wasmtime::component::Component::from_file(&self.engine, module)
-                        .map_err(|error| {
-                            anyhow::anyhow!("load command {}: {error}", module.display())
-                        })?,
+                    wasmtime::component::Component::from_file(&self.engine, module).map_err(
+                        |error| anyhow::anyhow!("load command {}: {error}", module.display()),
+                    )?,
                 );
                 cache.insert(module.clone(), component.clone());
                 component

@@ -341,8 +341,9 @@ pub fn compose_cached(
         let temp = tempfile::NamedTempFile::new_in(cache_dir)
             .with_context(|| format!("create composition temp in {}", cache_dir.display()))?;
         compose_provider(root, provider, import, temp.path())?;
-        temp.persist(&cached)
-            .map_err(|error| anyhow::anyhow!("install composition cache {}: {error}", cached.display()))?;
+        temp.persist(&cached).map_err(|error| {
+            anyhow::anyhow!("install composition cache {}: {error}", cached.display())
+        })?;
     }
     if let Some(parent) = out.parent() {
         std::fs::create_dir_all(parent)?;
@@ -382,8 +383,10 @@ pub fn compose_provider(root: &Path, provider: &Path, import: &str, out: &Path) 
             path: provider.to_path_buf(),
         },
     );
-    let mut instantiation = Instantiation::default();
-    instantiation.dependency = Some(name.to_string());
+    let mut instantiation = Instantiation {
+        dependency: Some(name.to_string()),
+        ..Instantiation::default()
+    };
     instantiation.arguments.insert(
         import.to_string(),
         InstantiationArg {
@@ -391,7 +394,9 @@ pub fn compose_provider(root: &Path, provider: &Path, import: &str, out: &Path) 
             export: Some(import.to_string()),
         },
     );
-    config.instantiations.insert("root".to_string(), instantiation);
+    config
+        .instantiations
+        .insert("root".to_string(), instantiation);
     let bytes = ComponentComposer::new(root, &config).compose()?;
     if let Some(parent) = out.parent() {
         std::fs::create_dir_all(parent)?;
@@ -525,20 +530,16 @@ pub fn cli(args: &[String]) -> Result<()> {
                 .get(4)
                 .context("plugin compose-cached ROOT PROVIDER IMPORT OUT")?,
         );
-        let hit = compose_cached(
-            &root,
-            &provider,
-            import,
-            &default_composition_cache(),
-            &out,
-        )?;
+        let hit = compose_cached(&root, &provider, import, &default_composition_cache(), &out)?;
         println!("{} cached={hit}", out.display());
         return Ok(());
     }
     if command == "compose" {
         let root = PathBuf::from(positional.get(1).context("plugin compose ROOT")?);
         let provider = PathBuf::from(positional.get(2).context("plugin compose ROOT PROVIDER")?);
-        let import = positional.get(3).context("plugin compose ROOT PROVIDER IMPORT")?;
+        let import = positional
+            .get(3)
+            .context("plugin compose ROOT PROVIDER IMPORT")?;
         let out = PathBuf::from(
             positional
                 .get(4)
@@ -750,9 +751,30 @@ mod tests {
         let cache = dir.path().join("cache");
         let first = dir.path().join("first.wasm");
         let second = dir.path().join("second.wasm");
-        assert!(!compose_cached(&root, &provider, "example:service/logging@0.1.0", &cache, &first).unwrap());
-        assert!(compose_cached(&root, &provider, "example:service/logging@0.1.0", &cache, &second).unwrap());
-        assert_eq!(std::fs::read(&first).unwrap(), std::fs::read(&second).unwrap());
+        assert!(
+            !compose_cached(
+                &root,
+                &provider,
+                "example:service/logging@0.1.0",
+                &cache,
+                &first
+            )
+            .unwrap()
+        );
+        assert!(
+            compose_cached(
+                &root,
+                &provider,
+                "example:service/logging@0.1.0",
+                &cache,
+                &second
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            std::fs::read(&first).unwrap(),
+            std::fs::read(&second).unwrap()
+        );
         Component::from_file(&engine, &first).expect("cached composed component");
     }
 
