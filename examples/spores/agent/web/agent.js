@@ -10,8 +10,10 @@
   const composer = document.getElementById('composer');
   const pin = document.getElementById('pin');
   const close = document.getElementById('close');
+  const expand = document.getElementById('expand');
   let context = { app: 'This app', detail: '/' };
   let pinned = false;
+  let fullscreen = false;
 
   const toParent = (type, extra = {}) => {
     if (embedded) parent.postMessage({ type, ...extra }, 'https://home.myc');
@@ -43,6 +45,11 @@
       pinned = Boolean(data.pinned);
       pin.setAttribute('aria-pressed', String(pinned));
       document.getElementById('agent').dataset.pinned = String(pinned);
+    }
+    if (data.type === 'mycelium:agent-fullscreen-state') {
+      fullscreen = Boolean(data.fullscreen);
+      expand.setAttribute('aria-pressed', String(fullscreen));
+      document.getElementById('agent').dataset.fullscreen = String(fullscreen);
     }
   });
   window.addEventListener('mycelium-agent-context', (event) => setContext(event.detail));
@@ -103,6 +110,7 @@
     document.getElementById('agent').dataset.pinned = String(pinned);
     sendParent('mycelium:agent-pin', { pinned });
   });
+  expand.addEventListener('click', () => sendParent('mycelium:agent-fullscreen-toggle'));
   close.addEventListener('click', () => sendParent('mycelium:agent-close'));
   document.getElementById('context-change').addEventListener('click', () => sendParent('mycelium:agent-context-request'));
   document.addEventListener('keydown', (event) => {

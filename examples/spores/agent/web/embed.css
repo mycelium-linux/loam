@@ -152,3 +152,38 @@
   text-transform: uppercase;
   writing-mode: vertical-rl;
 }
+
+.mycelium-agent-panel { width: min(var(--agent-width, 404px), calc(100vw - 12px)); }
+.mycelium-agent-root[data-fullscreen="true"] .mycelium-agent-panel {
+  width: 100vw;
+  max-width: none;
+}
+.mycelium-agent-root[data-fullscreen="true"] .mycelium-agent-rail,
+.mycelium-agent-root[data-fullscreen="true"] .mycelium-agent-teaser { display: none; }
+.mycelium-agent-grip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 3;
+  width: 9px;
+  height: 100%;
+  cursor: ew-resize;
+  touch-action: none;
+}
+.mycelium-agent-grip::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 2px;
+  height: 42px;
+  border-radius: 2px;
+  background: rgba(255,255,255,.18);
+  opacity: 0;
+  transform: translateY(-50%);
+  transition: opacity 140ms ease;
+}
+.mycelium-agent-grip:hover::after,
+.mycelium-agent-root[data-resizing="true"] .mycelium-agent-grip::after { opacity: 1; }
+.mycelium-agent-root[data-resizing="true"] .mycelium-agent-panel { transition: none; }
+.mycelium-agent-root[data-resizing="true"] iframe { pointer-events: none; }

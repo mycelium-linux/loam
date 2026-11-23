@@ -15,6 +15,7 @@
       <span class="mycelium-agent-teaser-label">Agent</span>
     </button>
     <section class="mycelium-agent-panel" aria-label="Agent" hidden>
+      <div class="mycelium-agent-grip" role="separator" aria-orientation="vertical" aria-label="Resize agent"></div>
       <iframe title="Agent" src="${ASSET}/?embed=1"></iframe>
     </section>`;
   document.documentElement.append(root);
@@ -27,11 +28,18 @@
   const rail = root.querySelector('.mycelium-agent-rail');
   const teaser = root.querySelector('.mycelium-agent-teaser');
   const panel = root.querySelector('.mycelium-agent-panel');
+  const grip = root.querySelector('.mycelium-agent-grip');
   const frame = panel.querySelector('iframe');
   let pinned = false;
   let closeTimer = 0;
   let teaserTimer = 0;
+  let resize = null;
   let loaded = false;
+  let fullscreen = false;
+  const savedWidth = Number(localStorage.getItem('mycelium.agent.width'));
+  if (Number.isFinite(savedWidth) && savedWidth > 0) {
+    root.style.setProperty('--agent-width', `${Math.min(1200, Math.max(320, savedWidth))}px`);
+  }
 
   const context = () => {
     const explicit = window.__MYCELIUM_AGENT_CONTEXT;
@@ -65,6 +73,24 @@
     post('mycelium:agent-pin-state', { pinned });
   }
 
+  function sendFullscreenState() {
+    post('mycelium:agent-fullscreen-state', { fullscreen });
+  }
+
+  function setFullscreen(value) {
+    fullscreen = Boolean(value);
+    root.dataset.fullscreen = String(fullscreen);
+    if (fullscreen) {
+      clearTimeout(closeTimer);
+      pinned = true;
+      root.dataset.open = 'true';
+      root.dataset.teaser = 'false';
+      panel.hidden = false;
+      sendPinState();
+    }
+    sendFullscreenState();
+  }
+
   function open() {
     clearTimeout(closeTimer);
     clearTimeout(teaserTimer);
@@ -74,6 +100,7 @@
     root.dataset.open = 'true';
     pinned = true;
     sendPinState();
+    sendFullscreenState();
     sendContext();
   }
 
@@ -85,9 +112,12 @@
     clearTimeout(closeTimer);
     if (pinned && !force) return;
     pinned = false;
+    fullscreen = false;
+    root.dataset.fullscreen = 'false';
     root.dataset.open = 'false';
     root.dataset.teaser = 'false';
     sendPinState();
+    sendFullscreenState();
     closeTimer = setTimeout(() => {
       if (root.dataset.open !== 'true') panel.hidden = true;
     }, 280);
@@ -98,6 +128,35 @@
     teaserTimer = window.setTimeout(() => {
       if (!teaser.matches(':hover') && !panel.matches(':hover')) hideTeaser();
     }, 140);
+  });
+  grip.addEventListener('pointerdown', (event) => {
+    if (fullscreen) return;
+    resize = {
+      startX: event.clientX,
+      startWidth: panel.getBoundingClientRect().width,
+    };
+    grip.setPointerCapture?.(event.pointerId);
+    root.dataset.resizing = 'true';
+    event.preventDefault();
+  });
+  grip.addEventListener('dblclick', () => {
+    root.style.removeProperty('--agent-width');
+    localStorage.removeItem('mycelium.agent.width');
+  });
+  document.addEventListener('pointermove', (event) => {
+    if (!resize) return;
+    const width = Math.min(
+      window.innerWidth - 12,
+      Math.max(320, resize.startWidth + resize.startX - event.clientX),
+    );
+    root.style.setProperty('--agent-width', `${width}px`);
+  });
+  document.addEventListener('pointerup', () => {
+    if (!resize) return;
+    const width = panel.getBoundingClientRect().width;
+    localStorage.setItem('mycelium.agent.width', String(Math.round(width)));
+    resize = null;
+    delete root.dataset.resizing;
   });
   teaser.addEventListener('pointerenter', showTeaser);
   teaser.addEventListener('pointerleave', () => {
@@ -118,13 +177,18 @@
   frame.addEventListener('load', () => {
     loaded = true;
     sendPinState();
+    sendFullscreenState();
     sendContext();
   });
 
   document.addEventListener('keydown', (event) => {
-    if ((event.metaKey || event.ctrlKey) && event.key === '.') {
+    if ((event.metaKey || event.ctrlKey) && event.key === '.' && !event.shiftKey) {
       event.preventDefault();
       toggle();
+    }
+    if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key === '.') {
+      event.preventDefault();
+      setFullscreen(!fullscreen);
     }
     if (event.key === 'Escape' && root.dataset.open === 'true') close(true);
   });
@@ -142,6 +206,7 @@
       sendPinState();
     }
     if (data.type === 'mycelium:agent-close') close(true);
+    if (data.type === 'mycelium:agent-fullscreen-toggle') setFullscreen(!fullscreen);
     if (data.type === 'mycelium:agent-context-request') sendContext();
   });
 
