@@ -581,7 +581,7 @@ fn respond(
         _ => "Error",
     };
     let head = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n{}X-Content-Type-Options: nosniff\r\n\r\n",
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-cache\r\n{}X-Content-Type-Options: nosniff\r\n\r\n",
         body.len(),
         cors(origin)
     );
