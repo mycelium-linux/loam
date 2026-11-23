@@ -7,6 +7,10 @@
   const reload = document.getElementById('reload-contacts');
   const loadMore = document.getElementById('load-more');
   const searchInput = document.getElementById('contact-search');
+  const tagEditor = document.getElementById('tag-editor');
+  const tagList = document.getElementById('tag-list');
+  const tagForm = document.getElementById('tag-form');
+  const tagInput = document.getElementById('tag-input');
   const fields = {
     name: document.getElementById('field-name'),
     email: document.getElementById('field-email'),
@@ -87,6 +91,7 @@
       phone: firstValue(body.phones),
       role: body.title || body.organization || '',
       note: body.note || '',
+      tags: Array.isArray(body.tags) ? body.tags : [],
       deleted: Boolean(entry.deleted),
     };
   }
@@ -123,6 +128,64 @@
       next.shift();
     }
     return next;
+  }
+
+  function renderTags(contact = contacts.get(selected)) {
+    if (!tagList) return;
+    tagList.replaceChildren();
+    const list = contact?.tags || [];
+    if (!list.length) {
+      const quiet = document.createElement('span');
+      quiet.className = 'tag-empty';
+      quiet.textContent = 'No tags yet.';
+      tagList.append(quiet);
+      return;
+    }
+    for (const tag of list) {
+      const chip = document.createElement('span');
+      chip.className = 'tag-chip';
+      chip.dataset.source = tag.source || 'manual';
+      chip.title = tag.source === 'inferred'
+        ? `Suggested${tag.confidence != null ? ` · confidence ${Math.round(tag.confidence * 100)}%` : ''}`
+        : 'Manual tag';
+      chip.append(document.createTextNode(tag.name || ''));
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.setAttribute('aria-label', `Remove ${tag.name || 'tag'}`);
+      remove.textContent = '×';
+      remove.addEventListener('click', () => removeTag(tag.name));
+      chip.append(remove);
+      tagList.append(chip);
+    }
+  }
+
+  function addTag(event) {
+    event.preventDefault();
+    const contact = selected ? contacts.get(selected) : null;
+    const name = tagInput.value.trim();
+    if (!contact || !name) return;
+    if (contact.tags.some((tag) => tag.name.toLowerCase() === name.toLowerCase())) {
+      tagInput.value = '';
+      return;
+    }
+    contact.tags = [...contact.tags, { name, source: 'manual', status: 'active', confidence: 1 }];
+    contact.body = { ...(contact.body || {}), tags: contact.tags };
+    tagInput.value = '';
+    dirty = true;
+    renderTags(contact);
+    setStatus('Tag added');
+    scheduleSave(40);
+  }
+
+  function removeTag(name) {
+    const contact = selected ? contacts.get(selected) : null;
+    if (!contact) return;
+    contact.tags = contact.tags.filter((tag) => tag.name !== name);
+    contact.body = { ...(contact.body || {}), tags: contact.tags };
+    dirty = true;
+    renderTags(contact);
+    setStatus('Tag removed');
+    scheduleSave(40);
   }
 
   function row(contact) {
@@ -176,6 +239,8 @@
       selected = null;
       form.hidden = true;
       empty.hidden = false;
+      if (tagEditor) tagEditor.hidden = true;
+      renderTags();
     }
     loading = true;
     if (loadMore) loadMore.disabled = true;
@@ -228,6 +293,8 @@
     fields.note.value = contact.note || '';
     dirty = false;
     setConflict(false);
+    if (tagEditor) tagEditor.hidden = false;
+    renderTags(contact);
     setStatus('Open');
     window.__MYCELIUM_AGENT_CONTEXT = { app: 'People', detail: contact.name || contact.email || id };
     window.dispatchEvent(new CustomEvent('mycelium-agent-context', { detail: window.__MYCELIUM_AGENT_CONTEXT }));
@@ -262,6 +329,8 @@
     document.getElementById('detail-name').textContent = 'New contact';
     document.getElementById('detail-sub').textContent = '';
     for (const input of Object.values(fields)) input.value = '';
+    if (tagEditor) tagEditor.hidden = false;
+    renderTags(contact);
     dirty = true;
     setStatus('New contact — saving…');
     sortOrder();
@@ -370,6 +439,8 @@
       selected = null;
       form.hidden = true;
       empty.hidden = false;
+      if (tagEditor) tagEditor.hidden = true;
+      renderTags();
       dirty = false;
       setConflict(false);
       setStatus('Deleted');
@@ -398,6 +469,7 @@
       await loadPage({ reset: true });
     }, 300);
   });
+  tagForm?.addEventListener('submit', addTag);
   document.getElementById('new-contact').addEventListener('click', newContact);
   document.getElementById('delete-contact').addEventListener('click', deleteContact);
   reload?.addEventListener('click', () => void reloadContact());

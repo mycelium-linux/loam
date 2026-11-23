@@ -35,6 +35,14 @@
             <label>Role<input id="field-role" autocomplete="off"></label>
             <label class="wide">Note<textarea id="field-note"></textarea></label>
           </div>
+          <div class="contact-tags" id="tag-editor" hidden>
+            <p class="tag-label">Tags</p>
+            <div class="tag-list" id="tag-list"></div>
+            <form class="tag-form" id="tag-form">
+              <input id="tag-input" placeholder="Add a tag" autocomplete="off" aria-label="Add a tag">
+              <button type="submit">Add</button>
+            </form>
+          </div>
           <div class="contact-actions"><button id="reload-contacts" type="button" hidden>Reload</button><button id="delete-contact" type="button">Delete</button></div>
         </div>
       </section>

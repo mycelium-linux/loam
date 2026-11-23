@@ -33,3 +33,17 @@ body { background: var(--paper-raised); }
   .contacts-grid { grid-template-columns: 1fr; }
   .contact-fields { grid-template-columns: 1fr; }
 }
+
+.contact-tags { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--hairline); }
+.tag-label { margin: 0 0 8px; color: var(--ink-3); font: 9.5px var(--font-mono); letter-spacing: .08em; text-transform: uppercase; }
+.tag-list { display: flex; flex-wrap: wrap; gap: 6px; min-height: 22px; }
+.tag-chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 6px 4px 8px; border: 1px solid var(--hairline-strong); border-radius: 999px; background: var(--paper); color: var(--ink-2); font-size: 11px; }
+.tag-chip[data-source="inferred"] { border-style: dashed; border-color: var(--accent); color: var(--accent); }
+.tag-chip button { display: grid; place-items: center; width: 15px; height: 15px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: inherit; font-size: 12px; line-height: 1; cursor: pointer; }
+.tag-chip button:hover { background: var(--selected); }
+.tag-empty { color: var(--ink-3); font-size: 11px; }
+.tag-form { display: flex; gap: 6px; margin-top: 9px; }
+.tag-form input { flex: 1; min-width: 0; height: 29px; border: 1px solid var(--hairline); border-radius: 5px; background: var(--paper); color: var(--ink); padding: 0 8px; font: 12px var(--font-ui); }
+.tag-form input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+.tag-form button { border: 1px solid var(--hairline-strong); border-radius: 5px; background: var(--paper-raised); color: var(--ink-2); padding: 0 9px; font-size: 11px; cursor: pointer; }
+.tag-form button:hover { background: var(--paper-muted); color: var(--ink); }

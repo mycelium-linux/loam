@@ -564,7 +564,7 @@ fn records_api(
                     cursor: params.cursor,
                     limit: params.limit.unwrap_or(50).clamp(1, 200),
                 };
-                match crate::records_host::query(&mut host, spec) {
+                match records::Host::query(&mut host, spec) {
                     Ok(page) => {
                         json!({"ok": {"entries": page.entries.into_iter().map(WireEntry::from_entry).collect::<Vec<_>>(), "next": page.next}})
                     }
