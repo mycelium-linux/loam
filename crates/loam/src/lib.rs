@@ -64,6 +64,7 @@ mod host;
 #[cfg(any(feature = "http", feature = "wasi"))]
 pub mod http_host;
 pub mod install;
+pub mod instance;
 #[cfg(feature = "principal")]
 pub mod local_identity;
 pub mod metrics;

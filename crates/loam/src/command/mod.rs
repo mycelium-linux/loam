@@ -84,6 +84,29 @@ fn default_memory() -> usize {
     256 * 1024 * 1024
 }
 
+/// Per-run limits, normally taken from the package's command entry.
+///
+/// A supervisor may override these for one instance without rewriting the
+/// package manifest. The runner treats them as hard host limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RunLimits {
+    pub timeout_ms: u64,
+    pub max_stdout_bytes: usize,
+    pub max_stderr_bytes: usize,
+    pub max_memory_bytes: usize,
+}
+
+impl RunLimits {
+    pub fn from_entry(entry: &CommandEntry) -> Self {
+        Self {
+            timeout_ms: entry.timeout_ms,
+            max_stdout_bytes: entry.max_stdout_bytes,
+            max_stderr_bytes: entry.max_stderr_bytes,
+            max_memory_bytes: entry.max_memory_bytes,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CommandEntry {
     pub name: String,
@@ -771,6 +794,16 @@ impl CommandRunner {
     }
 
     pub fn run(&self, entry: &CommandEntry, request: &RunRequest) -> Result<RunOutput> {
+        self.run_with_limits(entry, request, RunLimits::from_entry(entry))
+    }
+
+    /// Run one command with explicit host limits.
+    pub fn run_with_limits(
+        &self,
+        entry: &CommandEntry,
+        request: &RunRequest,
+        limits: RunLimits,
+    ) -> Result<RunOutput> {
         let module = entry.runtime_module.as_ref().unwrap_or(&entry.module);
         let component = {
             let mut cache = self
@@ -829,8 +862,8 @@ impl CommandRunner {
             crate::unibus::add_to_linker::<Host>(&mut linker)?;
         }
 
-        let stdout = MemoryOutputPipe::new(entry.max_stdout_bytes);
-        let stderr = MemoryOutputPipe::new(entry.max_stderr_bytes);
+        let stdout = MemoryOutputPipe::new(limits.max_stdout_bytes);
+        let stderr = MemoryOutputPipe::new(limits.max_stderr_bytes);
         let mut wasi = WasiCtxBuilder::new();
         let mut argv = vec![entry.name.clone()];
         argv.extend(request.args.iter().cloned());
@@ -843,8 +876,8 @@ impl CommandRunner {
         wasi.stdout(stdout.clone());
         wasi.stderr(stderr.clone());
 
-        let limits = StoreLimitsBuilder::new()
-            .memory_size(entry.max_memory_bytes)
+        let store_limits = StoreLimitsBuilder::new()
+            .memory_size(limits.max_memory_bytes)
             .build();
         let ipc = self
             .plugins
@@ -861,7 +894,7 @@ impl CommandRunner {
             Host {
                 wasi: wasi.build(),
                 table: wasmtime::component::ResourceTable::new(),
-                limits,
+                limits: store_limits,
                 records,
                 bus,
                 ipc,
@@ -870,7 +903,7 @@ impl CommandRunner {
         store.limiter(|host| &mut host.limits);
         store.set_epoch_deadline(1);
         let engine = self.engine.clone();
-        let timeout = entry.timeout_ms;
+        let timeout = limits.timeout_ms;
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(timeout));
             engine.increment_epoch();
