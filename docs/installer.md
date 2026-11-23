@@ -4,13 +4,18 @@
 does not expose `loam:ctl`, and does not run a daemon.
 
 ```sh
-loam install PATH --root DIR [--allow-unsigned-dev]
-loam status --root DIR [--json]
-loam rollback ID --root DIR
+loam install PATH [--root DIR] [--allow-unsigned-dev]
+loam status [--root DIR]... [--json]
+loam rollback ID [--root DIR]
 ```
 
 `PATH` is a command package or a Spore package directory. The source tree is
-never modified.
+never modified. Without `--root`, a Spore installs into the Spore root and a
+command installs into the command root: `FUNGOS_COMMAND_ROOT` (default
+`~/.local/share/fungos/commands`) and its sibling `spores/` (or
+`MUSH_SPORE_ROOT`). `loam status` reads both roots by default; passing `--root`
+one or more times replaces them. `rollback` searches both default roots when
+`--root` is omitted and refuses an id that exists in both.
 
 ## Layout
 
@@ -68,7 +73,8 @@ loam rollback acme:marbles --root ~/.local/share/fungos/commands
 
 Rollback re-warms the previous generation, swaps the package symlink, and keeps
 the generation it replaced as the new previous entry. It does not re-run
-composition.
+composition. When the install id is not found in the default roots, pass
+`--root` explicitly.
 
 ## Not in this slice
 
