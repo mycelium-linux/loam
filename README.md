@@ -152,6 +152,8 @@ exports are what the Spore provides
 
 A Spore that exports `run` is a command. One that exports `wasi:http/incoming-handler` is a service. One that exports `soil:mcp` is a capability plugin.
 
+For a worked Rust example, see [`docs/rust-plugin.md`](docs/rust-plugin.md).
+
 ```sh
 loam plugin list       # installed exports
 loam plugin verify     # refused packages, duplicate providers, missing seals
