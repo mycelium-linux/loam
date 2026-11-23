@@ -6,17 +6,25 @@
   const body = document.getElementById('note-body');
   const meta = document.getElementById('note-meta');
   const empty = document.getElementById('note-empty');
-  const save = document.getElementById('save-note');
+  const reload = document.getElementById('reload-note');
   let selected = null;
   let version = null;
   let dirty = false;
+  let saving = false;
+  let queued = false;
+  let conflict = false;
+  let saveTimer = 0;
 
   const desktop = new URLSearchParams(location.search).get('desktop') || 'personal';
   const withDesktop = (path) => `${path}${path.includes('?') ? '&' : '?'}desktop=${encodeURIComponent(desktop)}`;
   const api = async (path, options = {}) => {
     const response = await fetch(withDesktop(path), options);
     const value = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(value.error || `${response.status} ${response.statusText}`);
+    if (!response.ok) {
+      const error = new Error(value.error || `${response.status} ${response.statusText}`);
+      error.status = response.status;
+      throw error;
+    }
     return value;
   };
 
@@ -25,9 +33,66 @@
     status.className = error ? 'note-error' : '';
   }
 
+  function setConflict(value) {
+    conflict = value;
+    if (reload) reload.hidden = !value;
+  }
+
   function markDirty(value) {
     dirty = value;
-    if (value) setStatus('Unsaved changes');
+    if (value && !conflict) setStatus('Editing…');
+  }
+
+  function scheduleSave(delay = 650) {
+    if (!selected || conflict) return;
+    clearTimeout(saveTimer);
+    saveTimer = window.setTimeout(() => void saveNote(), delay);
+  }
+
+  async function saveNote() {
+    if (!selected || conflict) return;
+    if (saving) {
+      queued = true;
+      return;
+    }
+    clearTimeout(saveTimer);
+    saving = true;
+    const path = selected;
+    const text = body.value;
+    const expected = version == null ? '' : `&expected_version=${version}`;
+    const created = version == null;
+    setStatus('Saving…');
+    try {
+      const result = await api(`/api/vfs/write?path=${encodeURIComponent(path)}${expected}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'text/markdown; charset=utf-8' },
+        body: text,
+      });
+      version = result.version;
+      meta.textContent = `v${version}`;
+      if (selected === path && body.value === text) {
+        markDirty(false);
+        setStatus('Saved');
+      } else {
+        markDirty(true);
+        queued = true;
+      }
+      if (created) await refresh();
+    } catch (error) {
+      if (error.status === 409) {
+        setConflict(true);
+        markDirty(true);
+        setStatus('Changed elsewhere — reload to continue', true);
+      } else {
+        setStatus(error.message, true);
+      }
+    } finally {
+      saving = false;
+      if (queued) {
+        queued = false;
+        if (!conflict) scheduleSave(50);
+      }
+    }
   }
 
   function render(entries) {
@@ -63,7 +128,7 @@
     try {
       const result = await api('/api/vfs/list?path=');
       render(result.entries);
-      setStatus('Workspace ready');
+      setStatus(dirty ? 'Editing…' : 'Workspace ready');
       const first = list.querySelector('.note-row');
       if (!selected && first) await openNote(first.dataset.path);
     } catch (error) {
@@ -71,13 +136,18 @@
     }
   }
 
-  async function openNote(path) {
-    if (dirty && !confirm('Discard unsaved changes?')) return;
+  async function openNote(path, force = false) {
+    if (dirty && !force && !conflict) await saveNote();
+    if (conflict && !force) {
+      if (!confirm('This note changed elsewhere. Discard your local changes and reload it?')) return;
+    }
+    clearTimeout(saveTimer);
+    setConflict(false);
     try {
       const note = await api(`/api/vfs/read?path=${encodeURIComponent(path)}`);
       selected = path;
       version = note.version ?? null;
-      title.value = path.split('/').pop().replace(/\.md$/i, '');
+      title.textContent = path.split('/').pop().replace(/\.md$/i, '');
       body.value = note.text;
       body.disabled = false;
       empty.hidden = true;
@@ -92,28 +162,12 @@
     }
   }
 
-  async function saveNote() {
-    if (!selected) return;
-    try {
-      const path = selected;
-      const expected = version == null ? '' : `&expected_version=${version}`;
-      const result = await api(`/api/vfs/write?path=${encodeURIComponent(path)}${expected}`, {
-        method: 'PUT',
-        headers: { 'content-type': 'text/markdown; charset=utf-8' },
-        body: body.value,
-      });
-      version = result.version;
-      meta.textContent = `v${version}`;
-      markDirty(false);
-      setStatus('Saved');
-      await refresh();
-    } catch (error) {
-      setStatus(error.message, true);
-    }
-  }
-
   document.getElementById('new-note').addEventListener('click', async () => {
-    if (dirty && !confirm('Discard unsaved changes?')) return;
+    if (dirty && !conflict) await saveNote();
+    if (conflict) {
+      setStatus('Reload the open note before creating another', true);
+      return;
+    }
     const name = prompt('New note name', 'untitled.md');
     if (!name) return;
     const clean = name.trim().replace(/[^a-zA-Z0-9._/-]+/g, '-').replace(/^\/+/, '');
@@ -121,22 +175,27 @@
     const path = clean.endsWith('.md') ? clean : `${clean}.md`;
     selected = path;
     version = null;
-    title.value = path.replace(/\.md$/i, '');
+    title.textContent = path.replace(/\.md$/i, '');
     body.value = '';
     body.disabled = false;
     empty.hidden = true;
     meta.textContent = 'new';
     markDirty(true);
-    setStatus('New note — save when ready');
+    setStatus('New note — saving…');
+    scheduleSave(40);
   });
 
-  save.addEventListener('click', saveNote);
-  body.addEventListener('input', () => markDirty(true));
-  title.addEventListener('input', () => markDirty(true));
+  body.addEventListener('input', () => {
+    markDirty(true);
+    scheduleSave();
+  });
+  reload?.addEventListener('click', () => {
+    if (selected) void openNote(selected, true);
+  });
   document.addEventListener('keydown', (event) => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
       event.preventDefault();
-      saveNote();
+      void saveNote();
     }
   });
   window.addEventListener('beforeunload', (event) => {
