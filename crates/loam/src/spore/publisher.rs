@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{Error, Lock, Manifest, Result};
+use super::{Error, Lock, Manifest, Result};
 
 pub const PUBLISHER_SCHEMA: &str = "fungos.spore-publisher/1";
 
@@ -231,8 +231,8 @@ fn nibble(byte: u8) -> std::result::Result<u8, String> {
 
 #[cfg(test)]
 mod tests {
+    use super::Manifest;
     use super::*;
-    use crate::Manifest;
 
     struct Trust {
         deny: bool,
@@ -312,7 +312,7 @@ surfaces = ["native"]
     fn system_allowlist_requires_exact_id_role_principal_and_digest() {
         let envelope = envelope();
         let mut manifest = manifest();
-        manifest.system = Some(crate::System {
+        manifest.system = Some(crate::spore::System {
             role: "consent".into(),
         });
         let lock = lock(&manifest);

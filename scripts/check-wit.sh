@@ -11,6 +11,7 @@ fi
 # contracts, not the root directory as one package: the root is a collection.
 for world in \
     wit/soil-mcp.wit \
+    wit/soil-process.wit \
     wit/soil-inference.wit \
     wit/loam-plugin.wit \
     crates/loam/wit/principal \
@@ -20,8 +21,8 @@ for world in \
     crates/loam-surface/wit \
     crates/loam-ble-host/wit \
     crates/loam-media/wit \
-    crates/loam-command/wit/plugin \
-    crates/loam-mcp/fixtures/adapter/wit \
+    crates/loam/wit/plugin \
+    crates/loam/fixtures/mcp-adapter/wit \
     wit/soil-command
 do
     wasm-tools component wit "$world" >/dev/null

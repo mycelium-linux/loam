@@ -23,7 +23,7 @@ use wasmtime_wasi::{
     },
 };
 
-use ::soil::records_host::RecordsBookHost;
+use crate::records_host::RecordsBookHost;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -84,6 +84,29 @@ fn default_memory() -> usize {
     256 * 1024 * 1024
 }
 
+/// Per-run limits, normally taken from the package's command entry.
+///
+/// A supervisor may override these for one instance without rewriting the
+/// package manifest. The runner treats them as hard host limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RunLimits {
+    pub timeout_ms: u64,
+    pub max_stdout_bytes: usize,
+    pub max_stderr_bytes: usize,
+    pub max_memory_bytes: usize,
+}
+
+impl RunLimits {
+    pub fn from_entry(entry: &CommandEntry) -> Self {
+        Self {
+            timeout_ms: entry.timeout_ms,
+            max_stdout_bytes: entry.max_stdout_bytes,
+            max_stderr_bytes: entry.max_stderr_bytes,
+            max_memory_bytes: entry.max_memory_bytes,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CommandEntry {
     pub name: String,
@@ -96,6 +119,10 @@ pub struct CommandEntry {
     /// before it promises a program.
     pub requires: Vec<String>,
     pub module: PathBuf,
+    /// Composed runtime module, when resource providers were linked at install.
+    pub runtime_module: Option<PathBuf>,
+    /// Composition cache identity for `runtime_module`.
+    pub composition_key: Option<String>,
     pub timeout_ms: u64,
     pub max_stdout_bytes: usize,
     pub max_stderr_bytes: usize,
@@ -455,7 +482,8 @@ pub fn warm(roots: &[PathBuf]) -> Result<WarmReport> {
     let engine = Engine::new(&caching_config())?;
     let mut report = WarmReport::default();
     for entry in registry.entries() {
-        let digest = match std::fs::read(&entry.module) {
+        let module = entry.runtime_module.as_ref().unwrap_or(&entry.module);
+        let digest = match std::fs::read(module) {
             Ok(bytes) => hex(&Sha256::digest(&bytes)),
             Err(error) => {
                 report
@@ -465,11 +493,13 @@ pub fn warm(roots: &[PathBuf]) -> Result<WarmReport> {
             }
         };
         let marker = warm_marker(&entry.package, &entry.name);
-        if marker_digest(&marker).as_deref() == Some(digest.as_str()) {
+        if marker_digest(&marker).as_deref() == Some(digest.as_str())
+            && marker_key(&marker).as_deref() == entry.composition_key.as_deref()
+        {
             report.already.push(entry.name.clone());
             continue;
         }
-        if let Err(error) = wasmtime::component::Component::from_file(&engine, &entry.module) {
+        if let Err(error) = wasmtime::component::Component::from_file(&engine, module) {
             report
                 .skipped
                 .push((entry.name.clone(), format!("compile: {error}")));
@@ -477,8 +507,9 @@ pub fn warm(roots: &[PathBuf]) -> Result<WarmReport> {
         }
         let body = serde_json::json!({
             "name": entry.name,
-            "module": entry.module.display().to_string(),
+            "module": module.display().to_string(),
             "sha256": digest,
+            "composition_key": entry.composition_key,
             "warmed_at": std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|elapsed| elapsed.as_secs())
@@ -523,6 +554,15 @@ fn marker_digest(marker: &Path) -> Option<String> {
         .map(str::to_owned)
 }
 
+fn marker_key(marker: &Path) -> Option<String> {
+    let bytes = std::fs::read(marker).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    value
+        .get("composition_key")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+}
+
 fn hex(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -534,6 +574,8 @@ fn hex(bytes: &[u8]) -> String {
 fn caching_config() -> Config {
     let mut config = Config::new();
     config.wasm_component_model(true);
+    config.async_stack_size(16 * 1024 * 1024);
+    config.max_wasm_stack(16 * 1024 * 1024);
     // Keep compiled components on disk. `mb` is invoked hundreds of times a day
     // for the same 600 KB module, and without this every one of those invocations
     // pays to compile it again. Failing to open the cache is not fatal: wasmtime
@@ -552,6 +594,74 @@ fn package_name(package: &Path) -> String {
         || package.display().to_string(),
         |name| name.to_string_lossy().into_owned(),
     )
+}
+
+fn installed_runtime(package: &Path) -> (Option<PathBuf>, Option<String>) {
+    let runtime = package.join("runtime.wasm");
+    if !runtime.is_file() {
+        return (None, None);
+    }
+    let key = std::fs::read_to_string(package.join("runtime.key"))
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    (Some(runtime), key)
+}
+
+/// Read every command declared by one package directory.
+///
+/// A standalone command package is one command. A Spore package is every
+/// `[[commands]]` entry it declares. The caller supplies the package root; this
+/// does not scan a parent directory.
+pub fn package_commands(package: &Path) -> Result<Vec<CommandEntry>> {
+    if package.join("command.toml").is_file() {
+        standalone_command(package).map(|entry| vec![entry])
+    } else if package.join("spore.toml").is_file() {
+        spore_commands(package)
+    } else {
+        bail!(
+            "{} is neither a command package nor a Spore package",
+            package.display()
+        )
+    }
+}
+
+/// Compile one command module and write its warm marker for `package`.
+///
+/// The installer uses this before swapping a new generation into place, so a
+/// compile failure cannot disturb the active install. The marker is written
+/// beside the final package path, not the staging path.
+pub fn warm_entry(entry: &CommandEntry, package: &Path) -> Result<PathBuf> {
+    let module = entry.runtime_module.as_ref().unwrap_or(&entry.module);
+    let bytes =
+        std::fs::read(module).with_context(|| format!("read module {}", module.display()))?;
+    let digest = hex(&Sha256::digest(&bytes));
+    let marker = warm_marker(package, &entry.name);
+    if marker_digest(&marker).as_deref() == Some(digest.as_str())
+        && marker_key(&marker).as_deref() == entry.composition_key.as_deref()
+    {
+        return Ok(marker);
+    }
+    let engine = Engine::new(&caching_config())?;
+    wasmtime::component::Component::from_file(&engine, module)
+        .map_err(|error| anyhow::anyhow!("compile module {}: {error}", module.display()))?;
+    let body = serde_json::json!({
+        "name": entry.name,
+        "module": module.display().to_string(),
+        "sha256": digest,
+        "composition_key": entry.composition_key,
+        "warmed_at": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_secs())
+            .unwrap_or_default(),
+    });
+    if let Some(dir) = marker.parent() {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("create warm directory {}", dir.display()))?;
+    }
+    std::fs::write(&marker, serde_json::to_vec_pretty(&body)?)
+        .with_context(|| format!("write {}", marker.display()))?;
+    Ok(marker)
 }
 
 /// One package that stands alone: `command.toml` beside its module.
@@ -574,6 +684,7 @@ fn standalone_command(package: &Path) -> Result<CommandEntry> {
     if !module.is_file() {
         bail!("command {} module missing", manifest.command.name);
     }
+    let (runtime_module, composition_key) = installed_runtime(package);
     Ok(CommandEntry {
         name: manifest.command.name,
         version: manifest.command.version,
@@ -583,6 +694,8 @@ fn standalone_command(package: &Path) -> Result<CommandEntry> {
         // runner either satisfies `requires` or refuses the command.
         requires: manifest.command.requires,
         module,
+        runtime_module,
+        composition_key,
         timeout_ms: manifest.limits.timeout_ms,
         max_stdout_bytes: manifest.limits.max_stdout_bytes,
         max_stderr_bytes: manifest.limits.max_stderr_bytes,
@@ -598,7 +711,7 @@ fn spore_commands(package: &Path) -> Result<Vec<CommandEntry>> {
     if !package.join("spore.toml").is_file() {
         return Ok(Vec::new());
     }
-    let manifest = soil_spore::Manifest::load(package)
+    let manifest = crate::spore::Manifest::load(package)
         .map_err(|error| anyhow::anyhow!("{}: {error}", package.display()))?;
     let limits = Limits::default();
     let mut entries = Vec::new();
@@ -607,6 +720,7 @@ fn spore_commands(package: &Path) -> Result<Vec<CommandEntry>> {
         if !module.is_file() {
             bail!("spore command {} module missing", command.name);
         }
+        let (runtime_module, composition_key) = installed_runtime(package);
         entries.push(CommandEntry {
             name: command.name.clone(),
             version: manifest.spore.version.clone(),
@@ -614,6 +728,8 @@ fn spore_commands(package: &Path) -> Result<Vec<CommandEntry>> {
             package: package.to_path_buf(),
             requires: manifest.grants.keys().cloned().collect(),
             module,
+            runtime_module,
+            composition_key,
             timeout_ms: limits.timeout_ms,
             max_stdout_bytes: limits.max_stdout_bytes,
             max_stderr_bytes: limits.max_stderr_bytes,
@@ -648,17 +764,17 @@ pub struct RunOutput {
 pub struct CommandRunner {
     engine: Engine,
     /// Installed Spore exports this runner can link into a command.
-    plugins: Option<Arc<crate::plugin::PluginRegistry>>,
+    plugins: Option<Arc<crate::command::plugin::PluginRegistry>>,
     records: Option<RecordsBinding>,
     /// The bus a command may publish on. Linked (possibly as an unavailable
     /// bus) for a command that declares `soil:unibus`, so a missing hub costs
     /// a publish, not the command run.
-    bus: Option<Arc<dyn ::soil::Bus>>,
+    bus: Option<Arc<dyn crate::Bus>>,
     components: Mutex<BTreeMap<PathBuf, Arc<wasmtime::component::Component>>>,
 }
 
 impl CommandRunner {
-    pub fn new(records: Option<RecordsBinding>, bus: Option<Arc<dyn ::soil::Bus>>) -> Result<Self> {
+    pub fn new(records: Option<RecordsBinding>, bus: Option<Arc<dyn crate::Bus>>) -> Result<Self> {
         let mut config = caching_config();
         config.epoch_interruption(true);
         let engine = Engine::new(&config)?;
@@ -672,33 +788,49 @@ impl CommandRunner {
     }
 
     /// Use a scanned plugin registry when resolving a command's imports.
-    pub fn with_plugins(mut self, plugins: crate::plugin::PluginRegistry) -> Self {
+    pub fn with_plugins(mut self, plugins: crate::command::plugin::PluginRegistry) -> Self {
         self.plugins = Some(Arc::new(plugins));
         self
     }
 
+    /// The engine this runner uses. A supervisor that needs per-instance
+    /// cancellation can keep a clone and call [`wasmtime::Engine::increment_epoch`].
+    pub fn engine(&self) -> &Engine {
+        &self.engine
+    }
+
     pub fn run(&self, entry: &CommandEntry, request: &RunRequest) -> Result<RunOutput> {
+        self.run_with_limits(entry, request, RunLimits::from_entry(entry))
+    }
+
+    /// Run one command with explicit host limits.
+    pub fn run_with_limits(
+        &self,
+        entry: &CommandEntry,
+        request: &RunRequest,
+        limits: RunLimits,
+    ) -> Result<RunOutput> {
+        let module = entry.runtime_module.as_ref().unwrap_or(&entry.module);
         let component = {
             let mut cache = self
                 .components
                 .lock()
                 .map_err(|_| anyhow::anyhow!("command component cache poisoned"))?;
-            if let Some(component) = cache.get(&entry.module) {
+            if let Some(component) = cache.get(module) {
                 component.clone()
             } else {
                 let component = Arc::new(
-                    wasmtime::component::Component::from_file(&self.engine, &entry.module)
-                        .map_err(|error| {
-                            anyhow::anyhow!("load command {}: {error}", entry.module.display())
-                        })?,
+                    wasmtime::component::Component::from_file(&self.engine, module).map_err(
+                        |error| anyhow::anyhow!("load command {}: {error}", module.display()),
+                    )?,
                 );
-                cache.insert(entry.module.clone(), component.clone());
+                cache.insert(module.clone(), component.clone());
                 component
             }
         };
         let mut linker = wasmtime::component::Linker::<Host>::new(&self.engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker)?;
-        crate::plugin_ipc::add_to_linker::<Host>(&mut linker)?;
+        crate::command::plugin_ipc::add_to_linker::<Host>(&mut linker)?;
         let records = match &self.records {
             Some(binding) => Some(
                 RecordsBookHost::open(
@@ -711,10 +843,10 @@ impl CommandRunner {
             None => None,
         };
         if records.is_some() {
-            ::soil::records_host::add_to_linker::<Host>(&mut linker)?;
+            crate::records_host::add_to_linker::<Host>(&mut linker)?;
         }
         if entry.requires.iter().any(|cap| cap == "soil:time") {
-            ::soil::time::add_to_linker::<Host>(&mut linker)?;
+            crate::time::add_to_linker::<Host>(&mut linker)?;
         }
         // The grant is the command's own declaration, not the caller's wish: a
         // command that lists `soil:unibus` in `requires` gets the interface,
@@ -726,18 +858,18 @@ impl CommandRunner {
             Some(
                 self.bus
                     .clone()
-                    .map(|bus| ::soil::unibus::BusHost::new(Some(bus)))
-                    .unwrap_or_else(|| ::soil::unibus::BusHost::new(None)),
+                    .map(|bus| crate::unibus::BusHost::new(Some(bus)))
+                    .unwrap_or_else(|| crate::unibus::BusHost::new(None)),
             )
         } else {
             None
         };
         if bus.is_some() {
-            ::soil::unibus::add_to_linker::<Host>(&mut linker)?;
+            crate::unibus::add_to_linker::<Host>(&mut linker)?;
         }
 
-        let stdout = MemoryOutputPipe::new(entry.max_stdout_bytes);
-        let stderr = MemoryOutputPipe::new(entry.max_stderr_bytes);
+        let stdout = MemoryOutputPipe::new(limits.max_stdout_bytes);
+        let stderr = MemoryOutputPipe::new(limits.max_stderr_bytes);
         let mut wasi = WasiCtxBuilder::new();
         let mut argv = vec![entry.name.clone()];
         argv.extend(request.args.iter().cloned());
@@ -750,16 +882,17 @@ impl CommandRunner {
         wasi.stdout(stdout.clone());
         wasi.stderr(stderr.clone());
 
-        let limits = StoreLimitsBuilder::new()
-            .memory_size(entry.max_memory_bytes)
+        let store_limits = StoreLimitsBuilder::new()
+            .memory_size(limits.max_memory_bytes)
             .build();
         let ipc = self
             .plugins
             .as_ref()
             .and_then(|plugins| plugins.native_for(&self.engine, &component))
             .map(|(program, cwd)| {
-                crate::plugin_ipc::Sidecar::spawn(&program, &[], cwd.as_deref())
-                    .map(|sidecar| Box::new(sidecar) as Box<dyn crate::plugin_ipc::Backend>)
+                crate::command::plugin_ipc::Sidecar::spawn(&program, &[], cwd.as_deref()).map(
+                    |sidecar| Box::new(sidecar) as Box<dyn crate::command::plugin_ipc::Backend>,
+                )
             })
             .transpose()?;
         let mut store = Store::new(
@@ -767,7 +900,7 @@ impl CommandRunner {
             Host {
                 wasi: wasi.build(),
                 table: wasmtime::component::ResourceTable::new(),
-                limits,
+                limits: store_limits,
                 records,
                 bus,
                 ipc,
@@ -776,7 +909,7 @@ impl CommandRunner {
         store.limiter(|host| &mut host.limits);
         store.set_epoch_deadline(1);
         let engine = self.engine.clone();
-        let timeout = entry.timeout_ms;
+        let timeout = limits.timeout_ms;
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(timeout));
             engine.increment_epoch();
@@ -820,18 +953,18 @@ struct Host {
     /// `soil:unibus`, when the command declared it and the caller supplied a
     /// bus. The command publishes through this; the records host never learns
     /// the bus exists, which is what keeps the two capabilities independent.
-    bus: Option<::soil::unibus::BusHost>,
+    bus: Option<crate::unibus::BusHost>,
     /// `loam:plugin/ipc` backend, when a plugin provider named a sidecar.
-    ipc: Option<Box<dyn crate::plugin_ipc::Backend>>,
+    ipc: Option<Box<dyn crate::command::plugin_ipc::Backend>>,
 }
 
-impl crate::plugin_ipc::ipc::Host for Host {
+impl crate::command::plugin_ipc::ipc::Host for Host {
     fn request(
         &mut self,
         method: String,
         payload: Vec<u8>,
-    ) -> Result<Vec<u8>, crate::plugin_ipc::ipc::Error> {
-        crate::plugin_ipc::handle(&mut self.ipc, &method, &payload)
+    ) -> Result<Vec<u8>, crate::command::plugin_ipc::ipc::Error> {
+        crate::command::plugin_ipc::handle(&mut self.ipc, &method, &payload)
     }
 }
 
@@ -844,18 +977,18 @@ impl WasiView for Host {
     }
 }
 
-impl ::soil::unibus::bus::Host for Host {
+impl crate::unibus::bus::Host for Host {
     fn publish(
         &mut self,
         kind: String,
         body: Vec<u8>,
         destination: Option<String>,
         ttl_ms: u64,
-    ) -> Result<::soil::unibus::bus::Receipt, ::soil::unibus::bus::Error> {
+    ) -> Result<crate::unibus::bus::Receipt, crate::unibus::bus::Error> {
         let bus = self
             .bus
             .as_mut()
-            .ok_or(::soil::unibus::bus::Error::Unavailable)?;
+            .ok_or(crate::unibus::bus::Error::Unavailable)?;
         bus.publish(kind, body, destination, ttl_ms)
     }
 
@@ -864,37 +997,37 @@ impl ::soil::unibus::bus::Host for Host {
         kinds: Vec<String>,
         cursor: Option<String>,
         limit: u32,
-    ) -> Result<::soil::unibus::bus::Page, ::soil::unibus::bus::Error> {
+    ) -> Result<crate::unibus::bus::Page, crate::unibus::bus::Error> {
         let bus = self
             .bus
             .as_mut()
-            .ok_or(::soil::unibus::bus::Error::Unavailable)?;
+            .ok_or(crate::unibus::bus::Error::Unavailable)?;
         bus.poll(kinds, cursor, limit)
     }
 }
 
-impl ::soil::time::api::Host for Host {
-    fn monotonic_ms(&mut self) -> Result<u64, ::soil::time::api::Error> {
-        ::soil::time::SystemTimeHost.monotonic_ms()
+impl crate::time::api::Host for Host {
+    fn monotonic_ms(&mut self) -> Result<u64, crate::time::api::Error> {
+        crate::time::SystemTimeHost.monotonic_ms()
     }
 
-    fn wall_clock(&mut self) -> Result<::soil::time::api::DateTime, ::soil::time::api::Error> {
-        ::soil::time::SystemTimeHost.wall_clock()
+    fn wall_clock(&mut self) -> Result<crate::time::api::DateTime, crate::time::api::Error> {
+        crate::time::SystemTimeHost.wall_clock()
     }
 
-    fn tick(&mut self, timeout_ms: u32) -> Result<Option<u64>, ::soil::time::api::Error> {
-        ::soil::time::SystemTimeHost.tick(timeout_ms)
+    fn tick(&mut self, timeout_ms: u32) -> Result<Option<u64>, crate::time::api::Error> {
+        crate::time::SystemTimeHost.tick(timeout_ms)
     }
 }
 
-impl ::soil::records_host::records::Host for Host {
+impl crate::records_host::records::Host for Host {
     fn get(
         &mut self,
-        key: ::soil::records_host::records::Key,
-    ) -> Result<::soil::records_host::records::Entry, ::soil::records_host::records::Error> {
+        key: crate::records_host::records::Key,
+    ) -> Result<crate::records_host::records::Entry, crate::records_host::records::Error> {
         self.records
             .as_mut()
-            .ok_or(::soil::records_host::records::Error::Denied)?
+            .ok_or(crate::records_host::records::Error::Denied)?
             .get(key)
     }
 
@@ -903,34 +1036,34 @@ impl ::soil::records_host::records::Host for Host {
         collection: String,
         cursor: Option<String>,
         limit: u32,
-    ) -> Result<::soil::records_host::records::Page, ::soil::records_host::records::Error> {
+    ) -> Result<crate::records_host::records::Page, crate::records_host::records::Error> {
         self.records
             .as_mut()
-            .ok_or(::soil::records_host::records::Error::Denied)?
+            .ok_or(crate::records_host::records::Error::Denied)?
             .scan(collection, cursor, limit)
     }
 
     fn query(
         &mut self,
-        spec: ::soil::records_host::records::QuerySpec,
-    ) -> Result<::soil::records_host::records::Page, ::soil::records_host::records::Error> {
+        spec: crate::records_host::records::QuerySpec,
+    ) -> Result<crate::records_host::records::Page, crate::records_host::records::Error> {
         self.records
             .as_mut()
-            .ok_or(::soil::records_host::records::Error::Denied)?
+            .ok_or(crate::records_host::records::Error::Denied)?
             .query(spec)
     }
 
     fn aggregate(
         &mut self,
         collection: String,
-        spec: ::soil::records_host::records::AggregateSpec,
+        spec: crate::records_host::records::AggregateSpec,
     ) -> Result<
-        Vec<::soil::records_host::records::AggregateGroup>,
-        ::soil::records_host::records::Error,
+        Vec<crate::records_host::records::AggregateGroup>,
+        crate::records_host::records::Error,
     > {
         self.records
             .as_mut()
-            .ok_or(::soil::records_host::records::Error::Denied)?
+            .ok_or(crate::records_host::records::Error::Denied)?
             .aggregate(collection, spec)
     }
 
@@ -939,44 +1072,42 @@ impl ::soil::records_host::records::Host for Host {
         collection: String,
         cursor: Option<String>,
         limit: u32,
-    ) -> Result<::soil::records_host::records::PackedPage, ::soil::records_host::records::Error>
-    {
+    ) -> Result<crate::records_host::records::PackedPage, crate::records_host::records::Error> {
         self.records
             .as_mut()
-            .ok_or(::soil::records_host::records::Error::Denied)?
+            .ok_or(crate::records_host::records::Error::Denied)?
             .scan_packed(collection, cursor, limit)
     }
 
     fn upsert(
         &mut self,
-        entry: ::soil::records_host::records::Entry,
-    ) -> Result<::soil::records_host::records::Entry, ::soil::records_host::records::Error> {
+        entry: crate::records_host::records::Entry,
+    ) -> Result<crate::records_host::records::Entry, crate::records_host::records::Error> {
         self.records
             .as_mut()
-            .ok_or(::soil::records_host::records::Error::Denied)?
+            .ok_or(crate::records_host::records::Error::Denied)?
             .upsert(entry)
     }
 
     fn compare_and_swap(
         &mut self,
-        key: ::soil::records_host::records::Key,
-        expected: Option<::soil::records_host::records::Version>,
-        entry: ::soil::records_host::records::Entry,
-    ) -> Result<::soil::records_host::records::CasResult, ::soil::records_host::records::Error>
-    {
+        key: crate::records_host::records::Key,
+        expected: Option<crate::records_host::records::Version>,
+        entry: crate::records_host::records::Entry,
+    ) -> Result<crate::records_host::records::CasResult, crate::records_host::records::Error> {
         self.records
             .as_mut()
-            .ok_or(::soil::records_host::records::Error::Denied)?
+            .ok_or(crate::records_host::records::Error::Denied)?
             .compare_and_swap(key, expected, entry)
     }
 
     fn delete(
         &mut self,
-        key: ::soil::records_host::records::Key,
-    ) -> Result<(), ::soil::records_host::records::Error> {
+        key: crate::records_host::records::Key,
+    ) -> Result<(), crate::records_host::records::Error> {
         self.records
             .as_mut()
-            .ok_or(::soil::records_host::records::Error::Denied)?
+            .ok_or(crate::records_host::records::Error::Denied)?
             .delete(key)
     }
 
@@ -984,21 +1115,21 @@ impl ::soil::records_host::records::Host for Host {
         &mut self,
         since: Option<String>,
         limit: u32,
-    ) -> Result<::soil::records_host::records::Page, ::soil::records_host::records::Error> {
+    ) -> Result<crate::records_host::records::Page, crate::records_host::records::Error> {
         self.records
             .as_mut()
-            .ok_or(::soil::records_host::records::Error::Denied)?
+            .ok_or(crate::records_host::records::Error::Denied)?
             .changes(since, limit)
     }
 
     fn apply(
         &mut self,
-        entries: Vec<::soil::records_host::records::Entry>,
-    ) -> Result<::soil::records_host::records::ApplyResult, ::soil::records_host::records::Error>
+        entries: Vec<crate::records_host::records::Entry>,
+    ) -> Result<crate::records_host::records::ApplyResult, crate::records_host::records::Error>
     {
         self.records
             .as_mut()
-            .ok_or(::soil::records_host::records::Error::Denied)?
+            .ok_or(crate::records_host::records::Error::Denied)?
             .apply(entries)
     }
 }
@@ -1067,6 +1198,22 @@ mod tests {
         assert_eq!(registry.path(), vec!["a", "b"]);
         assert!(registry.get("a").is_some());
         assert!(registry.refused().is_empty());
+    }
+
+    #[test]
+    fn a_composed_runtime_module_is_selected() {
+        let dir = tempfile::tempdir().unwrap();
+        standalone(dir.path(), "a");
+        let package = dir.path().join("a");
+        std::fs::write(package.join("runtime.wasm"), b"\0asm").unwrap();
+        std::fs::write(package.join("runtime.key"), b"abc123\n").unwrap();
+        let registry = CommandRegistry::scan(dir.path()).unwrap();
+        let entry = registry.get("a").unwrap();
+        assert_eq!(
+            entry.runtime_module.as_deref(),
+            Some(package.join("runtime.wasm").as_path())
+        );
+        assert_eq!(entry.composition_key.as_deref(), Some("abc123"));
     }
 
     #[test]

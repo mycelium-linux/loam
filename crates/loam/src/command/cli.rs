@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 
-use crate::{CommandRegistry, CommandRunner, RecordsBinding, RunRequest};
+use super::{CommandRegistry, CommandRunner, RecordsBinding, RunRequest};
 
 fn on_path(dir: &std::path::Path) -> bool {
     std::env::var_os("PATH")
@@ -156,7 +156,7 @@ fn run_as(args: Vec<String>, subcommand: &[&str]) -> Result<i32> {
         }
     }
     let roots = if roots.is_empty() {
-        crate::roots(command_root)
+        crate::command::roots(command_root)
     } else {
         roots
     };
@@ -173,7 +173,7 @@ fn run_as(args: Vec<String>, subcommand: &[&str]) -> Result<i32> {
         return Ok(0);
     }
     if warm {
-        let report = crate::warm(&roots)?;
+        let report = crate::command::warm(&roots)?;
         for name in &report.warmed {
             println!("warmed {name}");
         }
@@ -188,7 +188,7 @@ fn run_as(args: Vec<String>, subcommand: &[&str]) -> Result<i32> {
     if shims {
         let dir = shim_dir.unwrap_or_else(default_shim_dir);
         let runner = std::env::current_exe().context("resolve this binary")?;
-        let report = crate::write_shims(&registry, &dir, &runner, subcommand, prune)?;
+        let report = crate::command::write_shims(&registry, &dir, &runner, subcommand, prune)?;
         for path in &report.written {
             println!("wrote {}", path.display());
         }
@@ -244,11 +244,11 @@ fn run_as(args: Vec<String>, subcommand: &[&str]) -> Result<i32> {
     });
     let bus = match &unibus_config {
         Some(path) => {
-            Some(Arc::new(::soil::UnibusBus::from_config_file(path)?) as Arc<dyn ::soil::Bus>)
+            Some(Arc::new(crate::UnibusBus::from_config_file(path)?) as Arc<dyn crate::Bus>)
         }
         None => None,
     };
-    let plugins = crate::plugin::PluginRegistry::scan_roots(&roots)?;
+    let plugins = crate::command::plugin::PluginRegistry::scan_roots(&roots)?;
     let output = CommandRunner::new(records, bus)?
         .with_plugins(plugins)
         .run(

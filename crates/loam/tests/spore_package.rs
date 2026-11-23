@@ -1,4 +1,4 @@
-use soil_spore::{
+use soil::spore::{
     Error, Manifest, check, compute_lock, pack, publish_blockers, verify, write_lock,
 };
 use std::fs;
@@ -210,7 +210,7 @@ fn a_package_unpacks_to_the_tree_that_packed_it() {
     let root = fixture();
     let bytes = pack(&root).unwrap();
     let dest = root.join("installed");
-    let lock = soil_spore::unpack(&bytes, &dest).unwrap();
+    let lock = soil::spore::unpack(&bytes, &dest).unwrap();
     assert_eq!(lock.id, "dev.fungos.markdown");
     assert_eq!(lock.files.len(), 4);
     for path in [
@@ -240,7 +240,7 @@ fn unpack_writes_nothing_from_a_tampered_package() {
     let index = broken.len() / 2;
     broken[index] ^= 0xff;
     let dest = root.join("refused");
-    assert!(soil_spore::unpack(&broken, &dest).is_err());
+    assert!(soil::spore::unpack(&broken, &dest).is_err());
     assert!(
         !dest.join("module.wasm").exists(),
         "a failed verify must not leave files behind"
@@ -252,12 +252,12 @@ fn a_cid_is_the_bytes() {
     // The documented CIDv1/raw/sha2-256 vector for an empty block. If this
     // changes, every published CID in the wild changes with it.
     assert_eq!(
-        soil_spore::cid_v1_raw(b""),
+        soil::spore::cid_v1_raw(b""),
         "bafkreihdwdcefgh4dqkjv67uzcmw7ojee6xedzdetojuzjevtenxquvyku"
     );
     assert_ne!(
-        soil_spore::cid_v1_raw(b"a"),
-        soil_spore::cid_v1_raw(b"b"),
+        soil::spore::cid_v1_raw(b"a"),
+        soil::spore::cid_v1_raw(b"b"),
         "one byte must move the identity"
     );
 }
@@ -265,8 +265,8 @@ fn a_cid_is_the_bytes() {
 #[test]
 fn the_same_tree_has_the_same_cid_twice() {
     let root = fixture();
-    let first = soil_spore::cid_v1_raw(&pack(&root).unwrap());
-    let second = soil_spore::cid_v1_raw(&pack(&root).unwrap());
+    let first = soil::spore::cid_v1_raw(&pack(&root).unwrap());
+    let second = soil::spore::cid_v1_raw(&pack(&root).unwrap());
     assert_eq!(first, second, "packing is deterministic, so the CID is too");
     assert!(first.starts_with("bafkrei"), "{first}");
 }
@@ -291,7 +291,7 @@ fn verify_rejects_a_modified_member() {
     let manifest = Manifest::load(&root).unwrap();
     let lock = compute_lock(&root, &manifest).unwrap();
 
-    let mut files = soil_spore::collect(&root).unwrap();
+    let mut files = soil::spore::collect(&root).unwrap();
     for (path, bytes) in &mut files {
         if path == "module.wasm" {
             bytes.extend_from_slice(b"tampered");
@@ -337,7 +337,7 @@ fn a_symlinked_file_is_refused() {
     {
         std::os::unix::fs::symlink(root.join("module.wasm"), root.join("link.wasm")).unwrap();
         assert!(matches!(
-            soil_spore::collect(&root),
+            soil::spore::collect(&root),
             Err(Error::UnsafePath(_))
         ));
     }
@@ -364,7 +364,7 @@ fn tar_non_regular_entries_are_refused() {
 #[test]
 fn a_package_without_a_lock_is_refused() {
     let root = fixture();
-    let files = soil_spore::collect(&root).unwrap();
+    let files = soil::spore::collect(&root).unwrap();
     let bytes = build_tar(&files);
     assert!(matches!(verify(&bytes), Err(Error::Lock(_))));
 }
@@ -373,7 +373,7 @@ fn a_package_without_a_lock_is_refused() {
 fn the_manifest_and_lock_must_agree() {
     let root = fixture();
     let manifest = Manifest::load(&root).unwrap();
-    let lock = soil_spore::Lock::new("dev.fungos.other", "0.1.0", Vec::new());
+    let lock = soil::spore::Lock::new("dev.fungos.other", "0.1.0", Vec::new());
     assert_ne!(manifest.spore.id, lock.id);
     let _ = compute_lock(&root, &manifest).unwrap();
 }
@@ -381,10 +381,10 @@ fn the_manifest_and_lock_must_agree() {
 #[test]
 fn safe_paths_are_the_ones_we_accept() {
     for good in ["module.wasm", "ui/editor.lua", "a/b/c.png", "./x"] {
-        assert!(soil_spore::safe_relative(good).is_ok(), "{good}");
+        assert!(soil::spore::safe_relative(good).is_ok(), "{good}");
     }
     for bad in ["", "/etc/passwd", "../x", "a/../../b", "a\\b", "a\0b"] {
-        assert!(soil_spore::safe_relative(bad).is_err(), "{bad}");
+        assert!(soil::spore::safe_relative(bad).is_err(), "{bad}");
     }
     let _ = Path::new("x");
 }
@@ -433,7 +433,7 @@ fn a_web_surface_ships_the_directory_it_names() {
     fs::write(root.join("web/fonts/ui.woff2"), b"\0wOF2").unwrap();
 
     let manifest = Manifest::parse(&declared).unwrap();
-    let paths: Vec<String> = soil_spore::collect_package(&root, &manifest)
+    let paths: Vec<String> = soil::spore::collect_package(&root, &manifest)
         .unwrap()
         .into_iter()
         .map(|(path, _)| path)
@@ -564,7 +564,7 @@ fn a_declared_manual_must_exist_and_is_part_of_the_package() {
 fn a_module_that_is_not_a_component_is_rejected_with_a_reason() {
     // `check` reads the component type to hold [grants] to the real imports, so
     // a plain core module has to fail loudly rather than silently skip the rule.
-    let error = soil_spore::imported_packages(b"\0asm\x01\0\0\0").unwrap_err();
+    let error = soil::spore::imported_packages(b"\0asm\x01\0\0\0").unwrap_err();
     assert!(matches!(error, Error::Invalid(_)), "{error:?}");
     assert!(
         error.to_string().contains("component"),
@@ -577,7 +577,7 @@ fn a_chrome_region_declares_the_height_the_host_reserves() {
     // The shell has to reserve the region before the package runs, so the number
     // cannot be inferred from the view: it is declared, and the host's fallback
     // uses the same one.
-    let declared = soil_spore::Manifest::parse(
+    let declared = soil::spore::Manifest::parse(
         r#"
 schema = 1
 [spore]
@@ -608,14 +608,14 @@ height = 52
     assert_eq!(chrome.height(), 52);
 
     let mut silent = declared.clone();
-    silent.chrome = Some(soil_spore::Chrome {
+    silent.chrome = Some(soil::spore::Chrome {
         regions: vec!["top-bar".into()],
         sources: Default::default(),
         height: None,
     });
     assert_eq!(
         silent.chrome.as_ref().unwrap().height(),
-        soil_spore::chrome::DEFAULT_HEIGHT
+        soil::spore::chrome::DEFAULT_HEIGHT
     );
 }
 
@@ -675,10 +675,10 @@ fn a_skill_that_is_not_a_skill_file_is_refused() {
 }
 #[test]
 fn display_title_reads_a_slug_as_words() {
-    assert_eq!(soil_spore::display_title("vitals-view"), "Vitals View");
-    assert_eq!(soil_spore::display_title("dfm_report"), "Dfm Report");
-    assert_eq!(soil_spore::display_title("store"), "Store");
-    assert_eq!(soil_spore::display_title(""), "");
+    assert_eq!(soil::spore::display_title("vitals-view"), "Vitals View");
+    assert_eq!(soil::spore::display_title("dfm_report"), "Dfm Report");
+    assert_eq!(soil::spore::display_title("store"), "Store");
+    assert_eq!(soil::spore::display_title(""), "");
 }
 
 #[test]

@@ -11,9 +11,9 @@
 
 use serde_json::{Value, json};
 
-use crate::identity::Identity;
-use crate::publisher::TrustedPublisher;
-use crate::{Error, Lock, Manifest, Result};
+use super::identity::Identity;
+use super::publisher::TrustedPublisher;
+use super::{Error, Lock, Manifest, Result};
 
 /// Endpoint schemes Mycelium accepts on an application lease.
 const SCHEMES: [&str; 5] = ["http", "https", "tcp", "quic", "iroh"];

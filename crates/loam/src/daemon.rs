@@ -1,0 +1,607 @@
+//! Per-user `loamd` supervisor.
+//!
+//! The daemon owns one process, a command registry, a plugin registry and the
+//! command instances it starts. It is deliberately per-user: the socket is
+//! created in the user's runtime directory and a peer is accepted only when its
+//! Unix uid matches the daemon's effective uid. There is no root mode, group
+//! ACL or remote control surface in this slice.
+//!
+//! The control protocol is a single newline-delimited JSON request and response
+//! over a Unix stream. It is a local admin surface, not a wasm capability and
+//! not a second package format.
+
+use std::{
+    collections::BTreeMap,
+    fs,
+    io::{BufRead, BufReader, Write},
+    os::unix::{
+        fs::PermissionsExt,
+        net::{UnixListener, UnixStream},
+    },
+    path::{Path, PathBuf},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+
+use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use wasmtime::Engine;
+
+use crate::{
+    Bus,
+    command::{
+        CommandRegistry, CommandRunner, RecordsBinding, RunLimits, RunOutput, RunRequest,
+        plugin::PluginRegistry,
+    },
+};
+
+/// How many live instances one daemon may own.
+pub const DEFAULT_MAX_INSTANCES: usize = 8;
+
+/// A request from `loamd`'s local control client.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "op", rename_all = "kebab-case")]
+pub enum Request {
+    Ping,
+    List,
+    Inspect {
+        id: String,
+    },
+    Logs {
+        id: String,
+    },
+    Start {
+        id: String,
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+        #[serde(default)]
+        env: BTreeMap<String, String>,
+        #[serde(default)]
+        cwd: Option<String>,
+        #[serde(default)]
+        stdin: Option<String>,
+        #[serde(default)]
+        timeout_ms: Option<u64>,
+        #[serde(default)]
+        max_stdout_bytes: Option<usize>,
+        #[serde(default)]
+        max_stderr_bytes: Option<usize>,
+        #[serde(default)]
+        max_memory_bytes: Option<usize>,
+    },
+    Stop {
+        id: String,
+    },
+    Shutdown,
+}
+
+/// What the daemon needs to start.
+pub struct Options {
+    pub socket: PathBuf,
+    pub roots: Vec<PathBuf>,
+    pub records: Option<RecordsBinding>,
+    pub bus: Option<Arc<dyn Bus>>,
+    pub max_instances: usize,
+}
+
+impl Options {
+    pub fn new(socket: impl Into<PathBuf>, roots: Vec<PathBuf>) -> Self {
+        Self {
+            socket: socket.into(),
+            roots,
+            records: None,
+            bus: None,
+            max_instances: DEFAULT_MAX_INSTANCES,
+        }
+    }
+}
+
+/// The default per-user socket.
+pub fn default_socket() -> PathBuf {
+    if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR").filter(|value| !value.is_empty()) {
+        return PathBuf::from(runtime).join("loam/loamd.sock");
+    }
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    home.join(".local/share/loam/loamd.sock")
+}
+
+/// Send one request to a running daemon.
+pub fn request(socket: &Path, request: &Request) -> Result<Value> {
+    let mut stream =
+        UnixStream::connect(socket).with_context(|| format!("connect to {}", socket.display()))?;
+    let line = serde_json::to_string(request)?;
+    stream.write_all(line.as_bytes())?;
+    stream.write_all(b"\n")?;
+    stream.flush()?;
+
+    let mut response = String::new();
+    BufReader::new(stream).read_line(&mut response)?;
+    if response.trim().is_empty() {
+        bail!("daemon closed the connection without a response");
+    }
+    Ok(serde_json::from_str(&response)?)
+}
+
+/// Run the per-user daemon until a `shutdown` request.
+pub fn serve(options: Options) -> Result<()> {
+    if options.max_instances == 0 {
+        bail!("--max-instances must be greater than zero");
+    }
+    let registry = Arc::new(CommandRegistry::scan_roots(&options.roots)?);
+    let plugins = PluginRegistry::scan_roots(&options.roots)?;
+    let daemon = Arc::new(Daemon {
+        registry,
+        plugins,
+        records: options.records,
+        bus: options.bus,
+        max_instances: options.max_instances,
+        instances: Mutex::new(BTreeMap::new()),
+        shutdown: AtomicBool::new(false),
+    });
+    let listener = bind_socket(&options.socket)?;
+    listener.set_nonblocking(true)?;
+
+    while !daemon.shutdown.load(Ordering::Relaxed) {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                let daemon = Arc::clone(&daemon);
+                thread::spawn(move || {
+                    if let Err(error) = handle_client(stream, &daemon) {
+                        eprintln!("loamd: control connection: {error:#}");
+                    }
+                });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(error) => return Err(error).context("accept loamd control connection"),
+        }
+    }
+
+    let _ = fs::remove_file(&options.socket);
+    Ok(())
+}
+
+fn bind_socket(path: &Path) -> Result<UnixListener> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+        fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
+            .with_context(|| format!("chmod {}", parent.display()))?;
+    }
+    if path.exists() {
+        if UnixStream::connect(path).is_ok() {
+            bail!("loamd is already listening on {}", path.display());
+        }
+        fs::remove_file(path).with_context(|| format!("remove stale {}", path.display()))?;
+    }
+    let listener = UnixListener::bind(path).with_context(|| format!("bind {}", path.display()))?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("chmod {}", path.display()))?;
+    Ok(listener)
+}
+
+fn handle_client(stream: UnixStream, daemon: &Arc<Daemon>) -> Result<()> {
+    let peer = peer_uid(&stream)?;
+    let me = unsafe { libc::geteuid() };
+    if peer != me {
+        bail!("peer uid {peer} is not this daemon's uid {me}");
+    }
+
+    let mut line = String::new();
+    let mut reader = BufReader::new(&stream);
+    reader.read_line(&mut line)?;
+    if line.trim().is_empty() {
+        bail!("empty control request");
+    }
+    let request: Request = serde_json::from_str(&line)?;
+    let response = daemon.handle(request);
+    let mut stream = stream;
+    serde_json::to_writer(&mut stream, &response)?;
+    stream.write_all(b"\n")?;
+    stream.flush()?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn peer_uid(stream: &UnixStream) -> Result<u32> {
+    use std::{mem::size_of, os::fd::AsRawFd};
+
+    let mut credentials: libc::ucred = unsafe { std::mem::zeroed() };
+    let mut length = size_of::<libc::ucred>() as libc::socklen_t;
+    let result = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            &mut credentials as *mut _ as *mut libc::c_void,
+            &mut length,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error()).context("read peer credentials");
+    }
+    Ok(credentials.uid)
+}
+
+#[cfg(target_os = "macos")]
+fn peer_uid(stream: &UnixStream) -> Result<u32> {
+    use std::os::fd::AsRawFd;
+
+    let mut uid: libc::uid_t = 0;
+    let mut gid: libc::gid_t = 0;
+    let result = unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error()).context("read peer credentials");
+    }
+    Ok(uid)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn peer_uid(_stream: &UnixStream) -> Result<u32> {
+    bail!("peer credential checks are not implemented on this Unix")
+}
+
+struct Daemon {
+    registry: Arc<CommandRegistry>,
+    plugins: PluginRegistry,
+    records: Option<RecordsBinding>,
+    bus: Option<Arc<dyn Bus>>,
+    max_instances: usize,
+    instances: Mutex<BTreeMap<String, InstanceRecord>>,
+    shutdown: AtomicBool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+enum State {
+    Running,
+    Stopping,
+    Exited,
+    Failed,
+    Stopped,
+}
+
+#[derive(Debug)]
+struct InstanceRecord {
+    id: String,
+    command: String,
+    args: Vec<String>,
+    started_ms: u64,
+    limits: RunLimits,
+    state: State,
+    cancel: Option<Engine>,
+    output: Option<RunOutput>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct InstanceView {
+    id: String,
+    command: String,
+    args: Vec<String>,
+    state: State,
+    started_ms: u64,
+    timeout_ms: u64,
+    max_memory_bytes: usize,
+    exit_code: Option<i32>,
+    stdout_bytes: usize,
+    stderr_bytes: usize,
+    error: Option<String>,
+}
+
+impl InstanceRecord {
+    fn view(&self) -> InstanceView {
+        InstanceView {
+            id: self.id.clone(),
+            command: self.command.clone(),
+            args: self.args.clone(),
+            state: self.state,
+            started_ms: self.started_ms,
+            timeout_ms: self.limits.timeout_ms,
+            max_memory_bytes: self.limits.max_memory_bytes,
+            exit_code: self.output.as_ref().map(|output| output.code),
+            stdout_bytes: self.output.as_ref().map_or(0, |output| output.stdout.len()),
+            stderr_bytes: self.output.as_ref().map_or(0, |output| output.stderr.len()),
+            error: self.error.clone(),
+        }
+    }
+
+    fn logs(&self) -> Value {
+        json!({
+            "id": self.id,
+            "stdout": self.output.as_ref().map(|output| String::from_utf8_lossy(&output.stdout).into_owned()),
+            "stderr": self.output.as_ref().map(|output| String::from_utf8_lossy(&output.stderr).into_owned()),
+            "error": self.error,
+        })
+    }
+}
+
+impl Daemon {
+    fn handle(self: &Arc<Self>, request: Request) -> Value {
+        match request {
+            Request::Ping => ok(json!({"pong": true})),
+            Request::List => {
+                let instances: Vec<_> = self
+                    .instances
+                    .lock()
+                    .expect("instance lock poisoned")
+                    .values()
+                    .map(InstanceRecord::view)
+                    .collect();
+                ok(json!({"instances": instances}))
+            }
+            Request::Inspect { id } => match self
+                .instances
+                .lock()
+                .expect("instance lock poisoned")
+                .get(&id)
+            {
+                Some(record) => ok(json!(record.view())),
+                None => error(format!("unknown instance {id:?}")),
+            },
+            Request::Logs { id } => match self
+                .instances
+                .lock()
+                .expect("instance lock poisoned")
+                .get(&id)
+            {
+                Some(record) => ok(record.logs()),
+                None => error(format!("unknown instance {id:?}")),
+            },
+            Request::Start {
+                id,
+                command,
+                args,
+                env,
+                cwd,
+                stdin,
+                timeout_ms,
+                max_stdout_bytes,
+                max_stderr_bytes,
+                max_memory_bytes,
+            } => self.start(
+                id,
+                command,
+                args,
+                env,
+                cwd,
+                stdin,
+                timeout_ms,
+                max_stdout_bytes,
+                max_stderr_bytes,
+                max_memory_bytes,
+            ),
+            Request::Stop { id } => self.stop(&id),
+            Request::Shutdown => self.shutdown(),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn start(
+        self: &Arc<Self>,
+        id: String,
+        command: String,
+        args: Vec<String>,
+        env: BTreeMap<String, String>,
+        cwd: Option<String>,
+        stdin: Option<String>,
+        timeout_ms: Option<u64>,
+        max_stdout_bytes: Option<usize>,
+        max_stderr_bytes: Option<usize>,
+        max_memory_bytes: Option<usize>,
+    ) -> Value {
+        if id.trim().is_empty() {
+            return error("instance id must not be empty");
+        }
+        let entry = match self.registry.get(&command) {
+            Some(entry) => entry.clone(),
+            None => return error(format!("unknown command {command:?}")),
+        };
+        let limits = RunLimits {
+            timeout_ms: timeout_ms.unwrap_or(entry.timeout_ms),
+            max_stdout_bytes: max_stdout_bytes.unwrap_or(entry.max_stdout_bytes),
+            max_stderr_bytes: max_stderr_bytes.unwrap_or(entry.max_stderr_bytes),
+            max_memory_bytes: max_memory_bytes.unwrap_or(entry.max_memory_bytes),
+        };
+        if limits.timeout_ms == 0 {
+            return error("timeout_ms must be greater than zero");
+        }
+        if limits.max_memory_bytes == 0 {
+            return error("max_memory_bytes must be greater than zero");
+        }
+
+        let instances = self.instances.lock().expect("instance lock poisoned");
+        if instances.contains_key(&id) {
+            return error(format!("instance {id:?} already exists"));
+        }
+        let live = instances
+            .values()
+            .filter(|record| matches!(record.state, State::Running | State::Stopping))
+            .count();
+        if live >= self.max_instances {
+            return error(format!("instance limit reached ({})", self.max_instances));
+        }
+        drop(instances);
+
+        let runner = match CommandRunner::new(self.records.clone(), self.bus.clone()) {
+            Ok(runner) => runner.with_plugins(self.plugins.clone()),
+            Err(failure) => return error(format!("{failure:#}")),
+        };
+        let cancel = runner.engine().clone();
+        let request = RunRequest {
+            args: args.clone(),
+            stdin: stdin.unwrap_or_default().into_bytes(),
+            env: env.into_iter().collect(),
+            cwd,
+        };
+        let started_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_millis() as u64);
+
+        self.instances
+            .lock()
+            .expect("instance lock poisoned")
+            .insert(
+                id.clone(),
+                InstanceRecord {
+                    id: id.clone(),
+                    command,
+                    args,
+                    started_ms,
+                    limits,
+                    state: State::Running,
+                    cancel: Some(cancel),
+                    output: None,
+                    error: None,
+                },
+            );
+
+        let daemon = Arc::clone(self);
+        let instance_id = id.clone();
+        thread::spawn(move || {
+            let result = runner.run_with_limits(&entry, &request, limits);
+            let mut instances = daemon.instances.lock().expect("instance lock poisoned");
+            let Some(record) = instances.get_mut(&instance_id) else {
+                return;
+            };
+            record.cancel = None;
+            match result {
+                Ok(output) => {
+                    record.state = State::Exited;
+                    record.output = Some(output);
+                }
+                Err(failure) => {
+                    record.state = if record.state == State::Stopping {
+                        State::Stopped
+                    } else {
+                        State::Failed
+                    };
+                    record.error = Some(format!("{failure:#}"));
+                }
+            }
+        });
+
+        ok(json!({"id": id, "state": "running"}))
+    }
+
+    fn stop(&self, id: &str) -> Value {
+        let engine = {
+            let mut instances = self.instances.lock().expect("instance lock poisoned");
+            let Some(record) = instances.get_mut(id) else {
+                return error(format!("unknown instance {id:?}"));
+            };
+            if record.state != State::Running {
+                return error(format!("instance {id:?} is not running"));
+            }
+            record.state = State::Stopping;
+            record.cancel.clone()
+        };
+        if let Some(engine) = engine {
+            engine.increment_epoch();
+        }
+        ok(json!({"id": id, "state": "stopping"}))
+    }
+
+    fn shutdown(&self) -> Value {
+        let engines: Vec<_> = {
+            let mut instances = self.instances.lock().expect("instance lock poisoned");
+            instances
+                .values_mut()
+                .filter_map(|record| {
+                    if record.state == State::Running {
+                        record.state = State::Stopping;
+                        record.cancel.clone()
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+        for engine in engines {
+            engine.increment_epoch();
+        }
+        self.shutdown.store(true, Ordering::Relaxed);
+        ok(json!({"shutdown": true}))
+    }
+}
+
+fn ok(data: Value) -> Value {
+    json!({"ok": true, "data": data})
+}
+
+fn error(message: impl Into<String>) -> Value {
+    json!({"ok": false, "error": message.into()})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_socket_is_per_user() {
+        let socket = default_socket();
+        assert!(socket.ends_with("loam/loamd.sock"));
+    }
+
+    #[test]
+    fn peer_credentials_are_the_local_uid() {
+        let (left, right) = UnixStream::pair().unwrap();
+        assert_eq!(peer_uid(&left).unwrap(), unsafe { libc::geteuid() });
+        assert_eq!(peer_uid(&right).unwrap(), unsafe { libc::geteuid() });
+    }
+
+    #[test]
+    fn serves_ping_list_and_shutdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("loamd.sock");
+        let options = Options::new(&socket, vec![dir.path().to_path_buf()]);
+        let server = thread::spawn(move || serve(options));
+
+        for _ in 0..40 {
+            if socket.exists() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        assert!(socket.exists(), "daemon did not create its socket");
+
+        let pong = request(&socket, &Request::Ping).unwrap();
+        assert_eq!(pong["ok"], true);
+        assert_eq!(pong["data"]["pong"], true);
+
+        let list = request(&socket, &Request::List).unwrap();
+        assert_eq!(list["ok"], true);
+        assert!(list["data"]["instances"].as_array().unwrap().is_empty());
+
+        let start = request(
+            &socket,
+            &Request::Start {
+                id: "missing".into(),
+                command: "missing".into(),
+                args: Vec::new(),
+                env: BTreeMap::new(),
+                cwd: None,
+                stdin: None,
+                timeout_ms: None,
+                max_stdout_bytes: None,
+                max_stderr_bytes: None,
+                max_memory_bytes: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(start["ok"], false);
+
+        let shutdown = request(&socket, &Request::Shutdown).unwrap();
+        assert_eq!(shutdown["ok"], true);
+        server.join().unwrap().unwrap();
+        assert!(!socket.exists(), "daemon left a stale socket");
+    }
+}
