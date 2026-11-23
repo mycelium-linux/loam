@@ -282,6 +282,11 @@ pub struct Manifest {
     /// keeps working untouched.
     #[serde(default)]
     pub surfaces: Vec<Surface>,
+    /// Optional workspace-backed web surface. A static web surface is just
+    /// assets; this table gives it a bounded VFS namespace and says whether
+    /// the package may write there. Absent means assets only.
+    #[serde(default)]
+    pub web: Option<Web>,
     /// Command-line programs this Spore installs into a shell's virtual PATH.
     ///
     /// A command is not an action: an action takes one JSON request, a command
@@ -298,6 +303,15 @@ pub struct Manifest {
     /// resolved inside the package.
     #[serde(default)]
     pub plugin: Option<Plugin>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Web {
+    /// Workspace-relative VFS prefix this web surface may address. An empty
+    /// string is the whole workspace; absent is assets-only. The host prepends
+    /// this prefix, so the page cannot escape it with `..`.
+    pub vfs_root: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1004,6 +1018,9 @@ impl Manifest {
                 "entry": surface.entry,
                 "requires": surface.requires,
             })).collect::<Vec<_>>(),
+            "web": self.web.as_ref().map(|web| serde_json::json!({
+                "vfs_root": web.vfs_root,
+            })),
             "grants": self.grants,
             "docs": self.docs.as_ref().map(|docs| serde_json::json!({
                 "usage": docs.usage,

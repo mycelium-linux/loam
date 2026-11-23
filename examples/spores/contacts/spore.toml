@@ -1,0 +1,42 @@
+schema = 1
+
+[spore]
+id = "org.mycelium.contacts"
+name = "contacts"
+version = "0.1.0"
+license = "Apache-2.0 OR MIT"
+summary = "Personal contacts over the workspace VFS"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+
+[launch]
+default = "web"
+surfaces = ["web"]
+
+[[surfaces]]
+name = "web"
+kind = "web"
+entry = "web/index.html"
+
+[web]
+vfs_root = "contacts"
+
+[anycast]
+name = "contacts"
+kind = "contacts"
+alpns = ["soil/http/1"]
+ttl_secs = 240
+
+[grants]
+"soil:vfs" = "read the personal contacts book from the workspace"
+"soil:vfs-mut" = "save personal contacts in the workspace"
+
+[denied]
+"soil:http" = ["contact data has no network authority"]
+"wasi:filesystem" = ["the host owns the contacts namespace"]
+
+[presentation]
+badge = "C"
+color = "#7fb2a8"

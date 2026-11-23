@@ -4,8 +4,14 @@
 //! `[[surfaces]] kind = "web"` path: a package ships `web/index.html` and its
 //! assets, the host serves them on a loopback listener, and `loamd` publishes
 //! the matching Mycelium service lease.
+//!
+//! A package may also declare `[web] vfs_root = "notes"`. That gives its static
+//! page a small JSON API over the host workspace, bounded to that prefix. The
+//! page still has no ambient filesystem: it can only name paths the host
+//! resolves under the declared root.
 
 use std::{
+    collections::BTreeMap,
     fs,
     io::{Read, Write},
     net::{TcpListener, TcpStream},
@@ -13,8 +19,12 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use serde_json::json;
 
-use crate::spore::{Anycast, Manifest, Surface, SurfaceKind, Ui, soil::SoilManifest};
+use crate::spore::{Anycast, Manifest, Surface, SurfaceKind, Ui, Web, soil::SoilManifest};
+
+#[cfg(feature = "vfs")]
+use fungos_vfs::{Expect, NodeRole, Vfs, normalize_path};
 
 #[derive(Debug, Clone)]
 pub struct StaticSurface {
@@ -26,6 +36,8 @@ pub struct StaticSurface {
     pub name: String,
     pub kind: String,
     pub ttl_secs: u64,
+    pub web: Option<Web>,
+    pub writable: bool,
 }
 
 /// Find static web surfaces in a set of package roots.
@@ -60,6 +72,8 @@ pub fn discover(roots: &[PathBuf]) -> Result<Vec<StaticSurface>> {
                             anycast,
                             &manifest.surfaces,
                             None,
+                            None,
+                            false,
                         )
                     })
             } else if toml.is_file() {
@@ -68,6 +82,7 @@ pub fn discover(roots: &[PathBuf]) -> Result<Vec<StaticSurface>> {
                     .and_then(|source| Manifest::parse(&source).ok())
                     .and_then(|manifest| {
                         let anycast = manifest.anycast.clone()?;
+                        let writable = manifest.grants.contains_key("soil:vfs-mut");
                         static_surface(
                             &package,
                             manifest.spore.id,
@@ -75,6 +90,8 @@ pub fn discover(roots: &[PathBuf]) -> Result<Vec<StaticSurface>> {
                             anycast,
                             &manifest.surfaces,
                             manifest.ui.as_ref(),
+                            manifest.web.clone(),
+                            writable,
                         )
                     })
             } else {
@@ -89,6 +106,7 @@ pub fn discover(roots: &[PathBuf]) -> Result<Vec<StaticSurface>> {
     Ok(found)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn static_surface(
     package: &Path,
     spore_id: String,
@@ -96,6 +114,8 @@ fn static_surface(
     anycast: Anycast,
     surfaces: &[Surface],
     ui: Option<&Ui>,
+    web: Option<Web>,
+    writable: bool,
 ) -> Option<StaticSurface> {
     let surface = surfaces
         .iter()
@@ -113,6 +133,8 @@ fn static_surface(
         ttl_secs: anycast.ttl_secs,
         anycast,
         entry,
+        web: web.filter(|web| !web.vfs_root.contains("..")),
+        writable,
     })
 }
 
@@ -143,37 +165,20 @@ pub fn serve(surfaces: Vec<StaticSurface>, listener: TcpListener) -> Result<()> 
 }
 
 fn handle(mut stream: TcpStream, sites: &[(StaticSurface, PathBuf)]) -> Result<()> {
-    let mut buffer = [0u8; 8192];
-    let read = stream.read(&mut buffer)?;
-    if read == 0 {
+    let Some(request) = read_request(&mut stream)? else {
         return Ok(());
-    }
-    let request = String::from_utf8_lossy(&buffer[..read]);
-    let mut lines = request.lines();
-    let first = lines.next().unwrap_or_default();
-    let mut parts = first.split_whitespace();
-    let method = parts.next().unwrap_or_default();
-    let raw_path = parts.next().unwrap_or("/");
-    if !matches!(method, "GET" | "HEAD") {
-        return respond(&mut stream, 405, "text/plain", b"method not allowed");
-    }
-    let header = |wanted: &str| {
-        request.lines().find_map(|line| {
-            let (name, value) = line.split_once(':')?;
-            name.eq_ignore_ascii_case(wanted)
-                .then(|| value.trim().to_ascii_lowercase())
-        })
     };
-    // The frontdoor strips Host so the upstream client can set its own, and
-    // carries the caller's name in x-forwarded-host. Static web surfaces are
-    // selected by that name; without this, every site behind one frontdoor
-    // falls back to the same package.
-    let host = header("x-forwarded-host")
-        .and_then(|value| value.split(',').next().map(str::trim).map(str::to_owned))
-        .filter(|value| !value.is_empty())
-        .or_else(|| header("host"))
+    let origin = request.headers.get("origin").map(String::as_str);
+    // The local listener sees the frontdoor's upstream Host, not the browser's.
+    // A gateway forwards the original name in `x-forwarded-host`; prefer it so
+    // several web Spores can share one listener.
+    let host = request
+        .headers
+        .get("x-forwarded-host")
+        .or_else(|| request.headers.get("host"))
+        .map(|host| host.trim().to_ascii_lowercase())
         .unwrap_or_default();
-    let (_, root) = sites
+    let (site, root) = sites
         .iter()
         .find(|(site, _)| {
             host == format!("{}.myc", site.name) || host.starts_with(&format!("{}.", site.name))
@@ -181,38 +186,407 @@ fn handle(mut stream: TcpStream, sites: &[(StaticSurface, PathBuf)]) -> Result<(
         .or_else(|| sites.first())
         .expect("sites is non-empty");
 
-    let path = raw_path.split('?').next().unwrap_or("/");
+    let (path, query) = request
+        .target
+        .split_once('?')
+        .unwrap_or((&request.target, ""));
+    if path == "/api/vfs" || path.starts_with("/api/vfs/") {
+        return vfs_api(
+            site,
+            &request.method,
+            path,
+            query,
+            &request,
+            origin,
+            &mut stream,
+        );
+    }
+    if request.method == "OPTIONS" {
+        return respond(&mut stream, 204, "text/plain", b"", origin);
+    }
+    if !matches!(request.method.as_str(), "GET" | "HEAD") {
+        return respond(
+            &mut stream,
+            405,
+            "text/plain",
+            b"method not allowed",
+            origin,
+        );
+    }
+
     let mut relative = path.trim_start_matches('/');
     if relative.is_empty() {
         relative = "index.html";
     }
     if relative.split('/').any(|part| part == ".." || part == ".") {
-        return respond(&mut stream, 400, "text/plain", b"invalid path");
+        return respond(&mut stream, 400, "text/plain", b"invalid path", origin);
     }
     let file = root.join(relative);
     match fs::read(&file) {
         Ok(bytes) => {
             let mime = media_type(&file);
-            respond(&mut stream, 200, mime, &bytes)
+            respond(
+                &mut stream,
+                200,
+                mime,
+                if request.method == "HEAD" {
+                    b""
+                } else {
+                    &bytes
+                },
+                origin,
+            )
         }
-        Err(_) => respond(&mut stream, 404, "text/plain", b"not found"),
+        Err(_) => respond(&mut stream, 404, "text/plain", b"not found", origin),
     }
 }
 
-fn respond(stream: &mut TcpStream, status: u16, mime: &str, body: &[u8]) -> Result<()> {
+#[allow(clippy::too_many_arguments)]
+fn vfs_api(
+    site: &StaticSurface,
+    method: &str,
+    path: &str,
+    query: &str,
+    request: &Request,
+    origin: Option<&str>,
+    stream: &mut TcpStream,
+) -> Result<()> {
+    let Some(web) = site.web.as_ref() else {
+        return respond(
+            stream,
+            404,
+            "application/json",
+            b"{\"error\":\"no vfs web grant\"}",
+            origin,
+        );
+    };
+    #[cfg(not(feature = "vfs"))]
+    {
+        let _ = (method, path, query, request, web);
+        return respond(
+            stream,
+            501,
+            "application/json",
+            b"{\"error\":\"vfs feature is not built\"}",
+            origin,
+        );
+    }
+    #[cfg(feature = "vfs")]
+    {
+        if method == "OPTIONS" {
+            return respond(stream, 204, "text/plain", b"", origin);
+        }
+        let workspace = workspace_root();
+        let mut vfs = match Vfs::open_with_role(&workspace, NodeRole::Full) {
+            Ok(vfs) => vfs,
+            Err(error) => {
+                return json_response(stream, 500, &json!({"error": error.to_string()}), origin);
+            }
+        };
+        let requested = query_value(query, "path").unwrap_or_default();
+        let Some(vfs_path) = scoped_path(&web.vfs_root, &requested) else {
+            return json_response(
+                stream,
+                400,
+                &json!({"error": "path escapes the web vfs root"}),
+                origin,
+            );
+        };
+        match (method, path) {
+            ("GET", "/api/vfs/list") => {
+                let entries = match vfs.list(&vfs_path) {
+                    Ok(entries) => entries,
+                    Err(error) => {
+                        return json_response(
+                            stream,
+                            500,
+                            &json!({"error": error.to_string()}),
+                            origin,
+                        );
+                    }
+                };
+                let entries = entries
+                    .into_iter()
+                    .take(5000)
+                    .map(|entry| {
+                        let relative = entry
+                            .path
+                            .strip_prefix(&format!("{}/", web.vfs_root.trim_end_matches('/')))
+                            .unwrap_or(&entry.path)
+                            .trim_start_matches('/')
+                            .to_owned();
+                        json!({
+                            "path": entry.path,
+                            "relative": relative,
+                            "name": entry.path.rsplit('/').next().unwrap_or(&entry.path),
+                            "size": entry.size,
+                            "media_type": entry.media_type,
+                            "version": entry.version,
+                            "updated_at_ms": entry.updated_at_ms,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                json_response(
+                    stream,
+                    200,
+                    &json!({"root": web.vfs_root, "path": requested, "entries": entries}),
+                    origin,
+                )
+            }
+            ("GET", "/api/vfs/read") => match vfs.get(&vfs_path) {
+                Ok(bytes) => match String::from_utf8(bytes.clone()) {
+                    Ok(text) => {
+                        let entry = vfs.file(&vfs_path).ok().flatten();
+                        json_response(
+                            stream,
+                            200,
+                            &json!({
+                                "path": vfs_path,
+                                "text": text,
+                                "size": bytes.len(),
+                                "version": entry.as_ref().map(|entry| entry.version),
+                                "media_type": entry.as_ref().map(|entry| entry.media_type.clone()),
+                            }),
+                            origin,
+                        )
+                    }
+                    Err(_) => {
+                        json_response(stream, 415, &json!({"error": "not utf-8 text"}), origin)
+                    }
+                },
+                Err(error) => {
+                    json_response(stream, 404, &json!({"error": error.to_string()}), origin)
+                }
+            },
+            ("GET", "/api/vfs/raw") => match vfs.get(&vfs_path) {
+                Ok(bytes) => {
+                    let mime = vfs
+                        .file(&vfs_path)
+                        .ok()
+                        .flatten()
+                        .map(|entry| entry.media_type)
+                        .unwrap_or_else(|| "application/octet-stream".into());
+                    respond(stream, 200, &mime, &bytes, origin)
+                }
+                Err(error) => {
+                    json_response(stream, 404, &json!({"error": error.to_string()}), origin)
+                }
+            },
+            ("PUT", "/api/vfs/write") if site.writable => {
+                let expected = query_value(query, "expected_version")
+                    .and_then(|value| value.parse().ok())
+                    .map_or(Expect::Any, Expect::Version);
+                let media_type = request
+                    .headers
+                    .get("content-type")
+                    .map(String::as_str)
+                    .unwrap_or("application/octet-stream");
+                match vfs.put(&vfs_path, &request.body, media_type, expected) {
+                    Ok(entry) => json_response(
+                        stream,
+                        200,
+                        &json!({"path": entry.path, "version": entry.version, "size": entry.size, "media_type": entry.media_type}),
+                        origin,
+                    ),
+                    Err(error) => {
+                        json_response(stream, 409, &json!({"error": error.to_string()}), origin)
+                    }
+                }
+            }
+            ("DELETE", "/api/vfs/remove") if site.writable => match vfs.remove(&vfs_path) {
+                Ok(()) => json_response(stream, 200, &json!({"removed": vfs_path}), origin),
+                Err(error) => {
+                    json_response(stream, 404, &json!({"error": error.to_string()}), origin)
+                }
+            },
+            ("PUT" | "DELETE", _) => json_response(
+                stream,
+                403,
+                &json!({"error": "web surface is read-only"}),
+                origin,
+            ),
+            _ => json_response(stream, 404, &json!({"error": "unknown vfs api"}), origin),
+        }
+    }
+}
+
+#[cfg(feature = "vfs")]
+fn workspace_root() -> PathBuf {
+    if let Some(path) = std::env::var_os("MYCELIUM_VFS_ROOT") {
+        return PathBuf::from(path);
+    }
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    home.join(".local/share/fungos/vfs")
+}
+
+#[cfg(feature = "vfs")]
+fn scoped_path(scope: &str, requested: &str) -> Option<String> {
+    let scope = scope.trim_matches('/');
+    let requested = requested.trim_matches('/');
+    let joined = match (scope.is_empty(), requested.is_empty()) {
+        (true, _) => requested.to_owned(),
+        (false, true) => scope.to_owned(),
+        (false, false) => format!("{scope}/{requested}"),
+    };
+    let normalized = normalize_path(&joined).ok()?;
+    if scope.is_empty() || normalized == scope || normalized.starts_with(&format!("{scope}/")) {
+        Some(normalized)
+    } else {
+        None
+    }
+}
+
+fn query_value(query: &str, name: &str) -> Option<String> {
+    query.split('&').find_map(|pair| {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        (key == name).then(|| percent_decode(value))
+    })
+}
+
+fn percent_decode(value: &str) -> String {
+    let mut out = Vec::with_capacity(value.len());
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            if let Ok(byte) = u8::from_str_radix(&value[index + 1..index + 3], 16) {
+                out.push(byte);
+                index += 3;
+                continue;
+            }
+        }
+        out.push(if bytes[index] == b'+' {
+            b' '
+        } else {
+            bytes[index]
+        });
+        index += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+struct Request {
+    method: String,
+    target: String,
+    headers: BTreeMap<String, String>,
+    body: Vec<u8>,
+}
+
+fn read_request(stream: &mut TcpStream) -> Result<Option<Request>> {
+    const MAX_HEAD: usize = 64 * 1024;
+    const MAX_BODY: usize = 16 * 1024 * 1024;
+    let mut buffer = Vec::new();
+    let mut chunk = [0u8; 8192];
+    let header_end = loop {
+        if let Some(index) = buffer.windows(4).position(|window| window == b"\r\n\r\n") {
+            break index;
+        }
+        if buffer.len() > MAX_HEAD {
+            anyhow::bail!("request headers exceed {} bytes", MAX_HEAD);
+        }
+        let read = stream.read(&mut chunk)?;
+        if read == 0 {
+            return Ok(None);
+        }
+        buffer.extend_from_slice(&chunk[..read]);
+    };
+    let head = String::from_utf8_lossy(&buffer[..header_end]);
+    let mut lines = head.lines();
+    let mut first = lines.next().unwrap_or_default().split_whitespace();
+    let method = first.next().unwrap_or_default().to_owned();
+    let target = first.next().unwrap_or("/").to_owned();
+    let mut headers = BTreeMap::new();
+    for line in lines {
+        if let Some((name, value)) = line.split_once(':') {
+            headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_owned());
+        }
+    }
+    let content_length = headers
+        .get("content-length")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    if content_length > MAX_BODY {
+        anyhow::bail!("request body exceeds {} bytes", MAX_BODY);
+    }
+    let mut body = buffer[header_end + 4..].to_vec();
+    while body.len() < content_length {
+        let read = stream.read(&mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        body.extend_from_slice(&chunk[..read]);
+    }
+    body.truncate(content_length);
+    Ok(Some(Request {
+        method,
+        target,
+        headers,
+        body,
+    }))
+}
+
+fn json_response(
+    stream: &mut TcpStream,
+    status: u16,
+    body: &serde_json::Value,
+    origin: Option<&str>,
+) -> Result<()> {
+    let bytes = serde_json::to_vec(body)?;
+    respond(
+        stream,
+        status,
+        "application/json; charset=utf-8",
+        &bytes,
+        origin,
+    )
+}
+
+fn cors(origin: Option<&str>) -> String {
+    let Some(origin) = origin else {
+        return String::new();
+    };
+    let allowed = origin
+        .strip_prefix("https://")
+        .or_else(|| origin.strip_prefix("http://"))
+        .is_some_and(|host| host == "myc" || host.ends_with(".myc"));
+    if allowed {
+        format!(
+            "Access-Control-Allow-Origin: {origin}\r\nAccess-Control-Allow-Methods: GET, PUT, DELETE, OPTIONS\r\nAccess-Control-Allow-Headers: content-type\r\nVary: Origin\r\n"
+        )
+    } else {
+        String::new()
+    }
+}
+
+fn respond(
+    stream: &mut TcpStream,
+    status: u16,
+    mime: &str,
+    body: &[u8],
+    origin: Option<&str>,
+) -> Result<()> {
     let reason = match status {
         200 => "OK",
+        204 => "No Content",
         400 => "Bad Request",
+        403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        409 => "Conflict",
+        415 => "Unsupported Media Type",
+        500 => "Internal Server Error",
+        501 => "Not Implemented",
         _ => "Error",
     };
     let head = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len()
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-cache\r\n{}X-Content-Type-Options: nosniff\r\n\r\n",
+        body.len(),
+        cors(origin)
     );
     stream.write_all(head.as_bytes())?;
-    if status == 200 {
+    if status != 204 && !body.is_empty() {
         stream.write_all(body)?;
     }
     stream.flush()?;
@@ -235,6 +609,7 @@ fn media_type(path: &Path) -> &'static str {
         "webp" => "image/webp",
         "woff2" => "font/woff2",
         "txt" => "text/plain; charset=utf-8",
+        "md" => "text/markdown; charset=utf-8",
         _ => "application/octet-stream",
     }
 }
@@ -295,5 +670,19 @@ mod tests {
                 .expect("discover")
                 .is_empty()
         );
+    }
+
+    #[cfg(feature = "vfs")]
+    #[test]
+    fn a_web_surface_vfs_root_is_bounded() {
+        assert_eq!(
+            scoped_path("notes", "hello.md").as_deref(),
+            Some("notes/hello.md")
+        );
+        assert_eq!(
+            scoped_path("", "notes/hello.md").as_deref(),
+            Some("notes/hello.md")
+        );
+        assert!(scoped_path("notes", "../secrets").is_none());
     }
 }
