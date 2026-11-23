@@ -7,9 +7,12 @@ loam is the native runtime for Soil components.
 - README: ./README.md
 - Architecture: ./docs/architecture.md
 - Install: ./docs/install.md
+- Man pages: ./docs/man/loam.1, ./docs/man/loamd.1
 - Releases: ./docs/releases.md
 - Testing: ./docs/testing.md
 - Editing: ./docs/edit.md
+- Soil 101: ./docs/soil-101.md
+- Agent skill: ./skills/loam/SKILL.md
 - Plugin build: scripts/build-mcp-plugin.sh
 - WIT contracts: ./wit/README.md
 - Agent instructions: ./AGENTS.md
