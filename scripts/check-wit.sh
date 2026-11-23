@@ -11,6 +11,7 @@ fi
 # contracts, not the root directory as one package: the root is a collection.
 for world in \
     wit/soil-mcp.wit \
+    wit/soil-process.wit \
     wit/soil-inference.wit \
     wit/loam-plugin.wit \
     crates/loam/wit/principal \
