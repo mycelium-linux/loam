@@ -1,0 +1,42 @@
+schema = 1
+
+[spore]
+id = "org.mycelium.notes"
+name = "notes"
+version = "0.1.0"
+license = "Apache-2.0 OR MIT"
+summary = "Local-first Markdown notes over the workspace VFS"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+
+[launch]
+default = "web"
+surfaces = ["web"]
+
+[[surfaces]]
+name = "web"
+kind = "web"
+entry = "web/index.html"
+
+[web]
+vfs_root = "notes"
+
+[anycast]
+name = "notes"
+kind = "notes"
+alpns = ["soil/http/1"]
+ttl_secs = 240
+
+[grants]
+"soil:vfs" = "read Markdown notes from the host-approved notes root"
+"soil:vfs-mut" = "save notes with generation-checked workspace writes"
+
+[denied]
+"soil:http" = ["network access is a separate explicit host grant"]
+"wasi:filesystem" = ["the host owns the notes root and paths"]
+
+[presentation]
+badge = "N"
+color = "#f3c46d"
