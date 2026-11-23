@@ -9,6 +9,9 @@ permissions:
 
 jobs:
   build:
+    # GitHub-hosted macOS runners are not always available. Do not lose the
+    # Linux artifacts (or the installer) just because one target is unavailable.
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -59,6 +62,7 @@ jobs:
           if-no-files-found: error
   publish:
     needs: build
+    if: ${{ always() && needs.build.result != 'cancelled' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
