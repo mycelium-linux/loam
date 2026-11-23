@@ -135,16 +135,16 @@
 
   document.addEventListener('pointermove', (event) => {
     if (drag) {
+      drag.el.style.inset = 'auto';
       drag.el.style.left = `${drag.left + event.clientX - drag.startX}px`;
       drag.el.style.top = `${drag.top + event.clientY - drag.startY}px`;
-      drag.el.style.inset = 'auto';
       drag.el.dataset.zoomed = 'false';
       return;
     }
     if (resize) {
+      resize.el.style.inset = 'auto';
       resize.el.style.width = `${Math.max(320, resize.width + event.clientX - resize.startX)}px`;
       resize.el.style.height = `${Math.max(220, resize.height + event.clientY - resize.startY)}px`;
-      resize.el.style.inset = 'auto';
       resize.el.dataset.zoomed = 'false';
     }
   });
