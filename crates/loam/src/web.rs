@@ -276,7 +276,21 @@ fn vfs_api(
         if method == "OPTIONS" {
             return respond(stream, 204, "text/plain", b"", origin);
         }
-        let workspace = workspace_root();
+        if path == "/api/vfs/roots" {
+            return json_response(
+                stream,
+                200,
+                &json!({"roots": configured_roots(), "active": active_root_id(query)}),
+                origin,
+            );
+        }
+        let selected = active_root_id(query);
+        let workspace = match workspace_for_root(selected.as_deref()) {
+            Some(path) => path,
+            None => {
+                return json_response(stream, 400, &json!({"error": "unknown vfs root"}), origin);
+            }
+        };
         let mut vfs = match Vfs::open_with_role(&workspace, NodeRole::Full) {
             Ok(vfs) => vfs,
             Err(error) => {
@@ -436,6 +450,96 @@ fn scoped_path(scope: &str, requested: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+fn active_root_id(query: &str) -> Option<String> {
+    query_value(query, "root").filter(|root| !root.is_empty())
+}
+
+fn expand_tilde(value: &str) -> PathBuf {
+    if value == "~" {
+        return PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
+    }
+    if let Some(rest) = value.strip_prefix("~/") {
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_default();
+        return home.join(rest);
+    }
+    PathBuf::from(value)
+}
+
+fn configured_roots() -> Vec<serde_json::Value> {
+    let default = workspace_root();
+    let mut roots = vec![json!({
+        "id": "vfs",
+        "name": "VFS",
+        "root": default,
+        "mount": std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default().join("fungOS"),
+        "kind": "vfs",
+    })];
+    let directory = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default()
+        .join(".config/fungos/desktops");
+    if let Ok(entries) = fs::read_dir(directory) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("toml") {
+                continue;
+            }
+            let Ok(source) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let mut id = None;
+            let mut name = None;
+            let mut root = None;
+            let mut mount = None;
+            for line in source.lines() {
+                let line = line.trim();
+                let Some((key, value)) = line.split_once('=') else {
+                    continue;
+                };
+                let value = value.trim().trim_matches('"').to_owned();
+                match key.trim() {
+                    "id" => id = Some(value),
+                    "name" => name = Some(value),
+                    "root" => root = Some(value),
+                    "mount" => mount = Some(value),
+                    _ => {}
+                }
+            }
+            let (Some(id), Some(root)) = (id, root) else {
+                continue;
+            };
+            if id == "vfs" || roots.iter().any(|root| root["id"] == id) {
+                continue;
+            }
+            roots.push(json!({
+                "id": id,
+                "name": name.unwrap_or_else(|| id.clone()),
+                "root": expand_tilde(&root),
+                "mount": mount.map(|mount| expand_tilde(&mount)),
+                "kind": "desktop",
+            }));
+        }
+    }
+    roots.sort_by(|left, right| {
+        let left = left["id"].as_str().unwrap_or_default();
+        let right = right["id"].as_str().unwrap_or_default();
+        (left != "vfs")
+            .cmp(&(right != "vfs"))
+            .then_with(|| left.cmp(right))
+    });
+    roots
+}
+
+fn workspace_for_root(id: Option<&str>) -> Option<PathBuf> {
+    let id = id.unwrap_or("vfs");
+    configured_roots()
+        .into_iter()
+        .find(|root| root["id"] == id)
+        .and_then(|root| root["root"].as_str().map(PathBuf::from))
 }
 
 fn query_value(query: &str, name: &str) -> Option<String> {

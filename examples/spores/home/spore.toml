@@ -20,6 +20,9 @@ name = "web"
 kind = "web"
 entry = "web/index.html"
 
+[web]
+vfs_root = ""
+
 [anycast]
 name = "home"
 kind = "home"
