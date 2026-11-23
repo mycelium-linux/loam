@@ -41,10 +41,12 @@ First-party native plugins:
 |---|---|---|
 | Surface | `loam-surface` | native |
 | BLE | `loam-ble-api`, `loam-ble-host`, `loam-ble-sim` | native |
-| Audio | `loam-audio` | native |
-| Codec | `loam-codec` | native |
-| Inference | `loam-inference`, `loam-inference-host` | native |
-| Text scrubbing | `loam-scrub` | internal to inference |
+| Audio + codec | `loam-media` | native |
+
+`soil:process` is a plugin/extra contract in `wit/`. `soil:http` and
+`soil:streams` already live with their opt-in host implementations under
+`crates/loam/wit/`. None of them are linked by the default runner or advertised
+in `loam doctor`.
 
 The runtime also provides WASI p2 and `wasi:http` through Wasmtime:
 
@@ -75,10 +77,38 @@ Those are Soil code, Spores, or plugins.
 
 ```sh
 loam run NAME [ARGS...]        # run an installed wasm command
+loam install PATH --root DIR   # verify, compose, warm, install atomically
+loam status --root DIR [--json]
+loam rollback ID --root DIR
 loam surface FILE [--size WxH] # open a native winit + WebGPU surface
+loam edit <op> ... [--json]    # edit a personal source overlay
 loam doctor                    # print the linked capability profile
 loam help
 ```
+
+`loam install` is local-only and source-preserving. It keeps generations and a
+previous digest for rollback:
+
+```sh
+loam install spores/marbles --root ~/.local/share/fungos/commands
+loam status --root ~/.local/share/fungos/commands --json
+loam rollback acme:marbles --root ~/.local/share/fungos/commands
+```
+
+See [`docs/installer.md`](docs/installer.md).
+
+`loamd` is the per-user supervisor for command instances:
+
+```sh
+loamd
+loamd start mb --id mb-1 -- ready --json
+loamd list
+loamd logs mb-1
+loamd stop mb-1
+```
+
+It listens on `$XDG_RUNTIME_DIR/loam/loamd.sock` and accepts only peers with the
+daemon's Unix uid. See [`docs/loamd.md`](docs/loamd.md).
 
 Command packages live in the usual roots:
 
@@ -89,44 +119,100 @@ Command packages live in the usual roots:
 
 `loam run` is the virtual PATH. It does not compile or interpret Soil source.
 
+## Editing
+
+A signed Spore is immutable. `loam edit` copies its `source/` into a personal
+session, checkpoints that work tree, saves full-file overlays, and applies them
+under the personal patch root:
+
+```sh
+loam edit open spores/marbles --json
+loam edit read acme:marbles/<base-digest> mb.soil --json
+loam edit list acme:marbles/<base-digest> --json
+loam edit checkpoint acme:marbles/<base-digest> --message "first change" --json
+loam edit save acme:marbles/<base-digest> --message "overlay" --json
+loam edit apply acme:marbles/<base-digest> --json
+```
+
+Every command writes JSON to stdout. `build` is unsupported until a builder is
+configured; source-only overlays can still be saved. The signed package is never
+written to.
+
 ## Plugins
 
 `loam` is a linker. Core capabilities are linked natively. Everything else is discovered at runtime.
 
-Two plugin forms:
+**A plugin is a Spore that exports WIT.** There is no second package format:
 
-1. **Wasm plugin** — a component exporting the capability WIT. `loam` links its exports directly.
-2. **Native sidecar** — a native process plus a generated wasm adapter that exports the same WIT and forwards over `loam:plugin/ipc`.
+```text
+Spore = wasm component + spore.toml + spore.lock + signatures
+grants constrain imports
+exports are what the Spore provides
+```
 
-No `loam` rebuild is needed to add a capability. The plugin package is signed and declares the WIT interfaces it provides and the grants it requires.
+A Spore that exports `run` is a command. One that exports `wasi:http/incoming-handler` is a service. One that exports `soil:mcp` is a capability plugin.
+
+```sh
+loam plugin list       # installed exports
+loam plugin verify     # refused packages, duplicate providers, missing seals
+loam plugin pack DIR   # write spore.lock for a local package
+```
+
+Wasm plugins are linked directly. A native sidecar is a different trust class
+behind the same interface: the package ships a wasm adapter and a native
+executable, and the adapter reaches it through `loam:plugin/ipc`.
+
+```text
+guest imports soil:mcp
+        ↓
+adapter Spore exports soil:mcp
+adapter imports loam:plugin/ipc
+        ↓
+native sidecar (loam-mcp)
+```
+
+Exports are declarations, not grants. A provider's own imports are still
+bounded by its `[grants]`, and a consumer still needs the capability in its own
+`[grants]`.
 
 See [`docs/architecture.md`](docs/architecture.md).
 
 ## Repository layout
 
 ```text
-crates/loam              runtime host and linker
-crates/loam-cli          the one `loam` binary
-crates/loam-command      command registry and wasm command runner
-crates/loam-spore        package identity, locks, signatures
+crates/loam              runtime, host, command runner, plugin linker, Spore package
 crates/loam-surface      winit + WebGPU surface host
 crates/loam-ble-*        first-party BLE plugin
-crates/loam-audio        first-party audio plugin
-crates/loam-codec        first-party codec plugin
-crates/loam-inference*   first-party inference plugin
-crates/loam-scrub        internal inference helper
+crates/loam-media        first-party audio + codec plugin
 wit/                     canonical capability contracts
 ```
+
+## Install
+
+```sh
+# release tarball, shell installer or Homebrew once published
+loam doctor
+```
+
+See [`docs/install.md`](docs/install.md).
 
 ## Build
 
 ```sh
 cargo check --workspace
 cargo test --workspace
-cargo build -p loam-cli
+cargo build -p loam --features surface --bin loam
+scripts/check-architecture.sh
+scripts/check-wit.sh
+scripts/check-surface-fixture.sh
+scripts/build-mcp-plugin.sh   # build the first real plugin package
 ```
 
 The runnable binary is `target/debug/loam`.
+
+Project rules are in [`AGENTS.md`](AGENTS.md) and
+[`CONTRIBUTING.md`](CONTRIBUTING.md). Agent discovery starts at
+[`llms.txt`](llms.txt).
 
 ## Principles
 

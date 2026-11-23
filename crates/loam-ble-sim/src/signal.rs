@@ -144,7 +144,7 @@ mod tests {
 
     #[test]
     fn steps_are_per_device_never_summed() {
-        let signals = vec![
+        let signals = [
             signal(
                 "watch",
                 "owner",
@@ -169,7 +169,7 @@ mod tests {
 
     #[test]
     fn wearers_do_not_see_each_other() {
-        let signals = vec![
+        let signals = [
             signal(
                 "watch",
                 "owner",

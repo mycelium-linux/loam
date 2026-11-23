@@ -52,11 +52,11 @@ wasmtime::component::bindgen!({
     world: "unibus-host",
 });
 
-use soil::unibus::bus as api;
+use self::soil::unibus::bus as api;
 
 /// The generated `soil:unibus` WIT trait and value types, for hosts that
 /// compose the WASI profile with their own store state.
-pub use soil::unibus::bus;
+pub use self::soil::unibus::bus;
 
 /// Largest body a Spore may publish or observe through this profile.
 ///

@@ -1,0 +1,69 @@
+// Opt-in process spawning with bidirectional pipes.
+//
+// This is a plugin/extra contract, not part of loam's default capability
+// profile. The runtime does not link it and `loam doctor` does not advertise
+// it. A host that chooses to provide it links a plugin provider and grants
+// `soil:process` explicitly.
+//
+// The host owns child processes and their stdio pipes. A guest gets opaque
+// handles, never a pid, executable path, or OS process handle. There is no
+// shell: `command` is an executable and `args` are passed as argv.
+//
+// Reads block until data or EOF; `none` is EOF, never "try again". A guest
+// that needs a deadline reads from a worker or uses `wait`. The host must drain
+// both stdout and stderr while the child runs; a guest that ignores one side
+// still applies backpressure to the child.
+package soil:process@0.1.0;
+
+interface process {
+  enum error {
+    /// The Spore was not granted `soil:process`, or the host declined.
+    denied,
+    /// The executable or working directory does not exist.
+    not-found,
+    /// The request is malformed, or a handle/operation is no longer valid.
+    invalid,
+    /// The child could not be started, or a pipe operation failed.
+    io,
+  }
+
+  resource child {
+    /// Write and flush bytes to the child's stdin. Fails `io` after `close`.
+    write: func(data: list<u8>) -> result<u64, error>;
+
+    /// Read up to `max` bytes from stdout, blocking until at least one byte is
+    /// available or the stream reaches EOF. `none` means EOF and is permanent.
+    /// `max` must be greater than zero.
+    read: func(max: u32) -> result<option<list<u8>>, error>;
+
+    /// Read up to `max` bytes from stderr with the same blocking and EOF
+    /// semantics as `read`.
+    read-stderr: func(max: u32) -> result<option<list<u8>>, error>;
+
+    /// Close stdin only. This does not wait for the child, reap it, or close
+    /// stdout/stderr, so a guest must call `wait` (and `kill` if needed) to
+    /// observe completion. Idempotent.
+    close: func() -> result<_, error>;
+
+    /// Wait up to `timeout-ms` for the child to exit. `none` means it is still
+    /// running; `0` polls. Once exited, the host has reaped it and repeated
+    /// calls return the same exit status. The host may cap the timeout.
+    wait: func(timeout-ms: u32) -> result<option<s32>, error>;
+
+    /// Request termination without waiting. The host may use a forceful
+    /// platform equivalent. This does not reap the child; call `wait`.
+    kill: func() -> result<_, error>;
+  }
+
+  /// Spawn `command` with `args`, optionally in `cwd`. The host, not the
+  /// guest, decides which executables and directories are reachable.
+  spawn: func(command: string, args: list<string>, cwd: option<string>) -> result<child, error>;
+}
+
+world process-host {
+  import process;
+}
+
+world guest {
+  import process;
+}

@@ -1,0 +1,26 @@
+// The narrow host surface a sidecar-backed Spore adapter uses.
+//
+// This is IPC, not a capability. A plugin receives only the methods its host
+// chose to expose; the sidecar receives only stdin/stdout from that adapter.
+package loam:plugin@0.1.0;
+
+interface ipc {
+  enum error {
+    denied,
+    unavailable,
+    invalid,
+    io,
+  }
+
+  /// Send one request to the plugin's configured sidecar. `payload` and the
+  /// result are UTF-8 JSON; the transport framing is the host's business.
+  request: func(method: string, payload: list<u8>) -> result<list<u8>, error>;
+}
+
+world host {
+  import ipc;
+}
+
+world guest {
+  import ipc;
+}

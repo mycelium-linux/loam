@@ -119,6 +119,11 @@ impl Links {
         self.devices.len()
     }
 
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.devices.is_empty()
+    }
+
     /// Drop every link on shutdown so the next host does not wait out a lease.
     pub fn close_all(&mut self, ble: &mut Ble) {
         for link in self.devices.keys().copied().collect::<Vec<_>>() {

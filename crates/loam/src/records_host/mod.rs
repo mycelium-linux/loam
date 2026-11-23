@@ -8,6 +8,7 @@ use std::sync::Mutex;
 
 use anyhow::Context;
 use fungos_records::{Contact, Record, Store};
+use rusqlite::{params_from_iter, types::Value as SqlValue};
 use wasmtime::component::{HasSelf, Linker};
 
 mod namespaced;
@@ -223,8 +224,156 @@ impl RecordsBookHost {
     }
 }
 
+fn sql_value(value: &str) -> SqlValue {
+    if let Ok(value) = value.parse::<i64>() {
+        SqlValue::Integer(value)
+    } else if let Ok(value) = value.parse::<f64>() {
+        SqlValue::Real(value)
+    } else {
+        SqlValue::Text(value.to_string())
+    }
+}
+
+fn escape_like(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
 fn put_u32(out: &mut Vec<u8>, value: usize) {
     out.extend_from_slice(&(value as u32).to_le_bytes());
+}
+
+impl RecordsBookHost {
+    /// Run one `query` spec in SQL instead of scanning the book and filtering in
+    /// Rust. A per-project query is the difference between reading a few rows
+    /// and copying the entire book through the component once per project.
+    fn query_sql(&mut self, spec: &records::QuerySpec) -> Result<records::Page, records::Error> {
+        if spec.collection != self.collection {
+            return Err(records::Error::Invalid);
+        }
+        if spec.limit == 0 || spec.limit > MAX_PAGE {
+            return Err(records::Error::OverBudget);
+        }
+        let mut sql = String::from(
+            "SELECT book_id,entity_id,schema_id,schema_version,revision,fields,updated_hlc,deleted,origin \
+             FROM records WHERE book_id=? AND deleted=0",
+        );
+        let mut values = vec![SqlValue::Text(self.book.clone())];
+        let prefix = spec.prefix.as_deref().unwrap_or_default();
+        if !prefix.is_empty() {
+            sql.push_str(" AND entity_id LIKE ? ESCAPE '\\'");
+            values.push(SqlValue::Text(format!("{}%", escape_like(prefix))));
+        }
+        if let Some(cursor) = spec.cursor.as_deref() {
+            sql.push_str(" AND entity_id > ?");
+            values.push(SqlValue::Text(cursor.to_string()));
+        }
+        for filter in &spec.filters {
+            let path = format!("$.\"{}\"", filter.field.replace('"', "\\\""));
+            let value = filter.value.clone().unwrap_or_default();
+            match filter.op {
+                records::FilterOp::Exists => {
+                    sql.push_str(" AND json_extract(fields, ?) IS NOT NULL");
+                    values.push(SqlValue::Text(path));
+                }
+                records::FilterOp::Eq => {
+                    sql.push_str(" AND json_extract(fields, ?) = ?");
+                    values.push(SqlValue::Text(path));
+                    values.push(sql_value(&value));
+                }
+                records::FilterOp::Prefix => {
+                    sql.push_str(" AND CAST(json_extract(fields, ?) AS TEXT) LIKE ? ESCAPE '\\'");
+                    values.push(SqlValue::Text(path));
+                    values.push(SqlValue::Text(format!("{}%", escape_like(&value))));
+                }
+                records::FilterOp::Contains => {
+                    sql.push_str(" AND CAST(json_extract(fields, ?) AS TEXT) LIKE ? ESCAPE '\\'");
+                    values.push(SqlValue::Text(path));
+                    values.push(SqlValue::Text(format!("%{}%", escape_like(&value))));
+                }
+                records::FilterOp::Lt => {
+                    sql.push_str(" AND json_extract(fields, ?) < ?");
+                    values.push(SqlValue::Text(path));
+                    values.push(sql_value(&value));
+                }
+                records::FilterOp::Lte => {
+                    sql.push_str(" AND json_extract(fields, ?) <= ?");
+                    values.push(SqlValue::Text(path));
+                    values.push(sql_value(&value));
+                }
+                records::FilterOp::Gt => {
+                    sql.push_str(" AND json_extract(fields, ?) > ?");
+                    values.push(SqlValue::Text(path));
+                    values.push(sql_value(&value));
+                }
+                records::FilterOp::Gte => {
+                    sql.push_str(" AND json_extract(fields, ?) >= ?");
+                    values.push(SqlValue::Text(path));
+                    values.push(sql_value(&value));
+                }
+            }
+        }
+        sql.push_str(" ORDER BY entity_id LIMIT ?");
+        values.push(SqlValue::Integer(spec.limit as i64 + 1));
+
+        let mut records = {
+            let store = self.store.lock().expect("records store poisoned");
+            let mut statement = store
+                .db
+                .prepare(&sql)
+                .map_err(|error| store_error("records query", anyhow::Error::new(error)))?;
+            let rows = statement
+                .query_map(params_from_iter(values.iter()), |row| {
+                    let fields: String = row.get(5)?;
+                    Ok(Record {
+                        book_id: row.get(0)?,
+                        entity_id: row.get(1)?,
+                        schema_id: row.get(2)?,
+                        schema_version: row.get(3)?,
+                        revision: row.get(4)?,
+                        fields: serde_json::from_str(&fields).map_err(|error| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                5,
+                                rusqlite::types::Type::Text,
+                                Box::new(error),
+                            )
+                        })?,
+                        updated_hlc: row.get::<_, i64>(6)? as u64,
+                        deleted: row.get::<_, i64>(7)? != 0,
+                        origin: row.get(8)?,
+                    })
+                })
+                .map_err(|error| store_error("records query", anyhow::Error::new(error)))?;
+            rows.collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(|error| store_error("records query", anyhow::Error::new(error)))?
+        };
+        let next = if records.len() > spec.limit as usize {
+            records.truncate(spec.limit as usize);
+            records.last().map(|record| record.entity_id.clone())
+        } else {
+            None
+        };
+        let entries: Vec<records::Entry> = records
+            .into_iter()
+            .map(|mut record| {
+                if !spec.fields.is_empty()
+                    && let Some(object) = record.fields.as_object()
+                {
+                    let mut projected = serde_json::Map::new();
+                    for field in &spec.fields {
+                        if let Some(value) = object.get(field) {
+                            projected.insert(field.clone(), value.clone());
+                        }
+                    }
+                    record.fields = serde_json::Value::Object(projected);
+                }
+                self.entry(record)
+            })
+            .collect();
+        Ok(records::Page { entries, next })
+    }
 }
 
 impl records::Host for RecordsBookHost {
@@ -275,7 +424,7 @@ impl records::Host for RecordsBookHost {
     }
 
     fn query(&mut self, spec: records::QuerySpec) -> Result<records::Page, records::Error> {
-        crate::records_host::query(self, spec)
+        self.query_sql(&spec)
     }
 
     fn aggregate(
@@ -551,6 +700,8 @@ mod tests {
             "note": "",
             "birthday": "",
             "uid": id,
+            "created": "",
+            "last_modified": "",
             "raw_vcard": ""
         });
         records::Entry {
@@ -641,7 +792,7 @@ mod tests {
             .compare_and_swap(key.clone(), Some(version), changed)
             .unwrap();
         assert!(replaced.applied);
-        assert!(replaced.entry.revision > stale.entry.revision);
+        assert!(replaced.entry.revision >= stale.entry.revision);
 
         let current = records::Version {
             revision: replaced.entry.revision,

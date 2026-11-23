@@ -25,7 +25,7 @@ wasmtime::component::bindgen!({
     world: "host",
 });
 
-use soil::creds::creds as api;
+use self::soil::creds::creds as api;
 
 /// Signature algorithms a host provider may support.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
