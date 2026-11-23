@@ -917,7 +917,13 @@ impl CommandRunner {
 
         if let Some(plugins) = &self.plugins {
             plugins
-                .link(&self.engine, &mut linker, &mut store, &component)
+                .link_allowed(
+                    &self.engine,
+                    &mut linker,
+                    &mut store,
+                    &component,
+                    &entry.requires,
+                )
                 .context("link command plugins")?;
         }
         let command = Command::instantiate(&mut store, &component, &linker)?;

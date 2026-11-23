@@ -253,12 +253,51 @@ impl PluginRegistry {
     where
         T: 'static,
     {
+        self.link_inner(engine, linker, store, guest, None)
+    }
+
+    /// Link only the provider interfaces covered by the caller's grants.
+    ///
+    /// An empty grant set links no provider. This is the enforcement point for
+    /// an image host: a provider that is installed but not granted never enters
+    /// the linker, so the guest sees a missing binding rather than a broad
+    /// host-call table.
+    pub fn link_allowed<T>(
+        &self,
+        engine: &Engine,
+        linker: &mut Linker<T>,
+        store: &mut Store<T>,
+        guest: &Component,
+        allowed: &[String],
+    ) -> Result<Vec<String>>
+    where
+        T: 'static,
+    {
+        self.link_inner(engine, linker, store, guest, Some(allowed))
+    }
+
+    fn link_inner<T>(
+        &self,
+        engine: &Engine,
+        linker: &mut Linker<T>,
+        store: &mut Store<T>,
+        guest: &Component,
+        allowed: Option<&[String]>,
+    ) -> Result<Vec<String>>
+    where
+        T: 'static,
+    {
         let mut linked = Vec::new();
         let mut instances: BTreeMap<PathBuf, Instance> = BTreeMap::new();
         for (import, _) in guest.component_type().imports(engine) {
             let Some(entry) = self.plugins.get(import) else {
                 continue;
             };
+            if let Some(allowed) = allowed
+                && !allowed.iter().any(|grant| grant_covers(grant, import))
+            {
+                continue;
+            }
             let instance = match instances.get(&entry.module) {
                 Some(instance) => *instance,
                 None => {
@@ -408,6 +447,13 @@ fn resolve_program(program: &str) -> Option<PathBuf> {
         .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
         .map(|dir| dir.join(program))
         .find(|candidate| candidate.is_file())
+}
+
+fn grant_covers(grant: &str, import: &str) -> bool {
+    grant == import
+        || import.strip_prefix(grant).is_some_and(|rest| {
+            rest.starts_with('/') || rest.starts_with('@') || rest.starts_with('.')
+        })
 }
 
 /// Stable cache key for one provider/consumer/import composition.
@@ -1050,6 +1096,31 @@ mod tests {
             std::fs::read(&second).unwrap()
         );
         Component::from_file(&engine, &first).expect("cached composed component");
+    }
+
+    #[test]
+    fn links_only_a_granted_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        package(dir.path(), "echo", true);
+        let registry = PluginRegistry::scan_roots(&[dir.path().to_path_buf()]).unwrap();
+        let engine = engine();
+        let guest = Component::new(&engine, wat::parse_str(GUEST).unwrap()).unwrap();
+        let mut linker = Linker::<()>::new(&engine);
+        let mut store = Store::new(&engine, ());
+        let linked = registry
+            .link_allowed(&engine, &mut linker, &mut store, &guest, &[])
+            .unwrap();
+        assert!(linked.is_empty());
+        let linked = registry
+            .link_allowed(
+                &engine,
+                &mut linker,
+                &mut store,
+                &guest,
+                &["test:echo".to_string()],
+            )
+            .unwrap();
+        assert_eq!(linked, vec!["test:echo/echo@0.1.0"]);
     }
 
     #[test]
