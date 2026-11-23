@@ -1,0 +1,96 @@
+.TH LOAM 1 "2026-11-23" "loam 0.1.0" "User Commands"
+.SH NAME
+loam \- native runtime for Soil WebAssembly components
+.SH SYNOPSIS
+.B loam
+.I command
+.RI [ options ]
+.RI [ arguments ]
+.SH DESCRIPTION
+.B loam
+is the native host for Soil components. It runs installed WebAssembly
+components, links the capabilities they were granted, and keeps the signed
+package boundary. It is not the Soil compiler, REPL, formatter, or language
+server.
+.PP
+Installed command and Spore packages are discovered under
+.I ~/.local/share/fungos/commands
+and
+.IR ~/.local/share/fungos/spores .
+.SH COMMANDS
+.TP
+.B run \fINAME\fR [\fIARGS\fR...]
+Run an installed command component. This is the virtual PATH; it does not
+compile or interpret Soil source.
+.TP
+.B install \fIPATH\fR [\fB\-\-root\fR \fIDIR\fR] [\fB\-\-allow-unsigned-dev\fR]
+Verify, compose, warm, and atomically install a package. The install is
+source-preserving and keeps generations for rollback.
+.TP
+.B status [\fB\-\-root\fR \fIDIR\fR]... [\fB\-\-json\fR]
+Show managed installs from the default roots.
+.TP
+.B rollback \fIID\fR [\fB\-\-root\fR \fIDIR\fR]
+Switch an install back one generation.
+.TP
+.B image plan \fIPATH\fR [\fB\-\-json\fR]
+Build the granted WIT and provider host plan for an image Spore.
+.TP
+.B surface \fIFILE\fR [\fB\-\-size\fR \fIWxH\fR] [\fB\-\-capture\fR \fIFILE\fR]
+Open a native surface or capture one frame.
+.TP
+.B plugin \fIlist\fR|\fIverify\fR|\fIinspect\fR|\fIroots\fR|\fIpack\fR|\fIcompose\fR
+Inspect, seal, or compose Spore capability exports.
+.TP
+.B edit \fIopen\fR|\fIread\fR|\fIlist\fR|\fIcheckpoint\fR|\fIsave\fR|\fIapply\fR
+Edit a personal source overlay without mutating the signed package.
+.TP
+.B doctor
+Print the runtime version and linked capability profile.
+.TP
+.B help
+Print command help.
+.SH FILES
+.TP
+.I ~/.config/loam/loam.conf.soil
+Per-user host defaults for the daemon. Command-line flags override the file.
+.TP
+.I ~/.local/state/loam/logs/
+Durable per-instance logs, rotated by size.
+.TP
+.I $XDG_RUNTIME_DIR/loam/loamd.sock
+Default local control socket for
+.BR loamd (1).
+.SH ENVIRONMENT
+.TP
+.B FUNGOS_COMMAND_ROOT
+Override the command package root.
+.TP
+.B LOAM_CONFIG
+Path to a host configuration file.
+.TP
+.B MYCELIUM_HOME
+Mycelium state directory used for identity and service leases.
+.SH EXAMPLES
+Run an installed command:
+.PP
+.nf
+loam run hello --name world
+.fi
+.PP
+Install a local package and inspect it:
+.PP
+.nf
+loam install ./hello
+loam status --json
+.fi
+.PP
+Open a surface:
+.PP
+.nf
+loam surface hello.wasm --size 1000x700
+.fi
+.SH SEE ALSO
+.BR loamd (1),
+.BR soil (1),
+.BR wasmtime (1)

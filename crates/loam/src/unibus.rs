@@ -1119,6 +1119,10 @@ mod tests {
                 .recv()
                 .expect("the test decides when the hub dies");
             reset(first);
+            // Give the client a beat to observe the dead session before the
+            // reconnect succeeds; otherwise the supervisor can replace it so
+            // fast that the test never sees the down state it is checking.
+            std::thread::sleep(Duration::from_millis(200));
             // A reconnect must re-register, not resume a dead socket. A retry
             // that gave up mid-handshake is expected, so keep accepting until
             // one completes.
