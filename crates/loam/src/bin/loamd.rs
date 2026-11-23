@@ -12,7 +12,8 @@ use soil::{
 const DEFAULT_MAX_INSTANCES: usize = 8;
 
 fn usage() -> &'static str {
-    r#"usage: loamd [serve] [--socket PATH] [--root DIR]...
+    r#"usage: loamd [serve] [--socket PATH] [--root DIR]... [--log-dir DIR]
+                     [--log-max-bytes N] [--log-keep N]
        loamd start COMMAND [ARGS...] [--id ID] [--socket PATH]
        loamd image plan SPORE [--socket PATH]
        loamd image start SPORE [--id ID] [--socket PATH]
@@ -81,6 +82,9 @@ fn parse_options(args: &[String]) -> Result<Options> {
     let mut unibus_config = None;
     let mut web_listen = None;
     let mut image_runtime = None;
+    let mut log_dir = None;
+    let mut log_max_bytes = soil::log::DEFAULT_MAX_BYTES;
+    let mut log_keep = soil::log::DEFAULT_KEEP;
 
     let mut i = 0;
     while i < args.len() {
@@ -131,6 +135,26 @@ fn parse_options(args: &[String]) -> Result<Options> {
                 ));
                 i += 2;
             }
+            "--log-dir" => {
+                log_dir = Some(PathBuf::from(args.get(i + 1).context("--log-dir DIR")?));
+                i += 2;
+            }
+            "--log-max-bytes" => {
+                log_max_bytes = args
+                    .get(i + 1)
+                    .context("--log-max-bytes N")?
+                    .parse()
+                    .context("--log-max-bytes N")?;
+                i += 2;
+            }
+            "--log-keep" => {
+                log_keep = args
+                    .get(i + 1)
+                    .context("--log-keep N")?
+                    .parse()
+                    .context("--log-keep N")?;
+                i += 2;
+            }
             other => bail!("unknown loamd option {other}"),
         }
     }
@@ -174,6 +198,9 @@ fn parse_options(args: &[String]) -> Result<Options> {
         max_instances,
         image_runtime,
         web_listen,
+        log_root: log_dir,
+        log_max_bytes,
+        log_keep,
     })
 }
 
