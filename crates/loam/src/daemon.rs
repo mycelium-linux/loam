@@ -1283,6 +1283,59 @@ mod tests {
     }
 
     #[test]
+    fn supervises_a_window_runtime() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("loamd.sock");
+        let runtime = dir.path().join("window-runtime");
+        fs::write(&runtime, "#!/bin/sh\nexec sleep 30\n").unwrap();
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut options = Options::new(&socket, vec![dir.path().to_path_buf()]);
+        options.window_runtime = Some(runtime);
+        let server = thread::spawn(move || serve(options));
+        for _ in 0..40 {
+            if socket.exists() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+
+        let started = request(
+            &socket,
+            &Request::WindowStart {
+                id: "window".into(),
+                url: "http://127.0.0.1:1/".into(),
+                title: "test".into(),
+                width: 800,
+                height: 600,
+            },
+        )
+        .unwrap();
+        assert_eq!(started["ok"], true);
+
+        let list = request(&socket, &Request::WindowList).unwrap();
+        assert_eq!(list["data"]["windows"][0]["state"], "running");
+
+        let stopped = request(
+            &socket,
+            &Request::WindowStop {
+                id: "window".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(stopped["ok"], true);
+        assert_eq!(
+            request(&socket, &Request::WindowList).unwrap()["data"]["windows"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+
+        assert_eq!(request(&socket, &Request::Shutdown).unwrap()["ok"], true);
+        server.join().unwrap().unwrap();
+    }
+
+    #[test]
     fn serves_ping_list_and_shutdown() {
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("loamd.sock");
