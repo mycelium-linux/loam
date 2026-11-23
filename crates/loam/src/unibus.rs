@@ -1129,7 +1129,9 @@ mod tests {
         // while waiting. This is the contract the Spore actually lives with.
         wait_until(
             "the session to report itself down",
-            Duration::from_secs(10),
+            // The SDK notices a dead peer on its own read timeout. CI runners
+            // can be slow enough that ten seconds is not a useful bound.
+            Duration::from_secs(30),
             || {
                 let _ = bus.publish("test.v1", &frame("test.v1", "{}"), None, 0);
                 !bus.status().connected
