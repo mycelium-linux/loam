@@ -66,6 +66,8 @@ mod host;
 #[cfg(any(feature = "http", feature = "wasi"))]
 pub mod http_host;
 pub mod image;
+#[cfg(feature = "inference")]
+pub mod inference;
 pub mod install;
 pub mod instance;
 #[cfg(feature = "principal")]
@@ -142,6 +144,8 @@ pub const WASI_PROFILE: &[&str] = &[
     "soil:vfs-mut",
     "soil:records",
     "soil:index",
+    #[cfg(feature = "inference")]
+    "soil:inference",
     "soil:principal",
     "soil:surface",
 ];

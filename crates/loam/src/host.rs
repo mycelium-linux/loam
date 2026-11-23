@@ -36,11 +36,26 @@ use crate::{
 pub struct HttpCapability {
     pub(crate) policy: crate::http_host::HttpPolicy,
     pub(crate) transport: Arc<dyn HttpTransport>,
+    pub(crate) credentials: Arc<dyn crate::http_host::CredentialProvider>,
 }
 
 impl HttpCapability {
     pub fn new(policy: crate::http_host::HttpPolicy, transport: Arc<dyn HttpTransport>) -> Self {
-        Self { policy, transport }
+        Self {
+            policy,
+            transport,
+            credentials: Arc::new(crate::http_host::NoCredentials),
+        }
+    }
+
+    /// Host-resolved credentials for `soil:http` handles. A guest names the
+    /// handle; this provider injects the header and never exposes it.
+    pub fn with_credentials(
+        mut self,
+        credentials: Arc<dyn crate::http_host::CredentialProvider>,
+    ) -> Self {
+        self.credentials = credentials;
+        self
     }
 }
 
@@ -82,6 +97,9 @@ pub struct WasiHostBuilder {
     vfs: Option<VfsHost>,
     /// Optional host-accepted byte streams.
     streams: Option<Arc<StreamHub>>,
+    /// Optional `soil:inference` provider, shared across request stores.
+    #[cfg(feature = "inference")]
+    inference: Option<Arc<Mutex<crate::inference::InferenceHost>>>,
 }
 
 /// What a Spore's granted dependencies look like from the host, for `/readyz`.
@@ -131,6 +149,10 @@ impl WasiHostBuilder {
         }
         if self.http.is_some() {
             checks.push(("http", "ok"));
+        }
+        #[cfg(feature = "inference")]
+        if self.inference.is_some() {
+            checks.push(("inference", "ok"));
         }
         Readiness { checks }
     }
@@ -279,6 +301,8 @@ impl WasiHostBuilder {
             codec: self.codec.clone(),
             vfs: self.vfs.clone(),
             streams: self.streams.clone(),
+            #[cfg(feature = "inference")]
+            inference: self.inference.clone(),
         })
     }
 
@@ -290,6 +314,18 @@ impl WasiHostBuilder {
 
     pub fn has_streams(&self) -> bool {
         self.streams.is_some()
+    }
+
+    /// Link `soil:inference` through the moved-in inference host.
+    #[cfg(feature = "inference")]
+    pub fn inference(mut self, host: crate::inference::InferenceHost) -> Self {
+        self.inference = Some(Arc::new(Mutex::new(host)));
+        self
+    }
+
+    #[cfg(feature = "inference")]
+    pub fn has_inference(&self) -> bool {
+        self.inference.is_some()
     }
 
     /// Link the VFS and its derived index.
@@ -333,6 +369,8 @@ pub struct WasiHost {
     pub(crate) codec: Option<Arc<Mutex<crate::codec_host::CodecHost>>>,
     vfs: Option<VfsHost>,
     streams: Option<Arc<StreamHub>>,
+    #[cfg(feature = "inference")]
+    inference: Option<Arc<Mutex<crate::inference::InferenceHost>>>,
 }
 
 impl vfs::Host for WasiHost {
@@ -608,10 +646,137 @@ impl crate::http_host::api::Host for WasiHost {
         };
         crate::http_host::fetch(
             &capability.policy,
-            &crate::http_host::NoCredentials,
+            capability.credentials.as_ref(),
             capability.transport.as_ref(),
             request,
         )
+    }
+
+    fn open(
+        &mut self,
+        request: crate::http_host::api::Request,
+    ) -> Result<
+        wasmtime::component::Resource<crate::http_host::ResponseStream>,
+        crate::http_host::api::Error,
+    > {
+        let Some(capability) = self.soil_http.as_ref() else {
+            return Err(crate::http_host::api::Error::Unsupported);
+        };
+        let stream = crate::http_host::open_stream(
+            &capability.policy,
+            capability.credentials.as_ref(),
+            capability.transport.as_ref(),
+            crate::http_host::Request {
+                url: request.url,
+                method: match request.method {
+                    crate::http_host::api::Method::Get => crate::http_host::Method::Get,
+                    crate::http_host::api::Method::Head => crate::http_host::Method::Head,
+                    crate::http_host::api::Method::Post => crate::http_host::Method::Post,
+                    crate::http_host::api::Method::Put => crate::http_host::Method::Put,
+                    crate::http_host::api::Method::Patch => crate::http_host::Method::Patch,
+                    crate::http_host::api::Method::Delete => crate::http_host::Method::Delete,
+                },
+                headers: request
+                    .headers
+                    .into_iter()
+                    .map(|header| (header.name, header.value))
+                    .collect(),
+                body: request.body,
+                credential: request.credential,
+                max_bytes: request.max_bytes,
+                timeout_ms: request.timeout_ms,
+            },
+        )
+        .map_err(http_error)?;
+        self.table
+            .push(stream)
+            .map_err(|_| crate::http_host::api::Error::OverBudget)
+    }
+}
+
+fn http_error(error: crate::http_host::Error) -> crate::http_host::api::Error {
+    match error {
+        crate::http_host::Error::Denied => crate::http_host::api::Error::Denied,
+        crate::http_host::Error::Invalid => crate::http_host::api::Error::Invalid,
+        crate::http_host::Error::OverBudget => crate::http_host::api::Error::OverBudget,
+        crate::http_host::Error::Timeout => crate::http_host::api::Error::Timeout,
+        crate::http_host::Error::Unavailable => crate::http_host::api::Error::Unavailable,
+        crate::http_host::Error::Tls => crate::http_host::api::Error::Tls,
+        crate::http_host::Error::Http => crate::http_host::api::Error::Http,
+        crate::http_host::Error::Io => crate::http_host::api::Error::Io,
+        crate::http_host::Error::Unsupported => crate::http_host::api::Error::Unsupported,
+    }
+}
+
+impl crate::http_host::api::HostResponseStream for WasiHost {
+    fn status(
+        &mut self,
+        stream: wasmtime::component::Resource<crate::http_host::ResponseStream>,
+    ) -> u16 {
+        self.table
+            .get(&stream)
+            .map(crate::http_host::ResponseStream::status)
+            .unwrap_or_default()
+    }
+
+    fn final_url(
+        &mut self,
+        stream: wasmtime::component::Resource<crate::http_host::ResponseStream>,
+    ) -> String {
+        self.table
+            .get(&stream)
+            .map(|stream| stream.final_url().to_string())
+            .unwrap_or_default()
+    }
+
+    fn headers(
+        &mut self,
+        stream: wasmtime::component::Resource<crate::http_host::ResponseStream>,
+    ) -> Vec<crate::http_host::api::Header> {
+        self.table
+            .get(&stream)
+            .map(|stream| {
+                stream
+                    .headers()
+                    .iter()
+                    .map(|(name, value)| crate::http_host::api::Header {
+                        name: name.clone(),
+                        value: value.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn read(
+        &mut self,
+        stream: wasmtime::component::Resource<crate::http_host::ResponseStream>,
+        max: u32,
+    ) -> Result<Option<Vec<u8>>, crate::http_host::api::Error> {
+        self.table
+            .get_mut(&stream)
+            .map_err(|_| crate::http_host::api::Error::Invalid)?
+            .read(max)
+            .map_err(http_error)
+    }
+
+    fn close(
+        &mut self,
+        stream: wasmtime::component::Resource<crate::http_host::ResponseStream>,
+    ) -> Result<(), crate::http_host::api::Error> {
+        self.table
+            .get_mut(&stream)
+            .map_err(|_| crate::http_host::api::Error::Invalid)?
+            .close()
+            .map_err(http_error)
+    }
+
+    fn drop(
+        &mut self,
+        stream: wasmtime::component::Resource<crate::http_host::ResponseStream>,
+    ) -> Result<(), wasmtime::Error> {
+        let _ = self.table.delete(stream);
+        Ok(())
     }
 }
 
@@ -630,6 +795,98 @@ impl crate::http_host::metrics_api::Host for WasiHost {
         self.metrics.as_ref().map_or_else(Vec::new, |registry| {
             crate::http_host::snapshot_metrics(registry)
         })
+    }
+}
+
+#[cfg(feature = "inference")]
+impl crate::inference::api::Host for WasiHost {
+    fn models(
+        &mut self,
+    ) -> std::result::Result<Vec<crate::inference::api::Model>, crate::inference::api::Error> {
+        let mut host = crate::inference::host(&self.inference)?;
+        crate::inference::api::Host::models(&mut *host)
+    }
+
+    fn complete(
+        &mut self,
+        request: crate::inference::api::Request,
+    ) -> std::result::Result<crate::inference::api::Response, crate::inference::api::Error> {
+        let mut host = crate::inference::host(&self.inference)?;
+        crate::inference::api::Host::complete(&mut *host, request)
+    }
+
+    fn embed(
+        &mut self,
+        request: crate::inference::api::EmbedRequest,
+    ) -> std::result::Result<crate::inference::api::EmbedResponse, crate::inference::api::Error>
+    {
+        let mut host = crate::inference::host(&self.inference)?;
+        crate::inference::api::Host::embed(&mut *host, request)
+    }
+
+    fn voice_embed(
+        &mut self,
+        request: crate::inference::api::VoiceEmbeddingRequest,
+    ) -> std::result::Result<
+        crate::inference::api::VoiceEmbeddingResponse,
+        crate::inference::api::Error,
+    > {
+        let mut host = crate::inference::host(&self.inference)?;
+        crate::inference::api::Host::voice_embed(&mut *host, request)
+    }
+
+    fn transcribe(
+        &mut self,
+        request: crate::inference::api::TranscribeRequest,
+    ) -> std::result::Result<crate::inference::api::TranscribeResponse, crate::inference::api::Error>
+    {
+        let mut host = crate::inference::host(&self.inference)?;
+        crate::inference::api::Host::transcribe(&mut *host, request)
+    }
+
+    fn open_stream(
+        &mut self,
+        request: crate::inference::api::Request,
+    ) -> std::result::Result<
+        wasmtime::component::Resource<soil_inference_host::CompletionStream>,
+        crate::inference::api::Error,
+    > {
+        let mut host = crate::inference::host(&self.inference)?;
+        crate::inference::api::Host::open_stream(&mut *host, request)
+    }
+
+    fn state(
+        &mut self,
+    ) -> std::result::Result<crate::inference::api::InferenceState, crate::inference::api::Error>
+    {
+        let mut host = crate::inference::host(&self.inference)?;
+        crate::inference::api::Host::state(&mut *host)
+    }
+}
+
+#[cfg(feature = "inference")]
+impl crate::inference::api::HostCompletionStream for WasiHost {
+    fn next(
+        &mut self,
+        stream: wasmtime::component::Resource<soil_inference_host::CompletionStream>,
+        timeout_ms: u32,
+    ) -> std::result::Result<Option<crate::inference::api::Chunk>, crate::inference::api::Error>
+    {
+        crate::inference::next_stream(&self.inference, stream, timeout_ms)
+    }
+
+    fn cancel(
+        &mut self,
+        stream: wasmtime::component::Resource<soil_inference_host::CompletionStream>,
+    ) -> std::result::Result<(), crate::inference::api::Error> {
+        crate::inference::cancel_stream(&self.inference, stream)
+    }
+
+    fn drop(
+        &mut self,
+        stream: wasmtime::component::Resource<soil_inference_host::CompletionStream>,
+    ) -> std::result::Result<(), wasmtime::Error> {
+        crate::inference::drop_stream(&self.inference, stream)
     }
 }
 

@@ -15,6 +15,10 @@ allowed = {
     "loam-ble-api",
     "loam-ble-host",
     "loam-ble-sim",
+    "soil-codec",
+    "soil-inference",
+    "soil-inference-host",
+    "soil-scrub",
 }
 allowed_bins = {"loam", "loam-ble-host", "loam-mcp", "loamd"}
 forbidden = (

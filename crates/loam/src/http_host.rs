@@ -14,7 +14,13 @@ use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::{Config, Engine, Store};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
-wasmtime::component::bindgen!({ path: "wit/http", world: "runner" });
+wasmtime::component::bindgen!({
+    path: "wit/http",
+    world: "runner",
+    with: {
+        "soil:http/http.response-stream": ResponseStream,
+    },
+});
 
 use self::soil::http::http;
 
@@ -310,6 +316,14 @@ pub struct TransportResponse {
     pub body: Vec<u8>,
 }
 
+/// A response whose body is pulled from the transport, not buffered here.
+pub struct TransportStream {
+    pub status: u16,
+    pub final_url: String,
+    pub headers: Vec<(String, String)>,
+    pub reader: Box<dyn Read + Send + Sync>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TransportError {
     /// The transport cannot serve this request at all, so a composed transport
@@ -333,6 +347,13 @@ pub enum TransportError {
 /// health. The Spore never selects the route.
 pub trait HttpTransport: Send + Sync {
     fn fetch(&self, request: &TransportRequest) -> Result<TransportResponse, TransportError>;
+
+    /// Open a response without buffering its body. A transport that cannot
+    /// stream returns `Unsupported`; the default keeps existing transports
+    /// source-compatible.
+    fn open(&self, _request: &TransportRequest) -> Result<TransportStream, TransportError> {
+        Err(TransportError::Unsupported)
+    }
 }
 
 /// Prefer one transport, fall back to another when the first says it cannot
@@ -360,13 +381,20 @@ impl HttpTransport for PreferProvider {
             other => other,
         }
     }
+
+    fn open(&self, request: &TransportRequest) -> Result<TransportStream, TransportError> {
+        match self.provider.open(request) {
+            Err(TransportError::Unsupported) => self.fallback.open(request),
+            other => other,
+        }
+    }
 }
 
 #[derive(Default)]
 pub struct DirectTransport;
 
-impl HttpTransport for DirectTransport {
-    fn fetch(&self, request: &TransportRequest) -> Result<TransportResponse, TransportError> {
+impl DirectTransport {
+    fn send(&self, request: &TransportRequest) -> Result<ureq::Response, TransportError> {
         let agent = ureq::AgentBuilder::new()
             .timeout(request.timeout)
             .redirects(0)
@@ -379,12 +407,12 @@ impl HttpTransport for DirectTransport {
             Some(body) => call.send_bytes(body),
             None => call.call(),
         };
-        let response = match sent {
-            Ok(response) => response,
-            Err(ureq::Error::Status(_, response)) => response,
+        match sent {
+            Ok(response) => Ok(response),
+            Err(ureq::Error::Status(_, response)) => Ok(response),
             Err(ureq::Error::Transport(error)) => {
                 let text = error.to_string().to_ascii_lowercase();
-                return Err(
+                Err(
                     if text.contains("tls")
                         || text.contains("certificate")
                         || text.contains("handshake")
@@ -393,9 +421,15 @@ impl HttpTransport for DirectTransport {
                     } else {
                         TransportError::Unavailable
                     },
-                );
+                )
             }
-        };
+        }
+    }
+}
+
+impl HttpTransport for DirectTransport {
+    fn fetch(&self, request: &TransportRequest) -> Result<TransportResponse, TransportError> {
+        let response = self.send(request)?;
         let status = response.status();
         let final_url = request.url.to_string();
         let mut headers = Vec::new();
@@ -405,8 +439,6 @@ impl HttpTransport for DirectTransport {
             }
         }
         let mut body = Vec::new();
-        // HEAD promises no body; every other method can carry one, including
-        // the 204 from a successful Hue or Spotify write.
         if request.method != http::Method::Head {
             response
                 .into_reader()
@@ -422,6 +454,24 @@ impl HttpTransport for DirectTransport {
             final_url,
             headers,
             body,
+        })
+    }
+
+    fn open(&self, request: &TransportRequest) -> Result<TransportStream, TransportError> {
+        let response = self.send(request)?;
+        let status = response.status();
+        let final_url = request.url.to_string();
+        let mut headers = Vec::new();
+        for name in response.headers_names() {
+            if let Some(value) = response.header(&name) {
+                headers.push((name, value.to_string()));
+            }
+        }
+        Ok(TransportStream {
+            status,
+            final_url,
+            headers,
+            reader: response.into_reader(),
         })
     }
 }
@@ -508,9 +558,101 @@ impl HttpHost {
     }
 }
 
+impl http::HostResponseStream for HttpHost {
+    fn status(&mut self, stream: wasmtime::component::Resource<ResponseStream>) -> u16 {
+        self.table
+            .get(&stream)
+            .map(ResponseStream::status)
+            .unwrap_or_default()
+    }
+
+    fn final_url(&mut self, stream: wasmtime::component::Resource<ResponseStream>) -> String {
+        self.table
+            .get(&stream)
+            .map(|stream| stream.final_url().to_string())
+            .unwrap_or_default()
+    }
+
+    fn headers(
+        &mut self,
+        stream: wasmtime::component::Resource<ResponseStream>,
+    ) -> Vec<http::Header> {
+        self.table
+            .get(&stream)
+            .map(|stream| {
+                stream
+                    .headers()
+                    .iter()
+                    .map(|(name, value)| http::Header {
+                        name: name.clone(),
+                        value: value.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn read(
+        &mut self,
+        stream: wasmtime::component::Resource<ResponseStream>,
+        max: u32,
+    ) -> Result<Option<Vec<u8>>, http::Error> {
+        self.table
+            .get_mut(&stream)
+            .map_err(|_| http::Error::Invalid)?
+            .read(max)
+            .map_err(error_to_wit)
+    }
+
+    fn close(
+        &mut self,
+        stream: wasmtime::component::Resource<ResponseStream>,
+    ) -> Result<(), http::Error> {
+        self.table
+            .get_mut(&stream)
+            .map_err(|_| http::Error::Invalid)?
+            .close()
+            .map_err(error_to_wit)
+    }
+
+    fn drop(
+        &mut self,
+        stream: wasmtime::component::Resource<ResponseStream>,
+    ) -> Result<(), wasmtime::Error> {
+        let _ = self.table.delete(stream);
+        Ok(())
+    }
+}
+
 impl http::Host for HttpHost {
     fn fetch(&mut self, request: http::Request) -> Result<http::Response, http::Error> {
         fetch(&self.policy, &*self.credentials, &*self.transport, request)
+    }
+
+    fn open(
+        &mut self,
+        request: http::Request,
+    ) -> Result<wasmtime::component::Resource<http::ResponseStream>, http::Error> {
+        let stream = open_stream(
+            &self.policy,
+            &*self.credentials,
+            &*self.transport,
+            Request {
+                url: request.url,
+                method: method_from_wit(request.method),
+                headers: request
+                    .headers
+                    .into_iter()
+                    .map(|header| (header.name, header.value))
+                    .collect(),
+                body: request.body,
+                credential: request.credential,
+                max_bytes: request.max_bytes,
+                timeout_ms: request.timeout_ms,
+            },
+        )
+        .map_err(error_to_wit)?;
+        self.table.push(stream).map_err(|_| http::Error::OverBudget)
     }
 }
 
@@ -525,6 +667,106 @@ pub fn perform(
     transport: &dyn HttpTransport,
     request: Request,
 ) -> Result<Response, Error> {
+    let (transport_request, path_secret) = prepare(policy, credentials, request)?;
+    let response = transport
+        .fetch(&transport_request)
+        .map_err(transport_error)?;
+    let final_url = redact_final_url(response.final_url, path_secret.as_ref());
+    Ok(Response {
+        status: response.status,
+        final_url,
+        headers: response.headers,
+        body: response.body,
+    })
+}
+
+/// A response resource kept in the host's `ResourceTable`.
+pub struct ResponseStream {
+    status: u16,
+    final_url: String,
+    headers: Vec<(String, String)>,
+    reader: Box<dyn Read + Send + Sync>,
+    remaining: usize,
+    done: bool,
+}
+
+impl ResponseStream {
+    pub fn status(&self) -> u16 {
+        self.status
+    }
+
+    pub fn final_url(&self) -> &str {
+        &self.final_url
+    }
+
+    pub fn headers(&self) -> &[(String, String)] {
+        &self.headers
+    }
+
+    pub fn read(&mut self, max: u32) -> Result<Option<Vec<u8>>, Error> {
+        if max == 0 {
+            return Err(Error::Invalid);
+        }
+        if self.done {
+            return Ok(None);
+        }
+        let want = (max as usize).min(self.remaining).saturating_add(1);
+        let mut buffer = vec![0; want];
+        match self.reader.read(&mut buffer) {
+            Ok(0) => {
+                self.done = true;
+                Ok(None)
+            }
+            Ok(read) => {
+                if read > self.remaining {
+                    self.done = true;
+                    return Err(Error::OverBudget);
+                }
+                self.remaining -= read;
+                buffer.truncate(read);
+                Ok(Some(buffer))
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => Ok(None),
+            Err(_) => Err(Error::Io),
+        }
+    }
+
+    pub fn close(&mut self) -> Result<(), Error> {
+        self.done = true;
+        Ok(())
+    }
+}
+
+/// Open a streamed response through the same policy and credential path as
+/// `fetch`. The caller owns the returned resource.
+pub fn open_stream(
+    policy: &HttpPolicy,
+    credentials: &dyn CredentialProvider,
+    transport: &dyn HttpTransport,
+    request: Request,
+) -> Result<ResponseStream, Error> {
+    let (transport_request, path_secret) = prepare(policy, credentials, request)?;
+    // The transport request already reflects the host cap; use its max_bytes as
+    // the total body budget for this response.
+    let max_bytes = transport_request.max_bytes;
+    let response = transport
+        .open(&transport_request)
+        .map_err(transport_error)?;
+    Ok(ResponseStream {
+        status: response.status,
+        final_url: redact_final_url(response.final_url, path_secret.as_ref()),
+        headers: response.headers,
+        reader: response.reader,
+        remaining: max_bytes,
+        done: false,
+    })
+}
+
+fn prepare(
+    policy: &HttpPolicy,
+    credentials: &dyn CredentialProvider,
+    request: Request,
+) -> Result<(TransportRequest, Option<(String, String)>), Error> {
     let mut request_url = request.url.clone();
     let mut path_secret = None;
     if request_url.contains(CREDENTIAL_MARKER) {
@@ -566,9 +808,6 @@ pub fn perform(
             return Err(Error::Invalid);
         }
     }
-    // A body belongs to a write. Allowing one on GET/HEAD would make a read
-    // look like an action and is not something any transport here supports
-    // predictably.
     if matches!(request.method, Method::Get | Method::Head) && request.body.is_some() {
         return Err(Error::Invalid);
     }
@@ -595,40 +834,40 @@ pub fn perform(
     if let Some(header) = auth {
         headers.push(header);
     }
-    let transport_request = TransportRequest {
-        url,
-        method: method_to_wit(request.method),
-        headers,
-        body: request.body,
-        timeout: Duration::from_millis(request.timeout_ms as u64),
-        max_bytes: request.max_bytes as usize,
-    };
-    let response = transport
-        .fetch(&transport_request)
-        .map_err(|error| match error {
-            TransportError::Denied => Error::Denied,
-            TransportError::OverBudget => Error::OverBudget,
-            TransportError::Timeout => Error::Timeout,
-            TransportError::Unavailable => Error::Unavailable,
-            TransportError::Tls => Error::Tls,
-            TransportError::Http => Error::Http,
-            TransportError::Io => Error::Io,
-            TransportError::Unsupported => Error::Unsupported,
-        })?;
-    let final_url = if let Some((raw, encoded)) = &path_secret {
-        response
-            .final_url
+    Ok((
+        TransportRequest {
+            url,
+            method: method_to_wit(request.method),
+            headers,
+            body: request.body,
+            timeout: Duration::from_millis(request.timeout_ms as u64),
+            max_bytes: request.max_bytes as usize,
+        },
+        path_secret,
+    ))
+}
+
+fn transport_error(error: TransportError) -> Error {
+    match error {
+        TransportError::Denied => Error::Denied,
+        TransportError::OverBudget => Error::OverBudget,
+        TransportError::Timeout => Error::Timeout,
+        TransportError::Unavailable => Error::Unavailable,
+        TransportError::Tls => Error::Tls,
+        TransportError::Http => Error::Http,
+        TransportError::Io => Error::Io,
+        TransportError::Unsupported => Error::Unsupported,
+    }
+}
+
+fn redact_final_url(final_url: String, path_secret: Option<&(String, String)>) -> String {
+    if let Some((raw, encoded)) = path_secret {
+        final_url
             .replace(encoded, CREDENTIAL_MARKER)
             .replace(raw, CREDENTIAL_MARKER)
     } else {
-        response.final_url
-    };
-    Ok(Response {
-        status: response.status,
-        final_url,
-        headers: response.headers,
-        body: response.body,
-    })
+        final_url
+    }
 }
 
 /// `soil:http` as a guest sees it: convert, run the policy, convert back.
@@ -824,7 +1063,7 @@ impl HttpRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::http_host::soil::http::http::Host as _;
+    use crate::http_host::soil::http::http::{Host as _, HostResponseStream as _};
     use std::{io::Write as _, net::TcpListener, sync::mpsc, thread};
 
     struct StaticCredentials;
@@ -914,6 +1153,39 @@ mod tests {
             .unwrap();
         assert_eq!(response.status, 200);
         assert_eq!(response.body, b"hello");
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn opens_a_streaming_response_and_reads_it_incrementally() {
+        let (origin, _rx, handle) = serve_once("hello", None);
+        let policy = HttpPolicy::new([origin.clone()], 1024, Duration::from_secs(5)).unwrap();
+        let mut host = HttpHost::new(policy);
+        let stream = host
+            .open(http::Request {
+                url: format!("{origin}/events"),
+                method: http::Method::Get,
+                headers: vec![],
+                body: None,
+                credential: None,
+                max_bytes: 128,
+                timeout_ms: 2_000,
+            })
+            .unwrap();
+        assert_eq!(
+            host.status(wasmtime::component::Resource::new_borrow(stream.rep())),
+            200
+        );
+        let mut body = Vec::new();
+        while let Some(chunk) = host
+            .read(wasmtime::component::Resource::new_borrow(stream.rep()), 2)
+            .unwrap()
+        {
+            body.extend_from_slice(&chunk);
+        }
+        assert_eq!(body, b"hello");
+        host.close(wasmtime::component::Resource::new_borrow(stream.rep()))
+            .unwrap();
         handle.join().unwrap();
     }
 
