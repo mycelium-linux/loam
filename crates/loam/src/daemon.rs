@@ -39,6 +39,7 @@ use crate::{
         CommandRegistry, CommandRunner, RecordsBinding, RunLimits, RunOutput, RunRequest,
         plugin::PluginRegistry,
     },
+    log::LogStore,
 };
 
 /// How many live instances one daemon may own.
@@ -112,6 +113,12 @@ pub struct Options {
     pub image_runtime: Option<PathBuf>,
     /// Static web surface listener. `None` leaves manifest web surfaces unserved.
     pub web_listen: Option<String>,
+    /// Durable instance logs. `None` uses the per-user state directory.
+    pub log_root: Option<PathBuf>,
+    /// Rotate an instance log before it grows past this many bytes.
+    pub log_max_bytes: u64,
+    /// Generations kept beside the current file.
+    pub log_keep: usize,
 }
 
 impl Options {
@@ -124,6 +131,9 @@ impl Options {
             max_instances: DEFAULT_MAX_INSTANCES,
             image_runtime: None,
             web_listen: None,
+            log_root: None,
+            log_max_bytes: crate::log::DEFAULT_MAX_BYTES,
+            log_keep: crate::log::DEFAULT_KEEP,
         }
     }
 }
@@ -161,6 +171,19 @@ pub fn serve(options: Options) -> Result<()> {
     if options.max_instances == 0 {
         bail!("--max-instances must be greater than zero");
     }
+    let logs = LogStore::new(
+        options
+            .log_root
+            .clone()
+            .unwrap_or_else(crate::log::default_root),
+        options.log_max_bytes,
+        options.log_keep,
+    )
+    .context("open instance log directory")?;
+    let _ = logs.append(
+        "loamd",
+        format!("{} loamd started roots={:?}\n", now_millis(), options.roots).as_bytes(),
+    );
     start_web_surfaces(&options.roots, options.web_listen.as_deref())?;
     let registry = Arc::new(CommandRegistry::scan_roots(&options.roots)?);
     let plugins = PluginRegistry::scan_roots(&options.roots)?;
@@ -172,6 +195,7 @@ pub fn serve(options: Options) -> Result<()> {
         bus: options.bus,
         max_instances: options.max_instances,
         image_runtime: options.image_runtime,
+        logs: logs.clone(),
         instances: Mutex::new(BTreeMap::new()),
         images: Mutex::new(BTreeMap::new()),
         shutdown: AtomicBool::new(false),
@@ -196,6 +220,10 @@ pub fn serve(options: Options) -> Result<()> {
         }
     }
 
+    let _ = logs.append(
+        "loamd",
+        format!("{} loamd stopped\n", now_millis()).as_bytes(),
+    );
     let _ = fs::remove_file(&options.socket);
     Ok(())
 }
@@ -334,6 +362,12 @@ fn publish_web_leases(surfaces: &[crate::web::StaticSurface], endpoint: &str) {
     }
 }
 
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis() as u64)
+}
+
 fn bind_socket(path: &Path) -> Result<UnixListener> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
@@ -421,6 +455,7 @@ struct Daemon {
     bus: Option<Arc<dyn Bus>>,
     max_instances: usize,
     image_runtime: Option<PathBuf>,
+    logs: LogStore,
     instances: Mutex<BTreeMap<String, InstanceRecord>>,
     images: Mutex<BTreeMap<String, ImageRecord>>,
     shutdown: AtomicBool,
@@ -556,6 +591,35 @@ impl InstanceRecord {
     }
 }
 
+fn instance_log(record: &InstanceRecord, result: &Result<RunOutput>) -> Vec<u8> {
+    let mut text = format!(
+        "=== {} {} {} ===\n",
+        record.started_ms,
+        record.command,
+        record.args.join(" ")
+    )
+    .into_bytes();
+    match result {
+        Ok(output) => {
+            text.extend_from_slice(b"--- stdout ---\n");
+            text.extend_from_slice(&output.stdout);
+            if !output.stdout.ends_with(b"\n") {
+                text.push(b'\n');
+            }
+            text.extend_from_slice(b"--- stderr ---\n");
+            text.extend_from_slice(&output.stderr);
+            if !output.stderr.ends_with(b"\n") {
+                text.push(b'\n');
+            }
+            text.extend_from_slice(format!("--- exit {} ---\n", output.code).as_bytes());
+        }
+        Err(failure) => {
+            text.extend_from_slice(format!("--- error: {failure:#} ---\n").as_bytes());
+        }
+    }
+    text
+}
+
 impl Daemon {
     fn handle(self: &Arc<Self>, request: Request) -> Value {
         match request {
@@ -586,7 +650,11 @@ impl Daemon {
                 .get(&id)
             {
                 Some(record) => ok(record.logs()),
-                None => error(format!("unknown instance {id:?}")),
+                None => match self.logs.read(&id) {
+                    Ok(Some(text)) => ok(json!({"id": id, "persisted": true, "text": text})),
+                    Ok(None) => error(format!("unknown instance {id:?}")),
+                    Err(failure) => error(format!("read instance {id:?} log: {failure}")),
+                },
             },
             Request::Start {
                 id,
@@ -728,6 +796,7 @@ impl Daemon {
             let Some(record) = instances.get_mut(&instance_id) else {
                 return;
             };
+            let report = instance_log(record, &result);
             record.cancel = None;
             match result {
                 Ok(output) => {
@@ -742,6 +811,10 @@ impl Daemon {
                     };
                     record.error = Some(format!("{failure:#}"));
                 }
+            }
+            drop(instances);
+            if let Err(failure) = daemon.logs.append(&instance_id, &report) {
+                eprintln!("loamd: write instance {instance_id:?} log: {failure}");
             }
         });
 
@@ -1001,7 +1074,8 @@ mod tests {
     fn reload_picks_up_a_new_command_package() {
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("loamd.sock");
-        let options = Options::new(&socket, vec![dir.path().to_path_buf()]);
+        let mut options = Options::new(&socket, vec![dir.path().to_path_buf()]);
+        options.log_root = Some(dir.path().join("logs"));
         let server = thread::spawn(move || serve(options));
         for _ in 0..40 {
             if socket.exists() {
@@ -1035,7 +1109,8 @@ mod tests {
     fn serves_ping_list_and_shutdown() {
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("loamd.sock");
-        let options = Options::new(&socket, vec![dir.path().to_path_buf()]);
+        let mut options = Options::new(&socket, vec![dir.path().to_path_buf()]);
+        options.log_root = Some(dir.path().join("logs"));
         let server = thread::spawn(move || serve(options));
 
         for _ in 0..40 {

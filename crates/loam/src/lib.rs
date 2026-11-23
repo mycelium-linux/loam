@@ -72,6 +72,8 @@ pub mod install;
 pub mod instance;
 #[cfg(feature = "principal")]
 pub mod local_identity;
+#[cfg(feature = "wasi")]
+pub mod log;
 pub mod metrics;
 #[cfg(any(feature = "http", feature = "wasi"))]
 mod policy;
