@@ -157,13 +157,21 @@ fn handle(mut stream: TcpStream, sites: &[(StaticSurface, PathBuf)]) -> Result<(
     if !matches!(method, "GET" | "HEAD") {
         return respond(&mut stream, 405, "text/plain", b"method not allowed");
     }
-    let host = request
-        .lines()
-        .find_map(|line| {
+    let header = |wanted: &str| {
+        request.lines().find_map(|line| {
             let (name, value) = line.split_once(':')?;
-            name.eq_ignore_ascii_case("host")
+            name.eq_ignore_ascii_case(wanted)
                 .then(|| value.trim().to_ascii_lowercase())
         })
+    };
+    // The frontdoor strips Host so the upstream client can set its own, and
+    // carries the caller's name in x-forwarded-host. Static web surfaces are
+    // selected by that name; without this, every site behind one frontdoor
+    // falls back to the same package.
+    let host = header("x-forwarded-host")
+        .and_then(|value| value.split(',').next().map(str::trim).map(str::to_owned))
+        .filter(|value| !value.is_empty())
+        .or_else(|| header("host"))
         .unwrap_or_default();
     let (_, root) = sites
         .iter()
