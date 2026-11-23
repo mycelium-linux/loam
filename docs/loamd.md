@@ -18,8 +18,10 @@ loamd
 loamd --socket /tmp/loamd.sock --root ~/.local/share/fungos/commands
 ```
 
-`loamd` scans command and Spore roots at startup. Records and Unibus can be
-configured the same way as `loam run`:
+`loamd` scans command and Spore roots at startup. `loamd reload` rescans them
+without restarting the daemon, and `start` retries the scan once when a command
+appeared after the daemon started. Records and Unibus can be configured the
+same way as `loam run`:
 
 ```sh
 loamd \
@@ -39,6 +41,7 @@ loamd start mb --id mb-1 -- ready --project elmers --json
 loamd inspect mb-1
 loamd logs mb-1
 loamd stop mb-1
+loamd reload
 loamd shutdown
 ```
 
@@ -83,6 +86,7 @@ not a second package format.
 {"op":"list"}
 {"op":"logs","id":"mb-1"}
 {"op":"stop","id":"mb-1"}
+{"op":"reload"}
 {"op":"shutdown"}
 ```
 
