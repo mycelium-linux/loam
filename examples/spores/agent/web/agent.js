@@ -11,6 +11,17 @@
   const pin = document.getElementById('pin');
   const close = document.getElementById('close');
   const expand = document.getElementById('expand');
+  const modelSwitch = document.getElementById('model-switch');
+  const modelMenu = document.getElementById('model-menu');
+  const modelName = document.getElementById('model-name');
+  const modelLogo = document.getElementById('model-logo');
+  const modelProviders = {
+    fpl: { label: 'FPL', mark: 'F' },
+    openai: { label: 'OpenAI', icon: 'https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@latest/icons/openai.svg', light: true },
+    anthropic: { label: 'Anthropic', icon: 'https://cdn.simpleicons.org/anthropic/e5e7eb' },
+    openrouter: { label: 'OpenRouter', icon: 'https://cdn.simpleicons.org/openrouter/e5e7eb' },
+  };
+  let model = localStorage.getItem('mycelium.agent.model') || 'fpl';
   let context = { app: 'This app', detail: '/' };
   let pinned = false;
   let fullscreen = false;
@@ -29,6 +40,50 @@
   const sendParent = (type, extra = {}) => {
     if (embedded) parent.postMessage({ type, ...extra }, parentOrigin || '*');
   };
+
+  function setModel(id, announce = false) {
+    const provider = modelProviders[id] || modelProviders.fpl;
+    model = modelProviders[id] ? id : 'fpl';
+    try { localStorage.setItem('mycelium.agent.model', model); } catch {}
+    if (modelName) modelName.textContent = provider.label;
+    if (modelLogo) {
+      modelLogo.replaceChildren();
+      modelLogo.className = `model-logo${model === 'fpl' ? ' model-logo--fpl' : ''}`;
+      if (provider.icon) {
+        const image = document.createElement('img');
+        image.alt = '';
+        image.src = provider.icon;
+        if (provider.light) image.className = 'is-light';
+        image.addEventListener('error', () => {
+          image.remove();
+          modelLogo.textContent = provider.label.slice(0, 1);
+        });
+        modelLogo.append(image);
+      } else {
+        modelLogo.textContent = provider.mark || provider.label.slice(0, 1);
+      }
+    }
+    modelMenu?.querySelectorAll('[data-model]').forEach((button) => {
+      const selected = button.dataset.model === model;
+      button.classList.toggle('is-selected', selected);
+      button.setAttribute('aria-checked', String(selected));
+    });
+    if (announce) {
+      addMessage('system', `Model provider set to ${provider.label}. The harness is not connected yet.`);
+    }
+  }
+
+  function openModelMenu() {
+    if (!modelMenu || !modelSwitch) return;
+    modelMenu.hidden = false;
+    modelSwitch.setAttribute('aria-expanded', 'true');
+    modelMenu.querySelector(`[data-model="${model}"]`)?.focus();
+  }
+  function closeModelMenu() {
+    if (!modelMenu || modelMenu.hidden) return;
+    modelMenu.hidden = true;
+    modelSwitch?.setAttribute('aria-expanded', 'false');
+  }
 
   function setContext(next) {
     if (!next) return;
@@ -113,7 +168,7 @@
       }, 360 + index * 280);
     });
     thread.append(list);
-    thread.scrollTop = 0;
+    thread.scrollTop = thread.scrollHeight;
     return list;
   }
 
@@ -123,18 +178,13 @@
     const thinking = addThinking();
     const tools = addToolList(payload.tools || []);
     window.setTimeout(() => {
-      if (thinking) {
-        thinking.classList.remove('thinking');
-        const bubble = thinking.querySelector('.bubble');
-        bubble.replaceChildren();
-        bubble.textContent = payload.ready || "I have the workspace and the first tools ready. The harness isn't connected yet, so this is where I'll start.";
-        thread.append(thinking);
-      }
+      thinking?.remove();
       if (tools) {
         tools.dataset.done = 'true';
         tools.querySelector('.agent-tools-head').textContent = 'Tools ready';
       }
-      addMessage('system', 'Harness not connected yet — FPL Auth and Geode are the next wires.');
+      if (payload.ready) addMessage('agent', payload.ready);
+      addMessage('system', payload.note || 'Harness not connected yet — FPL Auth and Geode are the next wires.');
       thread.scrollTop = thread.scrollHeight;
     }, 1900);
   }
@@ -189,6 +239,25 @@
       prompt.focus();
     });
   }
+  modelSwitch?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    modelMenu?.hidden ? openModelMenu() : closeModelMenu();
+  });
+  modelMenu?.addEventListener('click', (event) => {
+    const choice = event.target.closest('[data-model]');
+    if (!choice) return;
+    setModel(choice.dataset.model, true);
+    closeModelMenu();
+    modelSwitch?.focus();
+  });
+  document.addEventListener('pointerdown', (event) => {
+    if (!modelMenu || modelMenu.hidden) return;
+    if (modelMenu.contains(event.target) || modelSwitch?.contains(event.target)) return;
+    closeModelMenu();
+  }, true);
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeModelMenu();
+  });
   pin.addEventListener('click', () => {
     pinned = !pinned;
     pin.setAttribute('aria-pressed', String(pinned));
@@ -201,6 +270,7 @@
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') sendParent('mycelium:agent-close');
   });
+  setModel(model);
   setContext({ app: 'This app', detail: '/' });
   sendParent('mycelium:agent-ready');
   resizePrompt();

@@ -35,7 +35,11 @@
 
   function frameUrl(frame) {
     const url = new URL(frame.dataset.src);
-    if (activeDesktop) url.searchParams.set('desktop', activeDesktop);
+    if (url.hostname === 'files.myc') {
+      if (activeDesktop) url.searchParams.set('path', activeDesktop);
+    } else if (activeDesktop) {
+      url.searchParams.set('desktop', activeDesktop);
+    }
     return url.toString();
   }
 
@@ -81,37 +85,40 @@
     const wizardNext = event.target.closest('[data-wizard-next]');
     if (wizardNext) {
       event.preventDefault();
-      if (!wizardNext.disabled) setWizardStep(Number(onboarding?.dataset.step || 1) + 1);
+      if (!wizardNext.disabled) setWizardStep(nextWizardStep(Number(onboarding?.dataset.step || 1)));
       return;
     }
     const wizardBack = event.target.closest('[data-wizard-back]');
     if (wizardBack) {
       event.preventDefault();
-      setWizardStep(Number(onboarding?.dataset.step || 1) - 1);
+      setWizardStep(previousWizardStep(Number(onboarding?.dataset.step || 1)));
       return;
     }
     const wizardWhere = event.target.closest('[data-where]');
     if (wizardWhere) {
       event.preventDefault();
-      const previous = wizardAnswers.where;
-      wizardAnswers.where = wizardWhere.dataset.where;
-      if (previous !== wizardAnswers.where) {
-        if (wizardAnswers.where === 'myself' && (!wizardAnswers.desktopName || wizardAnswers.desktopName === 'Work')) {
-          wizardAnswers.desktopName = 'Personal';
-        }
-        if (wizardAnswers.where === 'business' && (!wizardAnswers.desktopName || wizardAnswers.desktopName === 'Personal')) {
-          wizardAnswers.desktopName = wizardAnswers.businessName || 'Work';
-        }
+      if (wizardAnswers.where !== wizardWhere.dataset.where) {
+        wizardAnswers.businessUnknown = false;
       }
+      wizardAnswers.where = wizardWhere.dataset.where;
       syncNameFields();
       paintWizardChoices();
       refreshWizardControls();
+      renderWizardCount();
       return;
     }
     const wizardWhat = event.target.closest('[data-what]');
     if (wizardWhat) {
       event.preventDefault();
       wizardAnswers.what = wizardWhat.dataset.what;
+      paintWizardChoices();
+      refreshWizardControls();
+      return;
+    }
+    const wizardAi = event.target.closest('[data-ai]');
+    if (wizardAi) {
+      event.preventDefault();
+      wizardAnswers.ai = wizardAi.dataset.ai;
       paintWizardChoices();
       refreshWizardControls();
       return;
@@ -406,34 +413,11 @@
 
 
   const onboarding = document.getElementById('onboarding');
-  const connectionsTitle = document.getElementById('connections-title');
-  const connectionsCopy = document.getElementById('connections-copy');
-  const connectionsList = document.getElementById('connections-list');
+  const wizardCount = document.getElementById('wizard-count');
   const businessField = document.getElementById('business-field');
   const businessNameInput = document.getElementById('business-name');
-  const desktopNameInput = document.getElementById('desktop-name');
   let wizardStep = 1;
-  let wizardAnswers = { where: null, what: null, desktopName: '', businessName: '' };
-
-  const fplAuthBase = 'https://sso.fpl.dev';
-  const providerCatalog = {
-    cloudflare: { label: 'Cloudflare', slug: 'cloudflare', note: 'Domains, DNS, and the public edge', href: `${fplAuthBase}/connections/cloudflare/start?owner=user` },
-    github: { label: 'GitHub', slug: 'github', note: 'Repositories, issues, and workflows', href: `${fplAuthBase}/connections/github/start?owner=user` },
-    google: { label: 'Google', slug: 'google', note: 'Gmail, Calendar, and Drive', href: `${fplAuthBase}/connections/google/start?owner=user` },
-    openai: { label: 'OpenAI', slug: 'openai', note: 'ChatGPT / Codex subscription', href: `${fplAuthBase}/connections`, logo: 'https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@latest/icons/openai.svg', light: true },
-    xai: { label: 'xAI', slug: 'x', note: 'Grok / X Premium subscription', href: `${fplAuthBase}/connections` },
-    openrouter: { label: 'OpenRouter', slug: 'openrouter', note: 'Model routing and API keys', href: `${fplAuthBase}/connections` },
-    hue: { label: 'Philips Hue', slug: 'philipshue', note: 'Smart lights and local scenes', href: `${fplAuthBase}/connections/philips-hue/start?owner=user` },
-    spotify: { label: 'Spotify', slug: 'spotify', note: 'Playback, search, and playlists', href: `${fplAuthBase}/connections/spotify/start?owner=user` },
-  };
-
-  const recommendationIds = {
-    website: { myself: ['cloudflare', 'github', 'google', 'openai'], business: ['cloudflare', 'github', 'google', 'openai'] },
-    automation: { myself: ['github', 'google', 'hue', 'spotify'], business: ['github', 'google', 'cloudflare', 'openai'] },
-    agent: { myself: ['openai', 'xai', 'github', 'openrouter'], business: ['openai', 'xai', 'github', 'openrouter'] },
-    presentation: { myself: ['google', 'openai', 'github', 'cloudflare'], business: ['google', 'openai', 'github', 'cloudflare'] },
-    document: { myself: ['google', 'openai', 'github', 'cloudflare'], business: ['google', 'openai', 'github', 'cloudflare'] },
-  };
+  let wizardAnswers = { where: null, what: null, businessName: '', businessUnknown: false, ai: null };
 
   const whatLabels = {
     website: 'a website',
@@ -451,16 +435,8 @@
   };
 
   function syncNameFields() {
-    const business = wizardAnswers.where === 'business';
-    if (businessField) businessField.hidden = !business;
-    if (wizardAnswers.where === 'myself' && (!wizardAnswers.desktopName || wizardAnswers.desktopName === 'Work')) {
-      wizardAnswers.desktopName = 'Personal';
-    }
-    if (business && (!wizardAnswers.desktopName || wizardAnswers.desktopName === 'Personal')) {
-      wizardAnswers.desktopName = wizardAnswers.businessName || 'Work';
-    }
+    if (businessField) businessField.hidden = wizardAnswers.where !== 'business';
     if (businessNameInput) businessNameInput.value = wizardAnswers.businessName || '';
-    if (desktopNameInput) desktopNameInput.value = wizardAnswers.desktopName || '';
   }
 
   function slug(value) {
@@ -468,15 +444,13 @@
   }
 
   function buildDesktop() {
-    const name = (wizardAnswers.desktopName || '').trim();
     const business = (wizardAnswers.businessName || '').trim();
-    let prefix = slug(name || business || (wizardAnswers.where === 'business' ? 'work' : 'personal'));
-    if (wizardAnswers.where === 'business' && !business && (!name || name.toLowerCase() === 'work')) prefix = 'work';
-    if (wizardAnswers.where !== 'business' && prefix !== 'personal' && !name) prefix = 'personal';
+    const isBusiness = wizardAnswers.where === 'business';
+    const id = isBusiness ? slug(business || 'work') : 'personal';
     return {
-      id: prefix,
-      name: name || business || (wizardAnswers.where === 'business' ? 'Work' : 'Personal'),
-      kind: wizardAnswers.where === 'business' ? 'work' : 'personal',
+      id,
+      name: isBusiness ? (business || 'Work') : 'Personal',
+      kind: isBusiness ? 'work' : 'personal',
       business,
     };
   }
@@ -495,180 +469,63 @@
 
   function paintWizardChoices() {
     onboarding?.querySelectorAll('[data-where]').forEach((node) => {
-      node.classList.toggle('is-selected', node.dataset.where === wizardAnswers.where);
-      node.setAttribute('aria-pressed', String(node.dataset.where === wizardAnswers.where));
+      const selected = node.dataset.where === wizardAnswers.where;
+      node.classList.toggle('is-selected', selected);
+      node.setAttribute('aria-pressed', String(selected));
     });
     onboarding?.querySelectorAll('[data-what]').forEach((node) => {
-      node.classList.toggle('is-selected', node.dataset.what === wizardAnswers.what);
-      node.setAttribute('aria-pressed', String(node.dataset.what === wizardAnswers.what));
+      const selected = node.dataset.what === wizardAnswers.what;
+      node.classList.toggle('is-selected', selected);
+      node.setAttribute('aria-pressed', String(selected));
+    });
+    onboarding?.querySelectorAll('[data-ai]').forEach((node) => {
+      const selected = node.dataset.ai === wizardAnswers.ai;
+      node.classList.toggle('is-selected', selected);
+      node.setAttribute('aria-pressed', String(selected));
     });
   }
 
   function refreshWizardControls() {
-    const whereNext = onboarding?.querySelector('[data-wizard-step="4"] [data-wizard-next]');
-    const whatNext = onboarding?.querySelector('[data-wizard-step="5"] [data-wizard-next]');
-    if (whereNext) whereNext.disabled = !wizardAnswers.where || !wizardAnswers.desktopName.trim();
+    const whereNext = onboarding?.querySelector('[data-wizard-step="2"] [data-wizard-next]');
+    const businessNext = onboarding?.querySelector('[data-wizard-step="3"] [data-wizard-next]');
+    const whatNext = onboarding?.querySelector('[data-wizard-step="4"] [data-wizard-next]');
+    const start = onboarding?.querySelector('[data-wizard-step="5"] [data-wizard-start]');
+    if (whereNext) whereNext.disabled = !wizardAnswers.where;
+    if (businessNext) businessNext.disabled = !wizardAnswers.businessName.trim() && !wizardAnswers.businessUnknown;
     if (whatNext) whatNext.disabled = !wizardAnswers.what;
+    if (start) start.disabled = !wizardAnswers.ai;
   }
 
-  function accountLogo(provider) {
-    const mark = document.createElement('span');
-    mark.className = 'account-logo';
-    if (!provider.slug) {
-      mark.textContent = provider.label.slice(0, 1);
-      return mark;
-    }
-    const image = document.createElement('img');
-    image.alt = '';
-    image.loading = 'lazy';
-    image.src = provider.logo || `https://cdn.simpleicons.org/${provider.slug}/e5e7eb`;
-    if (provider.light) image.className = 'is-light';
-    image.addEventListener('error', () => {
-      image.remove();
-      mark.textContent = provider.label.slice(0, 1);
-    });
-    mark.append(image);
-    return mark;
+  function nextWizardStep(step) {
+    if (step === 2 && wizardAnswers.where !== 'business') return 4;
+    return Math.min(5, step + 1);
   }
 
-  function renderConnections() {
-    if (!connectionsList) return;
-    const where = wizardAnswers.where || 'myself';
-    const what = wizardAnswers.what || 'document';
-    const ids = recommendationIds[what]?.[where] || recommendationIds.document.myself;
-    connectionsList.replaceChildren();
-    if (connectionsTitle) connectionsTitle.textContent = 'Connect what you already use.';
-    if (connectionsCopy) {
-      connectionsCopy.textContent = `For ${where === 'business' ? 'a business' : 'yourself'}, starting with ${whatLabels[what]}, these are the first accounts we would prioritize.`;
-    }
-    for (const id of ids) {
-      const provider = providerCatalog[id];
-      if (!provider) continue;
-      const card = document.createElement('div');
-      card.className = 'account-card';
-      const copy = document.createElement('span');
-      copy.className = 'account-copy';
-      const strong = document.createElement('strong');
-      strong.textContent = provider.label;
-      const small = document.createElement('small');
-      small.textContent = provider.note;
-      copy.append(strong, small);
-      const link = document.createElement('a');
-      link.className = 'account-connect';
-      link.href = provider.href;
-      link.target = '_blank';
-      link.rel = 'noopener';
-      link.textContent = 'Connect';
-      card.append(accountLogo(provider), copy, link);
-      connectionsList.append(card);
-    }
+  function previousWizardStep(step) {
+    if (step === 4 && wizardAnswers.where !== 'business') return 2;
+    return Math.max(1, step - 1);
   }
 
-  function buildAgentSeed() {
-    const where = wizardAnswers.where || 'myself';
-    const what = wizardAnswers.what || 'document';
-    const owner = where === 'business' ? 'my business' : 'myself';
-    const prompts = {
-      website: `Set up my first website for ${owner}. Start with the homepage and the accounts I need.`,
-      automation: 'Build my first automation. Connect the tools that already hold the work.',
-      agent: 'Build an agent that can work inside my apps. Start with one useful job.',
-      presentation: 'Help me make my first presentation from what is already on this desk.',
-      document: 'Start my first document and shape it from the workspace.',
-    };
-    const ready = {
-      website: 'I will start with the site files in ~/fungOS. Connect Cloudflare and GitHub through FPL Auth, and Geode will hold the credentials.',
-      automation: 'I will start with the workflow in the workspace. Connect Google and GitHub through FPL Auth so the steps have something real to touch.',
-      agent: 'I will start with Notes and the agent surface. Connect OpenAI or xAI through FPL Auth; Geode owns the provider key.',
-      presentation: 'I will start with Notes and turn the workspace into an outline. Connect Google through FPL Auth when you want slides.',
-      document: 'I will start with Notes and the VFS. Connect Google through FPL Auth when the document needs to leave this Mac.',
-    };
-    const tools = {
-      website: [
-        { label: 'VFS', note: `~/fungOS/${buildDesktop().id} site files`, state: 'preparing' },
-        { label: 'Frontdoor', note: 'local preview', state: 'preparing' },
-        { label: 'FPL Auth', note: 'Cloudflare · GitHub', state: 'waiting' },
-        { label: 'Geode', note: 'credential vault', state: 'preparing' },
-      ],
-      automation: [
-        { label: 'VFS', note: `~/fungOS/${buildDesktop().id} workspace`, state: 'preparing' },
-        { label: 'Loam', note: 'run the first step', state: 'preparing' },
-        { label: 'FPL Auth', note: 'Google · GitHub', state: 'waiting' },
-        { label: 'Geode', note: 'credential vault', state: 'preparing' },
-      ],
-      agent: [
-        { label: 'Loam', note: 'agent harness', state: 'preparing' },
-        { label: 'VFS', note: `~/fungOS/${buildDesktop().id} notes`, state: 'preparing' },
-        { label: 'FPL Auth', note: 'OpenAI · xAI', state: 'waiting' },
-        { label: 'Geode', note: 'provider keys', state: 'preparing' },
-      ],
-      presentation: [
-        { label: 'Notes', note: 'outline and slides', state: 'preparing' },
-        { label: 'VFS', note: `~/fungOS/${buildDesktop().id} source`, state: 'preparing' },
-        { label: 'FPL Auth', note: 'Google', state: 'waiting' },
-        { label: 'Geode', note: 'credential vault', state: 'preparing' },
-      ],
-      document: [
-        { label: 'Notes', note: 'long-form editor', state: 'preparing' },
-        { label: 'VFS', note: `~/fungOS/${buildDesktop().id} workspace`, state: 'preparing' },
-        { label: 'FPL Auth', note: 'Google', state: 'waiting' },
-        { label: 'Geode', note: 'credential vault', state: 'preparing' },
-      ],
-    };
-    return {
-      prompt: prompts[what] || prompts.document,
-      ready: ready[what] || ready.document,
-      context: { app: activeDesktopName || 'This Mac', detail: whatTitles[what] || 'Workspace' },
-      tools: tools[what] || tools.document,
-    };
-  }
-
-  businessNameInput?.addEventListener('input', () => {
-    wizardAnswers.businessName = businessNameInput.value;
-    if (!desktopNameInput?.dataset.touched || desktopNameInput.value === 'Work') {
-      wizardAnswers.desktopName = businessNameInput.value.trim() || 'Work';
-      if (desktopNameInput) desktopNameInput.value = wizardAnswers.desktopName;
-    }
-    refreshWizardControls();
-  });
-  desktopNameInput?.addEventListener('input', () => {
-    desktopNameInput.dataset.touched = 'true';
-    wizardAnswers.desktopName = desktopNameInput.value;
-    refreshWizardControls();
-  });
-  document.querySelector('[data-unknown-business]')?.addEventListener('click', () => {
-    wizardAnswers.businessName = '';
-    wizardAnswers.desktopName = 'Work';
-    if (businessNameInput) businessNameInput.value = '';
-    if (desktopNameInput) {
-      desktopNameInput.value = 'Work';
-      delete desktopNameInput.dataset.touched;
-    }
-  });
-
-  function saveWizardAnswers() {
-    try {
-      localStorage.setItem('mycelium.orientation.answers', JSON.stringify({
-        ...wizardAnswers,
-        desktop: buildDesktop(),
-      }));
-    } catch {}
+  function renderWizardCount() {
+    if (!wizardCount) return;
+    const steps = wizardAnswers.where === 'business' ? [1, 2, 3, 4, 5] : [1, 2, 4, 5];
+    const position = Math.max(1, steps.indexOf(wizardStep) + 1);
+    wizardCount.textContent = `${position} / ${steps.length}`;
   }
 
   function setWizardStep(step) {
     if (!onboarding) return;
-    const max = onboarding.querySelectorAll('[data-wizard-step]').length;
-    wizardStep = Math.min(max, Math.max(1, Number(step) || 1));
+    let next = Math.min(5, Math.max(1, Number(step) || 1));
+    if (next === 3 && wizardAnswers.where !== 'business') next = 4;
+    wizardStep = next;
     onboarding.dataset.step = String(wizardStep);
     onboarding.querySelectorAll('[data-wizard-step]').forEach((node) => {
       node.hidden = Number(node.dataset.wizardStep) !== wizardStep;
     });
-    onboarding.querySelectorAll('.onboarding-progress i').forEach((node, index) => {
-      node.classList.toggle('is-active', index < wizardStep);
-    });
-    if (wizardStep === 6) renderConnections();
     syncNameFields();
     paintWizardChoices();
     refreshWizardControls();
+    renderWizardCount();
     const focusable = onboarding.querySelector(
       `[data-wizard-step="${wizardStep}"] button:not(:disabled), [data-wizard-step="${wizardStep}"] input`,
     );
@@ -677,8 +534,7 @@
 
   function openOrientation() {
     if (!onboarding) return;
-    wizardAnswers = { where: null, what: null, desktopName: '', businessName: '' };
-    if (desktopNameInput) { desktopNameInput.value = ''; delete desktopNameInput.dataset.touched; }
+    wizardAnswers = { where: null, what: null, businessName: '', businessUnknown: false, ai: null };
     if (businessNameInput) businessNameInput.value = '';
     paintWizardChoices();
     setWizardStep(1);
@@ -694,6 +550,102 @@
       window.setTimeout(openOrientation, 700);
     }
   } catch {}
+
+  function saveWizardAnswers() {
+    try {
+      localStorage.setItem('mycelium.orientation.answers', JSON.stringify({
+        ...wizardAnswers,
+        desktop: buildDesktop(),
+      }));
+    } catch {}
+  }
+
+  function buildAgentSeed() {
+    const where = wizardAnswers.where || 'myself';
+    const what = wizardAnswers.what || 'document';
+    const ai = wizardAnswers.ai || 'later';
+    const desktop = buildDesktop();
+    const owner = where === 'business' ? 'my business' : 'myself';
+    const prompts = {
+      website: `Set up my first website for ${owner}. Start with the homepage.`,
+      automation: 'Build my first automation. Start with one useful step.',
+      agent: 'Build an agent that can work inside my apps. Start with one useful job.',
+      presentation: 'Help me make my first presentation from what is already on this desk.',
+      document: 'Start my first document and shape it from the workspace.',
+    };
+    const ready = {
+      website: `I will start with the site files in ~/fungOS/${desktop.id}. No Git or cloud account is needed yet.`,
+      automation: `I will start with the workflow in ~/fungOS/${desktop.id}. Add tools only when the first step needs them.`,
+      agent: `I will start with Notes and the agent surface in ~/fungOS/${desktop.id}.`,
+      presentation: `I will start with Notes and turn the workspace into an outline.`,
+      document: `I will start with Notes and the VFS. The document stays local until you export it.`,
+    };
+    const aiTool = ai === 'fpl'
+      ? { label: 'FPL AI', note: 'account link is next', state: 'waiting' }
+      : ai === 'byo'
+        ? { label: 'Your model', note: 'provider key is next', state: 'waiting' }
+        : { label: 'AI provider', note: 'decided later', state: 'waiting' };
+    const tools = {
+      website: [
+        { label: 'VFS', note: `~/fungOS/${desktop.id} site files`, state: 'preparing' },
+        { label: 'Frontdoor', note: 'local preview', state: 'preparing' },
+        aiTool,
+        { label: 'Geode', note: 'credential vault', state: 'preparing' },
+      ],
+      automation: [
+        { label: 'VFS', note: `~/fungOS/${desktop.id} workspace`, state: 'preparing' },
+        { label: 'Loam', note: 'run the first step', state: 'preparing' },
+        aiTool,
+        { label: 'Geode', note: 'credential vault', state: 'preparing' },
+      ],
+      agent: [
+        { label: 'Loam', note: 'agent harness', state: 'preparing' },
+        { label: 'VFS', note: `~/fungOS/${desktop.id} notes`, state: 'preparing' },
+        aiTool,
+        { label: 'Geode', note: 'provider keys', state: 'preparing' },
+      ],
+      presentation: [
+        { label: 'Notes', note: 'outline and slides', state: 'preparing' },
+        { label: 'VFS', note: `~/fungOS/${desktop.id} source`, state: 'preparing' },
+        aiTool,
+        { label: 'Geode', note: 'credential vault', state: 'preparing' },
+      ],
+      document: [
+        { label: 'Notes', note: 'long-form editor', state: 'preparing' },
+        { label: 'VFS', note: `~/fungOS/${desktop.id} workspace`, state: 'preparing' },
+        aiTool,
+        { label: 'Geode', note: 'credential vault', state: 'preparing' },
+      ],
+    };
+    const aiLine = ai === 'fpl'
+      ? ' FPL account linking is the next wire.'
+      : ai === 'byo'
+        ? ' Your provider key goes into Geode next.'
+        : '';
+    return {
+      prompt: prompts[what] || prompts.document,
+      ready: `${ready[what] || ready.document}${aiLine}`,
+      context: { app: activeDesktopName || 'This Mac', detail: whatTitles[what] || 'Workspace' },
+      tools: tools[what] || tools.document,
+      note: ai === 'fpl'
+        ? 'Harness not connected yet — FPL AI and Geode are the next wires.'
+        : ai === 'byo'
+          ? 'Harness not connected yet — your provider key and Geode are the next wires.'
+          : 'Harness not connected yet — add a model whenever you are ready.',
+    };
+  }
+
+  businessNameInput?.addEventListener('input', () => {
+    wizardAnswers.businessName = businessNameInput.value;
+    wizardAnswers.businessUnknown = false;
+    refreshWizardControls();
+  });
+  document.querySelector('[data-unknown-business]')?.addEventListener('click', () => {
+    wizardAnswers.businessName = '';
+    wizardAnswers.businessUnknown = true;
+    if (businessNameInput) businessNameInput.value = '';
+    refreshWizardControls();
+  });
 
   setAgentContext('desk');
   void loadDesktops();

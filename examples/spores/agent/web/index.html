@@ -58,12 +58,44 @@
     <form class="agent-composer" id="composer">
       <textarea id="prompt" rows="1" placeholder="Ask or tell the agent to change this app…" autocomplete="off"></textarea>
       <div class="composer-row">
-        <span class="composer-hint"><kbd>↵</kbd> send <span>·</span> <kbd>⇧↵</kbd> line</span>
+        <div class="composer-left">
+          <button class="model-switch" id="model-switch" type="button" aria-haspopup="menu" aria-expanded="false">
+            <span class="model-logo" id="model-logo" aria-hidden="true">F</span>
+            <span id="model-name">FPL</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 10 4 4 4-4"/></svg>
+          </button>
+          <span class="composer-hint"><kbd>↵</kbd> send <span>·</span> <kbd>⇧↵</kbd> line</span>
+        </div>
         <button class="send" id="send" type="submit" aria-label="Send" disabled>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13"/><path d="m13 6 6 6-6 6"/></svg>
         </button>
       </div>
     </form>
+
+    <div class="model-menu" id="model-menu" role="menu" hidden>
+      <p class="model-menu-head">Model provider</p>
+      <button class="model-choice" type="button" data-model="fpl" role="menuitemradio" aria-checked="false">
+        <span class="model-logo model-logo--fpl" aria-hidden="true">F</span>
+        <span class="model-choice-copy"><strong>FPL</strong><small>Included with your FPL account</small></span>
+        <span class="model-check" aria-hidden="true"></span>
+      </button>
+      <button class="model-choice" type="button" data-model="openai" role="menuitemradio" aria-checked="false">
+        <span class="model-logo" aria-hidden="true"><img src="https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@latest/icons/openai.svg" alt=""></span>
+        <span class="model-choice-copy"><strong>OpenAI</strong><small>Bring your own key</small></span>
+        <span class="model-check" aria-hidden="true"></span>
+      </button>
+      <button class="model-choice" type="button" data-model="anthropic" role="menuitemradio" aria-checked="false">
+        <span class="model-logo" aria-hidden="true"><img src="https://cdn.simpleicons.org/anthropic/e5e7eb" alt=""></span>
+        <span class="model-choice-copy"><strong>Anthropic</strong><small>Bring your own key</small></span>
+        <span class="model-check" aria-hidden="true"></span>
+      </button>
+      <button class="model-choice" type="button" data-model="openrouter" role="menuitemradio" aria-checked="false">
+        <span class="model-logo" aria-hidden="true"><img src="https://cdn.simpleicons.org/openrouter/e5e7eb" alt=""></span>
+        <span class="model-choice-copy"><strong>OpenRouter</strong><small>Route to any model</small></span>
+        <span class="model-check" aria-hidden="true"></span>
+      </button>
+      <p class="model-menu-foot">Saved locally. Harness connection comes next.</p>
+    </div>
   </div>
   <script src="/agent.js"></script>
 </body>
