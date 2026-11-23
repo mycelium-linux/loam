@@ -1,0 +1,21 @@
+body { background: var(--paper-raised); }
+.notes-main { display: flex; flex-direction: column; overflow: hidden; }
+.notes-workspace { display: grid; grid-template-columns: 220px minmax(0, 1fr); min-height: 0; flex: 1; }
+.notes-list { min-width: 0; overflow: auto; padding: 10px; border-right: 1px solid var(--hairline); background: var(--paper); }
+.notes-list-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 6px 10px; }
+.notes-list-head strong { font-size: 12px; letter-spacing: .02em; }
+.note-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; width: 100%; padding: 8px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--ink-2); text-align: left; cursor: pointer; }
+.note-row:hover { background: var(--selected); color: var(--ink); }
+.note-row[aria-current="true"] { background: var(--selected); color: var(--ink); font-weight: 620; }
+.note-row small { color: var(--ink-3); font: 9.5px var(--font-mono); }
+.note-editor { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--paper-raised); }
+.note-editor-head { display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-bottom: 1px solid var(--hairline); }
+.note-editor-head input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--ink); font: 620 14px var(--font-ui); }
+.note-editor-head button, .note-empty button { border: 1px solid var(--hairline-strong); border-radius: 5px; background: var(--paper-raised); color: var(--ink-2); padding: 5px 9px; font-size: 11px; cursor: pointer; }
+.note-editor-head button:hover, .note-empty button:hover { background: var(--paper-muted); color: var(--ink); }
+.note-editor textarea { flex: 1; min-height: 0; resize: none; border: 0; outline: 0; padding: 22px 24px 40px; background: transparent; color: var(--ink); font: 14.5px/1.65 var(--font-mono); tab-size: 2; }
+.note-editor textarea:focus { box-shadow: inset 0 0 0 2px var(--accent-soft); }
+.note-empty { display: grid; place-items: center; height: 100%; padding: 30px; color: var(--ink-3); text-align: center; }
+.note-empty strong { display: block; color: var(--ink); font-size: 15px; margin-bottom: 6px; }
+.note-status { color: var(--ink-3); font: 10.5px var(--font-mono); }
+.note-error { color: #9c3b2d; font-size: 11px; }

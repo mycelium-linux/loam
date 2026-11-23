@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#faf7f0">
+  <title>People — Mycelium</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/surfaces.css">
+  <link rel="stylesheet" href="/contacts.css">
+</head>
+<body>
+  <main class="contacts-page">
+    <header class="contacts-head">
+      <div><p class="eyebrow">Personal</p><h1>People</h1><p id="status">Loading contacts…</p></div>
+      <div><span class="contact-count" id="count">0 contacts</span> <button id="new-contact" type="button">New contact</button></div>
+    </header>
+    <div class="contacts-grid">
+      <aside class="contacts-list" id="contact-list" aria-label="Contacts"></aside>
+      <section class="contact-detail" id="detail">
+        <div class="contact-empty" id="empty"><strong>Your contacts live on this Mac.</strong><br>Select a person or add one. The book is stored in <code>contacts/contacts.json</code>.</div>
+        <div id="form" hidden>
+          <h2 id="detail-name">Contact</h2>
+          <p class="contact-sub" id="detail-sub"></p>
+          <div class="contact-fields">
+            <label>Name<input id="field-name" autocomplete="off"></label>
+            <label>Email<input id="field-email" type="email" autocomplete="off"></label>
+            <label>Phone<input id="field-phone" autocomplete="off"></label>
+            <label>Role<input id="field-role" autocomplete="off"></label>
+            <label class="wide">Note<textarea id="field-note"></textarea></label>
+          </div>
+          <div class="contact-actions"><button id="save-contact" type="button">Save contact</button><button id="delete-contact" type="button">Delete</button></div>
+        </div>
+      </section>
+    </div>
+  </main>
+  <script src="/contacts.js"></script>
+</body>
+</html>

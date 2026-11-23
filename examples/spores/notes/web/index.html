@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#faf7f0">
+  <title>Notes — Mycelium</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/surfaces.css">
+  <link rel="stylesheet" href="/notes.css">
+</head>
+<body>
+  <div class="notes-layout">
+    <aside class="notes-sidebar">
+      <div class="notes-brand"><span class="notes-mark" aria-hidden="true">N</span><span>Notes</span></div>
+      <p class="sidebar-label">Workspace</p>
+      <nav class="notes-nav" aria-label="Notes">
+        <a href="/" aria-current="page">All notes</a>
+        <a href="https://home.myc/">This desk</a>
+        <a href="https://contacts.myc/">People</a>
+      </nav>
+      <p class="sidebar-foot">This Mac<br><span id="count">0 notes</span></p>
+    </aside>
+    <section class="notes-main">
+      <header class="notes-toolbar"><h1>All notes</h1><span id="status">Loading workspace…</span></header>
+      <div class="notes-workspace">
+        <aside class="notes-list">
+          <div class="notes-list-head"><strong>Markdown</strong><button id="new-note" type="button">New</button></div>
+          <div id="note-list"></div>
+        </aside>
+        <section class="note-editor">
+          <div class="note-editor-head">
+            <input id="note-title" aria-label="Note title" placeholder="Untitled note" spellcheck="false">
+            <span class="note-status" id="note-meta"></span>
+            <button id="save-note" type="button">Save</button>
+          </div>
+          <textarea id="note-body" aria-label="Note body" placeholder="Write in Markdown…" spellcheck="true" disabled></textarea>
+          <div class="note-empty" id="note-empty"><div><strong>No note open</strong>Pick a note or create one. Files live in the <code>notes/</code> workspace root.</div></div>
+        </section>
+      </div>
+    </section>
+  </div>
+  <script src="/notes.js"></script>
+</body>
+</html>
