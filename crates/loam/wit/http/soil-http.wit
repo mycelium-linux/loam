@@ -4,7 +4,7 @@
 // handle. The host checks its origin allowlist, injects the credential, refuses
 // unbounded bodies and redirects, and returns one bounded response. Raw sockets,
 // DNS control, proxy configuration and secret bytes never cross this boundary.
-package soil:http@0.1.0;
+package soil:http@0.2.0;
 
 interface http {
   enum method {
@@ -46,6 +46,19 @@ interface http {
     body: list<u8>,
   }
 
+  /// A response whose body is read incrementally. The status and headers are
+  /// available before the first body byte, which is what an SSE or streamed
+  /// HTTP client needs.
+  resource response-stream {
+    status: func() -> u16;
+    final-url: func() -> string;
+    headers: func() -> list<header>;
+    /// Read at most `max` bytes. `none` is end of stream.
+    read: func(max: u32) -> result<option<list<u8>>, error>;
+    /// Close the body without reading it. Idempotent.
+    close: func() -> result<_, error>;
+  }
+
   enum error {
     /// Origin, method, header, or credential was not granted.
     denied,
@@ -68,6 +81,11 @@ interface http {
   }
 
   fetch: func(request: request) -> result<response, error>;
+
+  /// Open a bounded streaming response. The host resolves the same origin,
+  /// credential, header and budget policy as `fetch`; only the body is pulled
+  /// incrementally. The caller must read or close the returned stream.
+  open: func(request: request) -> result<response-stream, error>;
 }
 
 world http-host {
