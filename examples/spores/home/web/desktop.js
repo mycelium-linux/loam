@@ -47,7 +47,21 @@
       event.preventDefault();
       const kind = openButton.dataset.open;
       open(kind);
+      closeAccountMenu();
       closeCommand();
+      return;
+    }
+    const orientationClose = event.target.closest('[data-orientation-close]');
+    if (orientationClose) {
+      event.preventDefault();
+      closeOrientation();
+      return;
+    }
+    const orientationTrigger = event.target.closest('[data-orientation]');
+    if (orientationTrigger) {
+      event.preventDefault();
+      closeAccountMenu();
+      openOrientation();
       return;
     }
     const closeButton = event.target.closest('[data-close]');
@@ -201,6 +215,125 @@
       closeCommand();
     }
   });
+
+
+  const accountToggle = document.getElementById('account-toggle');
+  const accountMenu = document.getElementById('account-menu');
+  const accountWorkspace = document.getElementById('account-workspace');
+
+  function openAccountMenu() {
+    if (!accountMenu) return;
+    accountMenu.hidden = false;
+    accountToggle?.setAttribute('aria-expanded', 'true');
+  }
+  function closeAccountMenu() {
+    if (!accountMenu || accountMenu.hidden) return;
+    accountMenu.hidden = true;
+    accountToggle?.setAttribute('aria-expanded', 'false');
+  }
+  accountToggle?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    accountMenu?.hidden ? openAccountMenu() : closeAccountMenu();
+  });
+  document.addEventListener('pointerdown', (event) => {
+    if (!accountMenu || accountMenu.hidden) return;
+    if (accountMenu.contains(event.target) || accountToggle?.contains(event.target)) return;
+    closeAccountMenu();
+  }, true);
+
+  fetch('/api/vfs/roots')
+    .then((response) => response.ok ? response.json() : null)
+    .then((data) => {
+      const vfs = data?.roots?.find((root) => root.id === 'vfs');
+      const path = vfs?.mount || vfs?.root;
+      if (path && accountWorkspace) {
+        accountWorkspace.textContent = path.replace(/^\/Users\/[^/]+/, '~');
+      }
+    })
+    .catch(() => {});
+
+  const orientationSteps = [
+    {
+      title: 'This desk is yours.',
+      copy: 'Everything here is local. The visible files live in the VFS at <code>~/fungOS</code>; the durable store is <code>~/.local/share/fungos/vfs</code>.',
+    },
+    {
+      title: 'Apps are Spores.',
+      copy: 'Notes, People and Files are separate packages mounted into windows. They share one workspace, not a hosted backend.',
+    },
+    {
+      title: 'The agent lives on the right.',
+      copy: 'Hover the right edge for the teaser. Click it to pin the agent open, drag its left edge to make room, or expand it full screen.',
+    },
+    {
+      title: 'The loop is visible.',
+      copy: 'Write a note, open People, or ask the agent. Your work lands in the same VFS — open <code>~/fungOS</code> in Finder to see it.',
+    },
+  ];
+  const orientation = document.getElementById('orientation');
+  const orientationArt = document.getElementById('orientation-art');
+  const orientationCount = document.getElementById('orientation-count');
+  const orientationTitle = document.getElementById('orientation-title');
+  const orientationCopy = document.getElementById('orientation-copy');
+  const orientationDots = document.getElementById('orientation-dots');
+  const orientationBack = document.getElementById('orientation-back');
+  const orientationNext = document.getElementById('orientation-next');
+  let orientationStep = 0;
+
+  function paintOrientation() {
+    const step = orientationSteps[orientationStep];
+    const number = String(orientationStep + 1).padStart(2, '0');
+    if (orientationArt) orientationArt.textContent = number;
+    if (orientationCount) orientationCount.textContent = `${number} / ${String(orientationSteps.length).padStart(2, '0')}`;
+    if (orientationTitle) orientationTitle.textContent = step.title;
+    if (orientationCopy) orientationCopy.innerHTML = step.copy;
+    if (orientationBack) orientationBack.disabled = orientationStep === 0;
+    if (orientationNext) orientationNext.textContent = orientationStep === orientationSteps.length - 1 ? 'Done' : 'Next';
+    if (orientationDots) {
+      orientationDots.replaceChildren();
+      orientationSteps.forEach((_, index) => {
+        const dot = document.createElement('span');
+        dot.className = `orientation-dot${index === orientationStep ? ' is-current' : ''}`;
+        orientationDots.append(dot);
+      });
+    }
+  }
+  function openOrientation() {
+    orientationStep = 0;
+    paintOrientation();
+    if (orientation) orientation.hidden = false;
+    orientationNext?.focus();
+  }
+  function closeOrientation() {
+    if (!orientation || orientation.hidden) return;
+    orientation.hidden = true;
+    try { localStorage.setItem('mycelium.orientation.seen', '1'); } catch {}
+  }
+  orientationBack?.addEventListener('click', () => {
+    if (orientationStep > 0) {
+      orientationStep -= 1;
+      paintOrientation();
+    }
+  });
+  orientationNext?.addEventListener('click', () => {
+    if (orientationStep < orientationSteps.length - 1) {
+      orientationStep += 1;
+      paintOrientation();
+    } else {
+      closeOrientation();
+    }
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      closeAccountMenu();
+      closeOrientation();
+    }
+  });
+  try {
+    if (localStorage.getItem('mycelium.orientation.seen') !== '1') {
+      window.setTimeout(openOrientation, 700);
+    }
+  } catch {}
 
   const clock = document.getElementById('clock');
   function tick() {

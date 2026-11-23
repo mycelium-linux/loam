@@ -9,6 +9,7 @@
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
   <link rel="preload" as="image" href="/assets/wallpaper.webp" fetchpriority="high">
   <link rel="stylesheet" href="/desktop.css">
+  <link rel="stylesheet" href="/home.css">
 </head>
 <body>
   <div class="wallpaper" aria-hidden="true"></div>
@@ -33,7 +34,9 @@
         <kbd>⌘K</kbd>
       </button>
       <time class="clock" id="clock" datetime=""></time>
-      <span class="avatar" aria-hidden="true">M</span>
+      <button class="account-button" type="button" id="account-toggle" aria-label="Open settings" aria-expanded="false">
+        <span class="avatar" aria-hidden="true">M</span>
+      </button>
     </div>
   </header>
 
@@ -117,6 +120,50 @@
     <div class="dock-divider" aria-hidden="true"></div>
     <button class="dock-button" type="button" data-open="desk" data-label="This Desk" aria-label="This Desk"><span class="app-tile app-desk" aria-hidden="true">D</span></button>
   </nav>
+
+
+  <section class="account-menu" id="account-menu" aria-label="Settings" hidden>
+    <header class="account-head">
+      <span class="avatar" aria-hidden="true">M</span>
+      <span><strong>This Mac</strong><small id="account-workspace">Local VFS</small></span>
+    </header>
+    <div class="account-items">
+      <button class="account-item" type="button" data-open="desk">
+        <span class="account-item-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="4" y="4.5" width="16" height="11.5" rx="1.5"/><path d="M9 20h6M12 16v4"/></svg>
+        </span>
+        <span><strong>This Desk</strong><small>Open the desk description</small></span>
+      </button>
+      <button class="account-item account-item--subtle" type="button" data-orientation>
+        <span class="account-item-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5z"/><path d="M18 16.5 18.5 18l1.5.5-1.5.5-.5 1.5-.5-1.5-1.5-.5 1.5-.5z"/></svg>
+        </span>
+        <span><strong>Re-run orientation</strong><small>A quiet tour of this desk</small></span>
+      </button>
+    </div>
+    <footer class="account-foot"><span class="account-dot" aria-hidden="true"></span>Local · Mycelium</footer>
+  </section>
+
+  <section class="orientation" id="orientation" aria-label="Orientation" hidden>
+    <button class="orientation-scrim" type="button" data-orientation-close aria-label="Close orientation"></button>
+    <div class="orientation-panel" role="dialog" aria-modal="true" aria-labelledby="orientation-title">
+      <header class="orientation-head">
+        <span class="orientation-kicker">Orientation</span>
+        <button class="orientation-skip" type="button" data-orientation-close>Skip</button>
+      </header>
+      <div class="orientation-body">
+        <span class="orientation-art" id="orientation-art" aria-hidden="true">01</span>
+        <p class="orientation-count" id="orientation-count">01 / 04</p>
+        <h1 id="orientation-title">This desk is yours.</h1>
+        <p class="orientation-copy" id="orientation-copy"></p>
+      </div>
+      <footer class="orientation-foot">
+        <button class="orientation-back" id="orientation-back" type="button">Back</button>
+        <div class="orientation-dots" id="orientation-dots" aria-hidden="true"></div>
+        <button class="orientation-next" id="orientation-next" type="button">Next</button>
+      </footer>
+    </div>
+  </section>
 
   <div class="command-scrim" data-command-scrim aria-hidden="true"></div>
   <section class="command" id="command" aria-label="Command" aria-hidden="true" inert>
