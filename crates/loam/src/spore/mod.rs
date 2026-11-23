@@ -1479,6 +1479,19 @@ impl Manifest {
             }
         }
 
+        if let Some(plugin) = &self.plugin
+            && let Some(sidecar) = &plugin.sidecar
+        {
+            if sidecar.trim().is_empty() {
+                return Err(Error::Invalid(
+                    "[plugin] sidecar must name a program or package path".into(),
+                ));
+            }
+            if Path::new(sidecar).components().count() > 1 || sidecar.starts_with('.') {
+                safe_relative(sidecar)?;
+            }
+        }
+
         for capability in self.grants.keys() {
             if !grants(capability) {
                 return Err(Error::Invalid(format!(
@@ -1689,6 +1702,18 @@ impl Manifest {
         }
         if let Some(man) = self.docs.as_ref().and_then(|docs| docs.man.clone()) {
             paths.push(man);
+        }
+        if let Some(sidecar) = self
+            .plugin
+            .as_ref()
+            .and_then(|plugin| plugin.sidecar.as_deref())
+        {
+            // A sidecar is either a path inside the package (`bin/foo`) or a
+            // bare program name resolved on PATH. Only the former is a package
+            // file and therefore part of the lock.
+            if Path::new(sidecar).components().count() > 1 || sidecar.starts_with('.') {
+                paths.push(sidecar.to_string());
+            }
         }
         for surface in &self.surfaces {
             if let Some(entry) = surface.entry(self.ui.as_ref()) {
@@ -2292,6 +2317,22 @@ pub fn exported_interfaces(bytes: &[u8]) -> Result<BTreeSet<String>> {
     let (resolve, world) = decoded_world(bytes)?;
     let mut interfaces = BTreeSet::new();
     for key in resolve.worlds[world].exports.keys() {
+        if matches!(key, wit_parser::WorldKey::Interface(_)) {
+            interfaces.insert(resolve.name_world_key(key));
+        }
+    }
+    Ok(interfaces)
+}
+
+/// The interfaces a component imports, e.g. `loam:plugin/ipc@0.1.0`.
+///
+/// This is the interface-level counterpart of [`imported_packages`]. A plugin
+/// with a native sidecar must import `loam:plugin/ipc`; checking the exact
+/// interface is stronger than checking only the package.
+pub fn imported_interfaces(bytes: &[u8]) -> Result<BTreeSet<String>> {
+    let (resolve, world) = decoded_world(bytes)?;
+    let mut interfaces = BTreeSet::new();
+    for key in resolve.worlds[world].imports.keys() {
         if matches!(key, wit_parser::WorldKey::Interface(_)) {
             interfaces.insert(resolve.name_world_key(key));
         }

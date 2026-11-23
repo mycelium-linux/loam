@@ -17,8 +17,9 @@ commands:
   rollback ID [--root DIR]        switch an install back one generation
   surface FILE [--size WxH] [--capture FILE.rgba]
                                   open a native surface or capture one frame
-  plugin [list|verify|roots|pack DIR|compose ROOT PROVIDER IMPORT OUT|compose-cached ROOT PROVIDER IMPORT OUT]
+  plugin [list|verify [PATH]|inspect ID|roots|pack DIR|compose ROOT PROVIDER IMPORT OUT|compose-cached ROOT PROVIDER IMPORT OUT]
                                   inspect, seal, or compose Spore capability exports
+                                  (--json, --allow-unsigned-dev)
   edit <op> ... [--json]          edit a Spore source overlay
   doctor                          print the linked capability profile
   help                            this message"#

@@ -1,5 +1,7 @@
 # loamd
 
+See [`plugins.md`](plugins.md) for the plugin package, IPC, and sidecar model.
+
 `loamd` is the per-user loam supervisor. It owns one process, one command
 registry, one plugin registry, and the command instances it starts.
 
@@ -73,6 +75,23 @@ restart policy, and service routing are not part of this slice.
 
 Output is captured in memory, bounded by the per-instance stdout/stderr limits.
 `logs` returns the captured text after the instance finishes.
+
+### Plugin sidecars
+
+A plugin-backed command owns one sidecar for that run. `loamd` starts the
+command; the command runner starts the sidecar from the plugin's `[plugin]
+sidecar`, with the plugin package as its working directory. The sidecar uses
+stdin/stdout pipes, not a socket. The adapter can reach it only through
+`loam:plugin/ipc`; it never sees the pid, socket, or environment.
+
+`loamd inspect <id>` reports the command instance, not the sidecar as a separate
+child. `loamd logs <id>` contains the command's captured stdout/stderr; the
+sidecar inherits the daemon's stderr for its own diagnostics. A sidecar that
+exits or closes its stdout maps to `unavailable` in the adapter. There is no
+restart policy in this slice: the next `start` gets a fresh sidecar.
+
+If the sidecar is missing or non-executable, `loam plugin verify` refuses the
+package; install should not produce a command that reaches that state.
 
 ## Protocol
 

@@ -72,6 +72,10 @@ pub struct InstallRecord {
     pub warm: bool,
     pub dev: bool,
     pub installed_at: u64,
+    /// Set by `loam status` when the active generation or package link is
+    /// missing. It is not persisted; a clean status leaves it absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drift: Option<String>,
 }
 
 /// `loam status` output.
@@ -129,11 +133,12 @@ pub fn install(options: InstallOptions) -> Result<InstallReport> {
 
     let result = (|| -> Result<(String, Option<String>, bool)> {
         copy_package(&source, &staging_pkg, is_spore)?;
+        copy_signatures(&source, &staging_pkg)?;
         let staged_entries = command::package_commands(&staging_pkg)?;
         let providers = if options.provider_roots.is_empty() {
-            PluginRegistry::scan_default()?
+            PluginRegistry::scan_roots_dev(&default_provider_roots(), options.allow_unsigned_dev)?
         } else {
-            PluginRegistry::scan_roots(&options.provider_roots)?
+            PluginRegistry::scan_roots_dev(&options.provider_roots, options.allow_unsigned_dev)?
         };
         let cache = options
             .composition_cache
@@ -188,6 +193,7 @@ pub fn install(options: InstallOptions) -> Result<InstallReport> {
         warm,
         dev,
         installed_at: now(),
+        drift: None,
     };
     activate(&options.root, &package_dir, &generation)?;
     state.installs.insert(id.clone(), record.clone());
@@ -209,6 +215,18 @@ pub fn install(options: InstallOptions) -> Result<InstallReport> {
     })
 }
 
+/// Package directory names installed in dev mode for one root. Used by the
+/// plugin registry so an installed dev package does not require the flag again.
+pub(crate) fn dev_packages(root: &Path) -> Result<std::collections::BTreeSet<String>> {
+    let state = load_state(root)?;
+    Ok(state
+        .installs
+        .values()
+        .filter(|record| record.dev)
+        .map(|record| record.package.clone())
+        .collect())
+}
+
 /// Read the installed state for one root.
 pub fn status(root: &Path) -> Result<StatusReport> {
     status_roots(&[root.to_path_buf()])
@@ -223,6 +241,7 @@ pub fn status_roots(roots: &[PathBuf]) -> Result<StatusReport> {
             if record.root.as_os_str().is_empty() {
                 record.root = root.clone();
             }
+            record.drift = drift(root, &record);
             installs.push(record);
         }
     }
@@ -264,6 +283,7 @@ pub fn rollback(root: &Path, id: &str) -> Result<InstallReport> {
         previous: Some(record.current.clone()),
         warm: !entries.is_empty(),
         installed_at: now(),
+        drift: None,
         ..record
     };
     state.installs.insert(id.to_string(), rolled_back.clone());
@@ -331,11 +351,31 @@ fn package_digest(root: &Path) -> Result<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-fn verify_source(source: &Path, is_spore: bool, allow_unsigned_dev: bool) -> Result<bool> {
-    if allow_unsigned_dev {
-        return Ok(true);
+fn copy_signatures(source: &Path, destination: &Path) -> Result<()> {
+    let dir = source.join(spore::SIGNATURE_DIR);
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return Ok(());
+    };
+    let out = destination.join(spore::SIGNATURE_DIR);
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().is_some_and(|extension| extension == "asc") {
+            fs::create_dir_all(&out)?;
+            fs::copy(&path, out.join(entry.file_name()))
+                .with_context(|| format!("copy signature {}", path.display()))?;
+        }
     }
+    Ok(())
+}
+
+fn verify_source(source: &Path, is_spore: bool, allow_unsigned_dev: bool) -> Result<bool> {
     let signatures = signatures(source)?;
+    if allow_unsigned_dev {
+        // `dev` means "not signed", not "the caller passed the flag". A signed
+        // package installed with the flag still carries its signature.
+        return Ok(signatures.is_empty());
+    }
     if signatures.is_empty() {
         bail!("package is unsigned; pass --allow-unsigned-dev for a local development install");
     }
@@ -380,6 +420,16 @@ fn copy_package(source: &Path, destination: &Path, is_spore: bool) -> Result<()>
             fs::create_dir_all(parent)?;
         }
         fs::write(&target, bytes).with_context(|| format!("write {}", target.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(metadata) = fs::metadata(source.join(&path)) {
+                let mode = metadata.permissions().mode();
+                if mode & 0o111 != 0 {
+                    fs::set_permissions(&target, fs::Permissions::from_mode(mode & 0o755))?;
+                }
+            }
+        }
     }
     if is_spore {
         let lock = source.join(spore::LOCK_NAME);
@@ -398,10 +448,16 @@ fn compose(
     let mut needs_composition = false;
     for entry in entries {
         for import in imports(&entry.module)? {
-            if providers.get(&import).is_some() {
-                needs_composition = true;
+            if let Some(provider) = providers.get(&import) {
+                // A sidecar-backed adapter is still a wasm provider; its
+                // adapter can be linked at runtime, and that keeps the
+                // consumer's import in the module so the runner can find the
+                // provider's sidecar. Do not bake it into runtime.wasm.
+                if provider.native.is_none() {
+                    needs_composition = true;
+                }
             } else if !host_import(&import) {
-                bail!("no provider for resource import {import}");
+                bail!("{}", missing_provider(providers, &import));
             }
         }
     }
@@ -419,9 +475,7 @@ fn compose(
     for import in imports(&current)? {
         if let Some(provider) = providers.get(&import) {
             if provider.native.is_some() {
-                bail!(
-                    "provider for {import} is a native sidecar and cannot be composed into runtime.wasm"
-                );
+                continue;
             }
             let next = package.join(format!(".compose-{step}.wasm"));
             keys.push(plugin::composition_key(
@@ -433,7 +487,7 @@ fn compose(
             current = next;
             step += 1;
         } else if !host_import(&import) {
-            bail!("no provider for resource import {import}");
+            bail!("{}", missing_provider(providers, &import));
         }
     }
     let runtime = package.join("runtime.wasm");
@@ -466,6 +520,45 @@ fn host_import(import: &str) -> bool {
             .any(|cap| import == *cap || import.starts_with(&format!("{cap}/")))
 }
 
+fn default_provider_roots() -> Vec<PathBuf> {
+    let command_root = std::env::var_os("FUNGOS_COMMAND_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_default()
+                .join(".local/share/fungos/commands")
+        });
+    vec![crate::command::spore_root(command_root)]
+}
+
+fn missing_provider(providers: &PluginRegistry, import: &str) -> String {
+    if let Some(refusal) = providers
+        .refused()
+        .iter()
+        .find(|refusal| refusal.reason.contains(import))
+    {
+        return format!("provider for {import} is refused: {}", refusal.reason);
+    }
+    format!(
+        "no provider for {import}; searched {}",
+        provider_roots(providers)
+    )
+}
+
+fn provider_roots(providers: &PluginRegistry) -> String {
+    let roots = providers.roots();
+    if roots.is_empty() {
+        "no plugin roots".to_string()
+    } else {
+        roots
+            .iter()
+            .map(|root| root.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
 fn composite_key(keys: &[String]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"loam-runtime-key-v1\0");
@@ -492,6 +585,24 @@ fn generation_key(package_digest: &str, composition_key: Option<&str>) -> String
     hasher.update(b"\0");
     hasher.update(composition_key.unwrap_or("none").as_bytes());
     format!("{:x}", hasher.finalize())
+}
+
+fn drift(root: &Path, record: &InstallRecord) -> Option<String> {
+    let generation = generation_dir(root, &record.package, &record.current);
+    if !generation.is_dir() {
+        return Some(format!("generation missing: {}", generation.display()));
+    }
+    let link = root.join(&record.package);
+    if !link.is_dir() {
+        return Some(format!("package path missing: {}", link.display()));
+    }
+    if record.composition_key.is_some() && !generation.join("runtime.wasm").is_file() {
+        return Some(format!(
+            "composed runtime missing: {}",
+            generation.join("runtime.wasm").display()
+        ));
+    }
+    None
 }
 
 fn generation_dir(root: &Path, package: &str, generation: &str) -> PathBuf {
@@ -647,6 +758,117 @@ mod tests {
         assert_eq!(second.previous.as_deref(), Some(first.generation.as_str()));
         let rolled = rollback(root.path(), &first.id).unwrap();
         assert_eq!(rolled.generation, first.generation);
+    }
+
+    const FUNCTION_PROVIDER: &str = r#"
+        (component
+          (core module $m
+            (func (export "answer") (result i32) i32.const 42)
+          )
+          (core instance $i (instantiate $m))
+          (func $answer (result u32) (canon lift (core func $i "answer")))
+          (instance $api (export "answer" (func $answer)))
+          (export "test:echo/echo@0.1.0" (instance $api))
+        )
+    "#;
+
+    const FUNCTION_CONSUMER: &str = r#"
+        (component
+          (import "test:echo/echo@0.1.0"
+            (instance $api (export "answer" (func (result u32)))))
+          (core func $answer (canon lower (func $api "answer")))
+          (core module $m
+            (import "" "answer" (func $answer (result i32)))
+            (func (export "run") (result i32) call $answer)
+          )
+          (core instance $i
+            (instantiate $m (with "" (instance (export "answer" (func $answer))))))
+          (func (export "run") (result u32) (canon lift (core func $i "run")))
+        )
+    "#;
+
+    fn function_provider_package(root: &Path) -> PathBuf {
+        let package = root.join("echo-provider");
+        fs::create_dir_all(&package).unwrap();
+        fs::write(
+            package.join("module.wasm"),
+            wat::parse_str(FUNCTION_PROVIDER).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            package.join("spore.toml"),
+            "schema = 1\n[spore]\nid = \"test.echo\"\nname = \"echo\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\nsummary = \"test provider\"\n[engine]\nsoil = \">=0.1\"\ntarget = \"wasm32-wasip2\"\n[module]\npath = \"module.wasm\"\n[launch]\ndefault = \"canvas\"\nsurfaces = [\"canvas\"]\n",
+        )
+        .unwrap();
+        let manifest = crate::spore::Manifest::load(&package).unwrap();
+        let lock = crate::spore::compute_lock(&package, &manifest).unwrap();
+        fs::write(package.join("spore.lock"), lock.render()).unwrap();
+        package
+    }
+
+    fn consumer_command_package(root: &Path, name: &str) -> PathBuf {
+        let package = root.join(name);
+        fs::create_dir_all(&package).unwrap();
+        fs::write(
+            package.join("module.wasm"),
+            wat::parse_str(FUNCTION_CONSUMER).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            package.join("command.toml"),
+            format!("schema = 1\n[command]\nname = \"{name}\"\nversion = \"0.1.0\"\nsummary = \"test consumer\"\nmodule = \"module.wasm\"\n"),
+        )
+        .unwrap();
+        package
+    }
+
+    #[test]
+    fn a_dev_install_is_discoverable_without_passing_the_flag_again() {
+        let source = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let provider = function_provider_package(source.path());
+        install(options(&provider, root.path(), true)).unwrap();
+        let registry = PluginRegistry::scan_roots(&[root.path().to_path_buf()]).unwrap();
+        assert!(registry.get("test:echo/echo@0.1.0").is_some());
+    }
+
+    #[test]
+    fn a_provider_version_mismatch_is_reported_as_missing() {
+        let source = tempfile::tempdir().unwrap();
+        let providers = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let provider = function_provider_package(source.path());
+        install(options(&provider, providers.path(), true)).unwrap();
+        let consumer = consumer_command_package(source.path(), "echo-consumer");
+        let module = consumer.join("module.wasm");
+        let mismatched = fs::read_to_string(&module).unwrap();
+        fs::write(&module, mismatched.replace("0.1.0", "0.2.0")).unwrap();
+        let mut opts = options(&consumer, root.path(), true);
+        opts.provider_roots = vec![providers.path().to_path_buf()];
+        let error = install(opts).unwrap_err().to_string();
+        assert!(error.contains("test:echo/echo@0.2.0"), "{error}");
+    }
+
+    #[test]
+    fn installs_a_function_only_provider_and_composes_a_consumer() {
+        let source = tempfile::tempdir().unwrap();
+        let providers = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let provider = function_provider_package(source.path());
+        install(options(&provider, providers.path(), true)).unwrap();
+        let consumer = consumer_command_package(source.path(), "echo-consumer");
+        let mut opts = options(&consumer, root.path(), true);
+        opts.provider_roots = vec![providers.path().to_path_buf()];
+        let report = install(opts).unwrap();
+        assert!(report.composition_key.is_some());
+        let generation = root
+            .path()
+            .join(LOAM_DIR)
+            .join("generations")
+            .join("echo-consumer")
+            .join(&report.generation);
+        assert!(generation.join("runtime.wasm").is_file());
+        assert!(generation.join("runtime.key").is_file());
     }
 
     #[test]
