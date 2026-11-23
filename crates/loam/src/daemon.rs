@@ -118,6 +118,8 @@ pub struct Options {
     pub socket: PathBuf,
     pub roots: Vec<PathBuf>,
     pub records: Option<RecordsBinding>,
+    /// Workspace root for `soil:vfs`, `soil:vfs-mut` and `soil:index`.
+    pub vfs_root: Option<PathBuf>,
     pub bus: Option<Arc<dyn Bus>>,
     pub max_instances: usize,
     /// The live Soil image runtime. `None` means use `soil-image` on PATH.
@@ -145,6 +147,7 @@ impl Options {
             socket: socket.into(),
             roots,
             records: None,
+            vfs_root: None,
             bus: None,
             max_instances: DEFAULT_MAX_INSTANCES,
             image_runtime: None,
@@ -218,6 +221,7 @@ pub fn serve(options: Options) -> Result<()> {
         registry: RwLock::new(registry),
         plugins: RwLock::new(plugins),
         records: options.records,
+        vfs_root: options.vfs_root,
         bus: options.bus,
         max_instances: options.max_instances,
         image_runtime: options.image_runtime,
@@ -493,6 +497,7 @@ struct Daemon {
     registry: RwLock<Arc<CommandRegistry>>,
     plugins: RwLock<PluginRegistry>,
     records: Option<RecordsBinding>,
+    vfs_root: Option<PathBuf>,
     bus: Option<Arc<dyn Bus>>,
     max_instances: usize,
     image_runtime: Option<PathBuf>,
@@ -868,7 +873,13 @@ impl Daemon {
 
         let plugins = self.plugins.read().expect("plugin lock poisoned").clone();
         let runner = match CommandRunner::new(self.records.clone(), self.bus.clone()) {
-            Ok(runner) => runner.with_plugins(plugins),
+            Ok(runner) => {
+                let runner = runner.with_plugins(plugins);
+                match &self.vfs_root {
+                    Some(root) => runner.with_vfs_root(root),
+                    None => runner,
+                }
+            }
             Err(failure) => return error(format!("{failure:#}")),
         };
         let cancel = runner.engine().clone();

@@ -64,6 +64,7 @@ fn run_as(args: Vec<String>, subcommand: &[&str]) -> Result<i32> {
     let mut records_root = None;
     let mut book = None;
     let mut collection = None;
+    let mut vfs_root: Option<PathBuf> = None;
     let mut unibus_config: Option<PathBuf> = None;
     // Nothing is inherited: a command gets exactly the variables a caller names.
     let mut env = Vec::new();
@@ -120,6 +121,10 @@ fn run_as(args: Vec<String>, subcommand: &[&str]) -> Result<i32> {
             }
             "--collection" => {
                 collection = Some(args.get(i + 1).context("--collection NAME")?.clone());
+                i += 2;
+            }
+            "--vfs-root" => {
+                vfs_root = Some(PathBuf::from(args.get(i + 1).context("--vfs-root DIR")?));
                 i += 2;
             }
             "--unibus-config" => {
@@ -249,8 +254,12 @@ fn run_as(args: Vec<String>, subcommand: &[&str]) -> Result<i32> {
         None => None,
     };
     let plugins = crate::command::plugin::PluginRegistry::scan_roots(&roots)?;
-    let output = CommandRunner::new(records, bus)?
-        .with_plugins(plugins)
+    let runner = CommandRunner::new(records, bus)?.with_plugins(plugins);
+    let runner = match vfs_root {
+        Some(root) => runner.with_vfs_root(root),
+        None => runner,
+    };
+    let output = runner
         .run(
             &entry,
             &RunRequest {

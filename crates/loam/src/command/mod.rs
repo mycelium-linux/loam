@@ -15,6 +15,7 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use wasmtime::{Config, Engine, Store, StoreLimits, StoreLimitsBuilder};
+use wasmtime::component::Resource;
 use wasmtime_wasi::{
     WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView,
     p2::{
@@ -24,6 +25,7 @@ use wasmtime_wasi::{
 };
 
 use crate::records_host::RecordsBookHost;
+use crate::vfs_host::{VfsHost, VfsWriter, cid, index, vfs, vfs_mut};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -146,7 +148,7 @@ pub mod plugin_ipc;
 
 /// What the runner can link for a command. A package that requires anything
 /// else is refused by the registry instead of failing at instantiation.
-pub const RUNNER_CAPABILITIES: &[&str] = &["soil:records", "soil:time", "soil:unibus", "soil:mcp"];
+pub const RUNNER_CAPABILITIES: &[&str] = &["soil:records", "soil:time", "soil:unibus", "soil:mcp", "soil:vfs", "soil:vfs-mut", "soil:index"];
 
 #[derive(Debug, Clone)]
 pub struct CommandRegistry {
@@ -766,6 +768,8 @@ pub struct CommandRunner {
     /// Installed Spore exports this runner can link into a command.
     plugins: Option<Arc<crate::command::plugin::PluginRegistry>>,
     records: Option<RecordsBinding>,
+    /// Workspace root for `soil:vfs` / `soil:vfs-mut` / `soil:index`.
+    vfs_root: Option<PathBuf>,
     /// The bus a command may publish on. Linked (possibly as an unavailable
     /// bus) for a command that declares `soil:unibus`, so a missing hub costs
     /// a publish, not the command run.
@@ -782,6 +786,7 @@ impl CommandRunner {
             engine,
             plugins: None,
             records,
+            vfs_root: None,
             bus,
             components: Mutex::new(BTreeMap::new()),
         })
@@ -790,6 +795,12 @@ impl CommandRunner {
     /// Use a scanned plugin registry when resolving a command's imports.
     pub fn with_plugins(mut self, plugins: crate::command::plugin::PluginRegistry) -> Self {
         self.plugins = Some(Arc::new(plugins));
+        self
+    }
+
+    /// Link `soil:vfs`, `soil:vfs-mut` and `soil:index` from this workspace.
+    pub fn with_vfs_root(mut self, root: impl Into<PathBuf>) -> Self {
+        self.vfs_root = Some(root.into());
         self
     }
 
@@ -844,6 +855,14 @@ impl CommandRunner {
         };
         if records.is_some() {
             crate::records_host::add_to_linker::<Host>(&mut linker)?;
+        }
+        let vfs = match &self.vfs_root {
+            Some(root) => Some(VfsHost::open(root).context("open VFS for command")?),
+            None => None,
+        };
+        if vfs.is_some() {
+            crate::vfs_host::add_to_linker::<Host>(&mut linker)?;
+            crate::vfs_host::add_mutation_to_linker::<Host>(&mut linker)?;
         }
         if entry.requires.iter().any(|cap| cap == "soil:time") {
             crate::time::add_to_linker::<Host>(&mut linker)?;
@@ -902,6 +921,7 @@ impl CommandRunner {
                 table: wasmtime::component::ResourceTable::new(),
                 limits: store_limits,
                 records,
+                vfs,
                 bus,
                 ipc,
             },
@@ -956,6 +976,8 @@ struct Host {
     table: wasmtime::component::ResourceTable,
     limits: StoreLimits,
     records: Option<RecordsBookHost>,
+    /// `soil:vfs`, `soil:vfs-mut` and `soil:index`, when the host named a root.
+    vfs: Option<VfsHost>,
     /// `soil:unibus`, when the command declared it and the caller supplied a
     /// bus. The command publishes through this; the records host never learns
     /// the bus exists, which is what keeps the two capabilities independent.
@@ -1009,6 +1031,190 @@ impl crate::unibus::bus::Host for Host {
             .as_mut()
             .ok_or(crate::unibus::bus::Error::Unavailable)?;
         bus.poll(kinds, cursor, limit)
+    }
+}
+
+impl vfs::Host for Host {
+    fn ls(
+        &mut self,
+        parent: String,
+        offset: u64,
+        limit: u32,
+    ) -> std::result::Result<vfs::Page, vfs::Error> {
+        self.vfs
+            .as_mut()
+            .ok_or(vfs::Error::Denied)?
+            .ls(parent, offset, limit)
+    }
+
+    fn stat(&mut self, path: String) -> std::result::Result<vfs::Entry, vfs::Error> {
+        self.vfs.as_mut().ok_or(vfs::Error::Denied)?.stat(path)
+    }
+
+    fn read(
+        &mut self,
+        path: String,
+        offset: u64,
+        length: u32,
+    ) -> std::result::Result<vfs::Chunk, vfs::Error> {
+        self.vfs
+            .as_mut()
+            .ok_or(vfs::Error::Denied)?
+            .read(path, offset, length)
+    }
+}
+
+impl cid::Host for Host {
+    fn find(
+        &mut self,
+        content_id: String,
+        offset: u64,
+        limit: u32,
+    ) -> std::result::Result<cid::Page, cid::Error> {
+        self.vfs
+            .as_mut()
+            .ok_or(cid::Error::Denied)?
+            .find(content_id, offset, limit)
+    }
+}
+
+impl index::Host for Host {
+    fn browse(
+        &mut self,
+        parent: String,
+        order: index::Order,
+        offset: u64,
+        limit: u32,
+    ) -> std::result::Result<index::Page, index::Error> {
+        self.vfs
+            .as_mut()
+            .ok_or(index::Error::Denied)?
+            .browse(parent, order, offset, limit)
+    }
+
+    fn search(&mut self, query: index::Query) -> std::result::Result<index::Page, index::Error> {
+        self.vfs.as_mut().ok_or(index::Error::Denied)?.search(query)
+    }
+
+    fn knn(&mut self, query: index::KnnQuery) -> std::result::Result<index::Page, index::Error> {
+        self.vfs.as_mut().ok_or(index::Error::Denied)?.knn(query)
+    }
+
+    fn state(&mut self) -> std::result::Result<index::IndexState, index::Error> {
+        self.vfs.as_mut().ok_or(index::Error::Denied)?.state()
+    }
+
+    fn refresh(&mut self) -> std::result::Result<index::IndexState, index::Error> {
+        self.vfs.as_mut().ok_or(index::Error::Denied)?.refresh()
+    }
+}
+
+impl vfs_mut::Host for Host {
+    fn begin_write(
+        &mut self,
+        path: String,
+        media_type: String,
+        expected_size: Option<u64>,
+        expected_version: Option<u64>,
+        mode: Option<u32>,
+    ) -> std::result::Result<Resource<VfsWriter>, vfs_mut::Error> {
+        let writer = self
+            .vfs
+            .as_ref()
+            .ok_or(vfs_mut::Error::Denied)?
+            .begin_writer(path, media_type, expected_size, expected_version, mode)?;
+        self.table
+            .push(writer)
+            .map_err(|_| vfs_mut::Error::OverBudget)
+    }
+
+    fn write(
+        &mut self,
+        path: String,
+        data: Vec<u8>,
+        media_type: String,
+        expected_version: Option<u64>,
+        mode: Option<u32>,
+    ) -> std::result::Result<vfs_mut::WriteResult, vfs_mut::Error> {
+        self.vfs.as_mut().ok_or(vfs_mut::Error::Denied)?.write(
+            path,
+            data,
+            media_type,
+            expected_version,
+            mode,
+        )
+    }
+
+    fn chmod(
+        &mut self,
+        path: String,
+        mode: u32,
+    ) -> std::result::Result<vfs_mut::WriteResult, vfs_mut::Error> {
+        self.vfs
+            .as_mut()
+            .ok_or(vfs_mut::Error::Denied)?
+            .chmod(path, mode)
+    }
+
+    fn remove(&mut self, path: String) -> std::result::Result<(), vfs_mut::Error> {
+        self.vfs
+            .as_mut()
+            .ok_or(vfs_mut::Error::Denied)?
+            .remove(path)
+    }
+
+    fn mkdir(&mut self, path: String) -> std::result::Result<(), vfs_mut::Error> {
+        self.vfs.as_mut().ok_or(vfs_mut::Error::Denied)?.mkdir(path)
+    }
+
+    fn rmdir(&mut self, path: String) -> std::result::Result<(), vfs_mut::Error> {
+        self.vfs.as_mut().ok_or(vfs_mut::Error::Denied)?.rmdir(path)
+    }
+
+    fn rename(
+        &mut self,
+        source: String,
+        target: String,
+    ) -> std::result::Result<vfs_mut::WriteResult, vfs_mut::Error> {
+        self.vfs
+            .as_mut()
+            .ok_or(vfs_mut::Error::Denied)?
+            .rename(source, target)
+    }
+}
+
+impl vfs_mut::HostWriter for Host {
+    fn write(
+        &mut self,
+        writer: Resource<VfsWriter>,
+        data: Vec<u8>,
+    ) -> std::result::Result<u64, vfs_mut::Error> {
+        self.table
+            .get_mut(&writer)
+            .map_err(|_| vfs_mut::Error::Invalid)?
+            .write(&data)
+    }
+
+    fn finish(
+        &mut self,
+        writer: Resource<VfsWriter>,
+    ) -> std::result::Result<vfs_mut::WriteResult, vfs_mut::Error> {
+        self.table
+            .get_mut(&writer)
+            .map_err(|_| vfs_mut::Error::Invalid)?
+            .finish()
+    }
+
+    fn abort(&mut self, writer: Resource<VfsWriter>) -> std::result::Result<(), vfs_mut::Error> {
+        self.table
+            .get_mut(&writer)
+            .map_err(|_| vfs_mut::Error::Invalid)?
+            .abort()
+    }
+
+    fn drop(&mut self, writer: Resource<VfsWriter>) -> std::result::Result<(), wasmtime::Error> {
+        let _ = self.table.delete(writer);
+        Ok(())
     }
 }
 
