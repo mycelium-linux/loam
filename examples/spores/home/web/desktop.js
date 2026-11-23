@@ -87,6 +87,75 @@
     if (el) focusWindow(el);
   });
 
+  function saveBounds(el) {
+    const rect = el.getBoundingClientRect();
+    localStorage.setItem(`mycelium.bounds.${el.dataset.window}`, JSON.stringify({
+      left: Math.round(rect.left),
+      top: Math.round(rect.top),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+    }));
+  }
+
+  let drag = null;
+  let resize = null;
+
+  document.addEventListener('pointerdown', (event) => {
+    const handle = event.target.closest('[data-resize]');
+    if (handle) {
+      const el = windows.get(handle.dataset.resize);
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      resize = {
+        el,
+        startX: event.clientX,
+        startY: event.clientY,
+        width: rect.width,
+        height: rect.height,
+      };
+      handle.setPointerCapture?.(event.pointerId);
+      event.preventDefault();
+      return;
+    }
+    const bar = event.target.closest('.window-bar');
+    if (!bar || event.target.closest('button')) return;
+    const el = bar.closest('[data-window]');
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    drag = {
+      el,
+      startX: event.clientX,
+      startY: event.clientY,
+      left: rect.left,
+      top: rect.top,
+    };
+    bar.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+  });
+
+  document.addEventListener('pointermove', (event) => {
+    if (drag) {
+      drag.el.style.left = `${drag.left + event.clientX - drag.startX}px`;
+      drag.el.style.top = `${drag.top + event.clientY - drag.startY}px`;
+      drag.el.style.inset = 'auto';
+      drag.el.dataset.zoomed = 'false';
+      return;
+    }
+    if (resize) {
+      resize.el.style.width = `${Math.max(320, resize.width + event.clientX - resize.startX)}px`;
+      resize.el.style.height = `${Math.max(220, resize.height + event.clientY - resize.startY)}px`;
+      resize.el.style.inset = 'auto';
+      resize.el.dataset.zoomed = 'false';
+    }
+  });
+
+  document.addEventListener('pointerup', () => {
+    if (drag) saveBounds(drag.el);
+    if (resize) saveBounds(resize.el);
+    drag = null;
+    resize = null;
+  });
+
   const command = document.getElementById('command');
   const scrim = document.querySelector('[data-command-scrim]');
   const input = document.getElementById('command-input');
