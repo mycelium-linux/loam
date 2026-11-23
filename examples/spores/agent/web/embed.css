@@ -91,3 +91,64 @@
   .mycelium-agent-rail::before,
   .mycelium-agent-rail::after { transition: none; }
 }
+
+.mycelium-agent-teaser {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 46px;
+  height: 126px;
+  padding: 10px 0;
+  border: 1px solid rgba(255,255,255,.13);
+  border-right: 0;
+  border-radius: 13px 0 0 13px;
+  background:
+    radial-gradient(100% 80% at 100% 0%, rgba(139,111,214,.26), transparent 62%),
+    rgba(9, 14, 21, .86);
+  box-shadow: -14px 0 34px rgba(0,0,0,.24), inset 0 1px 0 rgba(255,255,255,.08);
+  color: #c9b3ff;
+  cursor: pointer;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(104%, -50%);
+  transition: transform 220ms cubic-bezier(.22,.8,.22,1), opacity 140ms ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.mycelium-agent-root[data-teaser="true"] .mycelium-agent-teaser {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(0, -50%);
+}
+.mycelium-agent-root[data-open="true"] .mycelium-agent-teaser {
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(104%, -50%);
+}
+.mycelium-agent-teaser:hover {
+  background:
+    radial-gradient(100% 80% at 100% 0%, rgba(139,111,214,.38), transparent 62%),
+    rgba(13, 20, 30, .94);
+  color: #e2d6ff;
+}
+.mycelium-agent-teaser-mark {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid rgba(201,179,255,.28);
+  border-radius: 8px;
+  background: rgba(201,179,255,.10);
+}
+.mycelium-agent-teaser-mark svg { width: 15px; height: 15px; }
+.mycelium-agent-teaser-label {
+  color: rgba(226, 214, 255, .64);
+  font: 8px/1 ui-monospace, "SF Mono", Menlo, monospace;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  writing-mode: vertical-rl;
+}
