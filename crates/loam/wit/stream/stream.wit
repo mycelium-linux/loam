@@ -1,8 +1,12 @@
-// Host-issued byte streams.
+// Host-issued inbound byte streams.
 //
 // A Spore never creates a listener, dials a socket, or holds a TLS key. The
 // host accepts the transport, authenticates the peer, and queues a bounded
 // duplex session. A Spore polls `accept`, then reads and writes the bytes.
+//
+// This is not an outbound HTTP response body. A client-side streaming HTTP
+// response uses `soil:http.response-stream`, which preserves status, headers,
+// redirect policy and credential injection.
 package soil:streams@0.1.0;
 
 interface duplex {

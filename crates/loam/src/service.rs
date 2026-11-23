@@ -196,6 +196,11 @@ impl HttpService {
             HasSelf<super::host::WasiHost>,
         >(&mut linker, |state| state)?;
         crate::stream::add_to_linker(&mut linker)?;
+        #[cfg(feature = "inference")]
+        if builder.has_inference() {
+            crate::inference::add_to_linker::<WasiHost>(&mut linker)
+                .context("link soil:inference")?;
+        }
         if builder.has_codec() {
             crate::codec_host::add_to_linker::<WasiHost>(&mut linker).context("link soil:codec")?;
         }
