@@ -16,6 +16,7 @@ use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
+    sync::{Arc, RwLock},
 };
 
 use anyhow::{Context, Result};
@@ -140,28 +141,41 @@ fn static_surface(
 
 /// Serve one or more static surfaces. The first surface is the fallback when
 /// the request Host does not name a package.
-pub fn serve(surfaces: Vec<StaticSurface>, listener: TcpListener) -> Result<()> {
-    let sites = surfaces
-        .into_iter()
+///
+/// The surface list is shared rather than captured so an install can add a
+/// Spore without restarting the listener.
+pub fn serve(surfaces: Arc<RwLock<Vec<StaticSurface>>>, listener: TcpListener) -> Result<()> {
+    loop {
+        let (mut stream, _) = listener.accept()?;
+        let sites = sites(&surfaces.read().expect("web surface lock poisoned"));
+        std::thread::spawn(move || {
+            if sites.is_empty() {
+                let _ = respond(
+                    &mut stream,
+                    503,
+                    "text/plain",
+                    b"no web surfaces are installed\n",
+                    None,
+                );
+                return;
+            }
+            let _ = handle(stream, &sites);
+        });
+    }
+}
+
+fn sites(surfaces: &[StaticSurface]) -> Vec<(StaticSurface, PathBuf)> {
+    surfaces
+        .iter()
         .map(|surface| {
             let root = surface
                 .entry
                 .parent()
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| surface.package.clone());
-            (surface, root)
+            (surface.clone(), root)
         })
-        .collect::<Vec<_>>();
-    if sites.is_empty() {
-        return Ok(());
-    }
-    loop {
-        let (stream, _) = listener.accept()?;
-        let sites = sites.clone();
-        std::thread::spawn(move || {
-            let _ = handle(stream, &sites);
-        });
-    }
+        .collect()
 }
 
 fn handle(mut stream: TcpStream, sites: &[(StaticSurface, PathBuf)]) -> Result<()> {

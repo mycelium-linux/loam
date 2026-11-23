@@ -167,6 +167,11 @@ loam status --json
 loam rollback acme:marbles
 ```
 
+When `loamd` is running, a successful install also reloads the daemon. A Spore
+that declares a web surface is served and leased under its `.myc` name without
+a daemon restart, and the frontdoor certificate is renewed for the new name
+using the existing local CA.
+
 See [`docs/installer.md`](docs/installer.md).
 
 `loamd` is the per-user supervisor for command instances:

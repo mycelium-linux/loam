@@ -189,6 +189,27 @@ fn install_cli(args: &[String]) -> Result<()> {
         composition_cache,
     })?;
     println!("{}", serde_json::to_string_pretty(&report)?);
+    if let Err(error) = reload_daemon() {
+        eprintln!("loam: installed, but loamd reload failed: {error:#}");
+    }
+    Ok(())
+}
+
+fn reload_daemon() -> Result<()> {
+    let socket = soil::config::Config::default_path()
+        .and_then(|path| soil::config::Config::load(&path).ok())
+        .and_then(|config| config.socket)
+        .unwrap_or_else(soil::daemon::default_socket);
+    if !socket.exists() {
+        return Ok(());
+    }
+    let response = soil::daemon::request(&socket, &soil::daemon::Request::Reload)?;
+    if response["ok"] == false {
+        bail!(
+            "{}",
+            response["error"].as_str().unwrap_or("reload was refused")
+        );
+    }
     Ok(())
 }
 
