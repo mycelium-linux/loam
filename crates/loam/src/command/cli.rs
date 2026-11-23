@@ -264,7 +264,25 @@ fn run_as(args: Vec<String>, subcommand: &[&str]) -> Result<i32> {
         Some(root) => runner.with_vfs_root(root),
         None => runner,
     };
-    let runner = runner.with_http_origins(http_origins);
+    // The host config is the grant; a flag is a test override. Credentials are
+    // always host-owned, even when an origin is named on the command line.
+    let config_path = std::env::var_os("LOAM_CONFIG")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| crate::config::Config::default_path().filter(|path| path.is_file()));
+    let host_config = match config_path {
+        Some(path) => crate::config::Config::load(&path)?,
+        None => crate::config::Config::default(),
+    };
+    let http_origins = if http_origins.is_empty() {
+        host_config.http_origins.clone()
+    } else {
+        http_origins
+    };
+    let http_credentials = crate::command::http_credentials(&host_config.http_credentials)?;
+    let runner = runner
+        .with_http_origins(http_origins)
+        .with_http_credentials(http_credentials);
     let output = runner.run(
         &entry,
         &RunRequest {

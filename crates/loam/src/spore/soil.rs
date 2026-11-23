@@ -21,7 +21,10 @@
 //!     (alpns ("soil/http/1"))
 //!     (ttl_secs 240))
 //!   (surfaces
-//!     (surface "web" (kind "web") (entry "index.html"))))
+//!     (surface "web" (kind "web") (entry "index.html")))
+//!   (http-client
+//!     (origin "http://127.0.0.1:8791")
+//!     (credential "default")))
 //! ```
 
 use super::{Anycast, Error, MAX_LEASE_SECS, Result, Surface, SurfaceKind, default_lease_secs};
@@ -35,6 +38,22 @@ pub struct SoilManifest {
     pub module: Option<String>,
     pub anycast: Option<Anycast>,
     pub surfaces: Vec<Surface>,
+    /// Declared grants: the request half of consent. The host decides.
+    pub grants: std::collections::BTreeMap<String, String>,
+    /// The bounded workspace prefix a web surface may address.
+    pub web: Option<crate::spore::Web>,
+    /// Outbound HTTP the Spore asks the host to permit.
+    pub http_client: Option<HttpClient>,
+}
+
+/// The request half of `soil:http`: origins and opaque credential handles.
+///
+/// No reference, token or purpose lives here. The host resolves a handle from
+/// its own config and decides whether the origin is reachable.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HttpClient {
+    pub origins: Vec<String>,
+    pub credentials: Vec<String>,
 }
 
 impl SoilManifest {
@@ -59,6 +78,9 @@ impl SoilManifest {
         let mut module = None;
         let mut anycast = None;
         let mut surfaces = Vec::new();
+        let mut grants = std::collections::BTreeMap::new();
+        let mut web = None;
+        let mut http_client = None;
         for field in spore.iter().skip(1) {
             let Sexp::List(items) = field else {
                 continue;
@@ -73,6 +95,30 @@ impl SoilManifest {
                 "module" => module = string(items.get(1)),
                 "anycast" => anycast = parse_anycast(items)?,
                 "surfaces" => surfaces = parse_surfaces(items)?,
+                // (grants ("soil:vfs" "why it is needed") ...)
+                "grants" => {
+                    for grant in items.iter().skip(1) {
+                        let Sexp::List(pair) = grant else { continue };
+                        if let Some(name) = string(pair.first()) {
+                            let reason = string(pair.get(1)).unwrap_or_default();
+                            grants.insert(name, reason);
+                        }
+                    }
+                }
+                "http-client" => http_client = Some(parse_http_client(items)?),
+                // (web (vfs-root "studio"))
+                "web" => {
+                    for field in items.iter().skip(1) {
+                        let Sexp::List(pair) = field else { continue };
+                        if let (Some(Sexp::Atom(key)), Some(value)) =
+                            (pair.first(), string(pair.get(1)))
+                        {
+                            if key == "vfs-root" {
+                                web = Some(crate::spore::Web { vfs_root: value });
+                            }
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -87,6 +133,9 @@ impl SoilManifest {
             module,
             anycast,
             surfaces,
+            grants,
+            web,
+            http_client,
         })
     }
 }
@@ -99,6 +148,50 @@ fn default_name(id: &str) -> String {
         .or_else(|| id.rsplit_once('.').map(|(_, name)| name))
         .unwrap_or(id)
         .to_owned()
+}
+
+fn parse_http_client(items: &[Sexp]) -> Result<HttpClient> {
+    let mut client = HttpClient::default();
+    for field in items.iter().skip(1) {
+        let Sexp::List(pair) = field else {
+            continue;
+        };
+        let Some(Sexp::Atom(key)) = pair.first() else {
+            continue;
+        };
+        match key.as_str() {
+            "origin" => {
+                let origin = string(pair.get(1))
+                    .ok_or_else(|| Error::Invalid("http-client origin needs a value".into()))?;
+                client.origins.push(origin);
+            }
+            "origins" => client.origins.extend(strings(pair.get(1))),
+            "credential" => {
+                let handle = string(pair.get(1)).ok_or_else(|| {
+                    Error::Invalid("http-client credential needs a handle".into())
+                })?;
+                client.credentials.push(handle);
+            }
+            other => {
+                return Err(Error::Invalid(format!(
+                    "http-client has unknown option {other:?}"
+                )));
+            }
+        }
+    }
+    if client.origins.is_empty() {
+        return Err(Error::Invalid(
+            "http-client needs at least one origin".into(),
+        ));
+    }
+    for origin in &client.origins {
+        if !(origin.starts_with("http://") || origin.starts_with("https://")) {
+            return Err(Error::Invalid(format!(
+                "http-client origin must be an absolute http(s) URL, got {origin:?}"
+            )));
+        }
+    }
+    Ok(client)
 }
 
 fn parse_anycast(items: &[Sexp]) -> Result<Option<Anycast>> {
@@ -367,6 +460,34 @@ mod tests {
         assert!(
             SoilManifest::parse(
                 r#"(spore (id "acme:site") (version "0.1.0") (anycast (name "site")))"#
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn reads_http_client_origins_and_handles() {
+        let manifest = SoilManifest::parse(
+            r#"
+            (spore
+              (id "dev.fungos.acp-agents")
+              (version "0.1.0")
+              (http-client
+                (origin "http://127.0.0.1:8791")
+                (credential "default")))
+            "#,
+        )
+        .expect("a soil manifest");
+        let client = manifest.http_client.expect("http client");
+        assert_eq!(client.origins, vec!["http://127.0.0.1:8791"]);
+        assert_eq!(client.credentials, vec!["default"]);
+    }
+
+    #[test]
+    fn refuses_a_relative_http_client_origin() {
+        assert!(
+            SoilManifest::parse(
+                r#"(spore (id "acme:site") (version "0.1.0")
+                     (http-client (origin "127.0.0.1:8791")))"#
             )
             .is_err()
         );

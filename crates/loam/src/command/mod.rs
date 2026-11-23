@@ -781,6 +781,8 @@ pub struct CommandRunner {
     vfs_root: Option<PathBuf>,
     /// Origins a command may reach through `soil:http`. Empty means none.
     http_origins: Vec<String>,
+    /// Host-owned credentials a command may name through `soil:http`.
+    http_credentials: Option<Arc<dyn crate::http_host::CredentialProvider>>,
     /// The bus a command may publish on. Linked (possibly as an unavailable
     /// bus) for a command that declares `soil:unibus`, so a missing hub costs
     /// a publish, not the command run.
@@ -799,6 +801,7 @@ impl CommandRunner {
             records,
             vfs_root: None,
             http_origins: Vec::new(),
+            http_credentials: None,
             bus,
             components: Mutex::new(BTreeMap::new()),
         })
@@ -819,6 +822,15 @@ impl CommandRunner {
     /// Link `soil:http` for commands that declare it.
     pub fn with_http_origins(mut self, origins: impl IntoIterator<Item = String>) -> Self {
         self.http_origins = origins.into_iter().collect();
+        self
+    }
+
+    /// Resolve guest credential handles through host-owned Geode entries.
+    pub fn with_http_credentials(
+        mut self,
+        credentials: Option<Arc<dyn crate::http_host::CredentialProvider>>,
+    ) -> Self {
+        self.http_credentials = credentials;
         self
     }
 
@@ -904,22 +916,27 @@ impl CommandRunner {
         if bus.is_some() {
             crate::unibus::add_to_linker::<Host>(&mut linker)?;
         }
-        let http = if entry.requires.iter().any(|cap| cap == "soil:http")
-            || !self.http_origins.is_empty()
-        {
-            let policy = crate::http_host::HttpPolicy::new(
-                self.http_origins.iter().cloned(),
-                16 * 1024 * 1024,
-                Duration::from_secs(120),
-            )?;
-            crate::http_host::api::add_to_linker::<Host, wasmtime::component::HasSelf<Host>>(
-                &mut linker,
-                |host| host,
-            )?;
-            Some(crate::http_host::HttpHost::new(policy))
-        } else {
-            None
-        };
+        let http =
+            if entry.requires.iter().any(|cap| cap == "soil:http") || !self.http_origins.is_empty()
+            {
+                let policy = crate::http_host::HttpPolicy::new(
+                    self.http_origins.iter().cloned(),
+                    16 * 1024 * 1024,
+                    Duration::from_secs(120),
+                )?;
+                crate::http_host::api::add_to_linker::<Host, wasmtime::component::HasSelf<Host>>(
+                    &mut linker,
+                    |host| host,
+                )?;
+                let host = match &self.http_credentials {
+                    Some(credentials) => crate::http_host::HttpHost::new(policy)
+                        .with_credentials(credentials.clone()),
+                    None => crate::http_host::HttpHost::new(policy),
+                };
+                Some(host)
+            } else {
+                None
+            };
 
         let stdout = MemoryOutputPipe::new(limits.max_stdout_bytes);
         let stderr = MemoryOutputPipe::new(limits.max_stderr_bytes);
@@ -1003,6 +1020,50 @@ impl CommandRunner {
             stdout: stdout.contents().to_vec(),
             stderr: stderr.contents().to_vec(),
         })
+    }
+}
+
+/// Build the host-owned credential resolver described by `loam.conf.soil`.
+///
+/// The config names Geode references and purposes; the secrets stay in the
+/// daemon. A build without the Geode feature has no resolver, which is the
+/// honest answer rather than a silent bearer token.
+pub fn http_credentials(
+    credentials: &[crate::config::HttpCredential],
+) -> Result<Option<Arc<dyn crate::http_host::CredentialProvider>>> {
+    #[cfg(all(unix, feature = "creds", feature = "wasi"))]
+    {
+        if credentials.is_empty() {
+            return Ok(None);
+        }
+        let socket = std::env::var_os("GEODE_SOCKET")
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".geode/geode.sock"))
+            })
+            .unwrap_or_else(|| PathBuf::from("/run/geode/geode.sock"));
+        let mut resolver = crate::creds::GeodeCredentials::new(
+            socket,
+            "",
+            "soil:http",
+            std::time::Duration::from_secs(60),
+        );
+        for credential in credentials {
+            resolver = resolver.with_host_handle(
+                credential.handle.clone(),
+                crate::creds::HostHandle {
+                    reference: credential.reference.clone(),
+                    purpose: credential.purpose.clone(),
+                    header: credential.header.clone(),
+                },
+            );
+        }
+        Ok(Some(Arc::new(resolver)))
+    }
+    #[cfg(not(all(unix, feature = "creds", feature = "wasi")))]
+    {
+        let _ = credentials;
+        Ok(None)
     }
 }
 

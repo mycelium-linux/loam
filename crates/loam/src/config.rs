@@ -15,6 +15,12 @@
 //!             "~/.local/share/fungos/spores"))
 //!     (log (dir "~/.local/state/loam/logs") (max-bytes 1048576) (keep 4))
 //!     (web (listen "127.0.0.1:8799")))
+//!   (http
+//!     (allow "http://127.0.0.1:8791")
+//!     (credential "default"
+//!       (geode "geode://service/acp")
+//!       (purpose "acp-http")
+//!       (header "authorization")))
 //!   (mycelium
 //!     (home "~/.mycelium")
 //!     (publish-leases #t)))
@@ -44,6 +50,20 @@ pub struct Config {
     pub log_keep: Option<usize>,
     pub mycelium_home: Option<PathBuf>,
     pub publish_leases: Option<bool>,
+    /// Origins a command may reach through `soil:http`.
+    pub http_origins: Vec<String>,
+    /// Host-owned mappings from a guest handle to a Geode reference.
+    pub http_credentials: Vec<HttpCredential>,
+}
+
+/// One outbound credential the host is willing to resolve for a guest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpCredential {
+    pub handle: String,
+    pub reference: String,
+    pub purpose: String,
+    /// `Some(header)` injects a header; `None` substitutes a path segment.
+    pub header: Option<String>,
 }
 
 impl Config {
@@ -76,6 +96,7 @@ impl Config {
                     version = Some(number(items.get(1), "version")?);
                 }
                 "daemon" => config.parse_daemon(items)?,
+                "http" => config.parse_http(items)?,
                 "mycelium" => config.parse_mycelium(items)?,
                 other => bail!("loam.conf.soil: unknown top-level option {other:?}"),
             }
@@ -178,6 +199,29 @@ impl Config {
         Ok(())
     }
 
+    fn parse_http(&mut self, items: &[Sexp]) -> Result<()> {
+        for field in items.iter().skip(1) {
+            let Sexp::List(pair) = field else {
+                continue;
+            };
+            let Some(Sexp::Atom(key)) = pair.first() else {
+                continue;
+            };
+            match key.as_str() {
+                "allow" | "origin" => {
+                    let origin = string(pair.get(1)).context("http allow needs an origin")?;
+                    self.http_origins.push(origin);
+                }
+                "origins" => {
+                    self.http_origins.extend(strings(pair.get(1)));
+                }
+                "credential" => self.http_credentials.push(parse_http_credential(pair)?),
+                other => bail!("loam.conf.soil: unknown http option {other:?}"),
+            }
+        }
+        Ok(())
+    }
+
     fn parse_mycelium(&mut self, items: &[Sexp]) -> Result<()> {
         for field in items.iter().skip(1) {
             let Sexp::List(pair) = field else {
@@ -196,6 +240,38 @@ impl Config {
         }
         Ok(())
     }
+}
+
+fn parse_http_credential(items: &[Sexp]) -> Result<HttpCredential> {
+    let handle = string(items.get(1)).context("http credential needs a handle")?;
+    let mut reference = None;
+    let mut purpose = None;
+    let mut header = None;
+    for field in items.iter().skip(2) {
+        let Sexp::List(pair) = field else {
+            continue;
+        };
+        let Some(Sexp::Atom(key)) = pair.first() else {
+            continue;
+        };
+        match key.as_str() {
+            "geode" => reference = string(pair.get(1)),
+            "purpose" => purpose = string(pair.get(1)),
+            "header" => header = string(pair.get(1)),
+            other => bail!("loam.conf.soil: unknown http credential option {other:?}"),
+        }
+    }
+    let reference = reference.context("http credential needs a geode reference")?;
+    if !reference.starts_with("geode://") {
+        bail!("http credential reference must start with geode://");
+    }
+    let purpose = purpose.context("http credential needs a purpose")?;
+    Ok(HttpCredential {
+        handle,
+        reference,
+        purpose,
+        header,
+    })
 }
 
 fn path(value: Option<&Sexp>, name: &str) -> Result<PathBuf> {
@@ -309,5 +385,30 @@ mod tests {
             .unwrap_or_default();
         assert_eq!(expand_path("~/x"), home.join("x"));
         assert_eq!(expand_path("$HOME/x"), PathBuf::from("$HOME/x"));
+    }
+    #[test]
+    fn reads_http_origins_and_credentials() {
+        let config = Config::parse(
+            r#"
+            (loam
+              (version 1)
+              (http
+                (allow "http://127.0.0.1:8791")
+                (credential "default"
+                  (geode "geode://service/acp")
+                  (purpose "acp-http")
+                  (header "authorization"))))
+            "#,
+        )
+        .expect("http policy");
+        assert_eq!(config.http_origins, vec!["http://127.0.0.1:8791"]);
+        assert_eq!(config.http_credentials.len(), 1);
+        assert_eq!(config.http_credentials[0].handle, "default");
+        assert_eq!(config.http_credentials[0].reference, "geode://service/acp");
+        assert_eq!(config.http_credentials[0].purpose, "acp-http");
+        assert_eq!(
+            config.http_credentials[0].header.as_deref(),
+            Some("authorization")
+        );
     }
 }

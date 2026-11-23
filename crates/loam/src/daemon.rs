@@ -120,6 +120,10 @@ pub struct Options {
     pub records: Option<RecordsBinding>,
     /// Workspace root for `soil:vfs`, `soil:vfs-mut` and `soil:index`.
     pub vfs_root: Option<PathBuf>,
+    /// Origins a command may reach through `soil:http`.
+    pub http_origins: Vec<String>,
+    /// Host-owned credential resolver for `soil:http` handles.
+    pub http_credentials: Option<Arc<dyn crate::http_host::CredentialProvider>>,
     pub bus: Option<Arc<dyn Bus>>,
     pub max_instances: usize,
     /// The live Soil image runtime. `None` means use `soil-image` on PATH.
@@ -148,6 +152,8 @@ impl Options {
             roots,
             records: None,
             vfs_root: None,
+            http_origins: Vec::new(),
+            http_credentials: None,
             bus: None,
             max_instances: DEFAULT_MAX_INSTANCES,
             image_runtime: None,
@@ -222,6 +228,8 @@ pub fn serve(options: Options) -> Result<()> {
         plugins: RwLock::new(plugins),
         records: options.records,
         vfs_root: options.vfs_root,
+        http_origins: options.http_origins,
+        http_credentials: options.http_credentials,
         bus: options.bus,
         max_instances: options.max_instances,
         image_runtime: options.image_runtime,
@@ -498,6 +506,8 @@ struct Daemon {
     plugins: RwLock<PluginRegistry>,
     records: Option<RecordsBinding>,
     vfs_root: Option<PathBuf>,
+    http_origins: Vec<String>,
+    http_credentials: Option<Arc<dyn crate::http_host::CredentialProvider>>,
     bus: Option<Arc<dyn Bus>>,
     max_instances: usize,
     image_runtime: Option<PathBuf>,
@@ -874,7 +884,10 @@ impl Daemon {
         let plugins = self.plugins.read().expect("plugin lock poisoned").clone();
         let runner = match CommandRunner::new(self.records.clone(), self.bus.clone()) {
             Ok(runner) => {
-                let runner = runner.with_plugins(plugins);
+                let runner = runner
+                    .with_plugins(plugins)
+                    .with_http_origins(self.http_origins.clone())
+                    .with_http_credentials(self.http_credentials.clone());
                 match &self.vfs_root {
                     Some(root) => runner.with_vfs_root(root),
                     None => runner,

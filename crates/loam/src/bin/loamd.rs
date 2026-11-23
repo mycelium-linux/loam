@@ -106,8 +106,10 @@ fn parse_options(args: &[String]) -> Result<Options> {
     let mut log_dir = config.log_root;
     let mut log_max_bytes = config.log_max_bytes.unwrap_or(soil::log::DEFAULT_MAX_BYTES);
     let mut log_keep = config.log_keep.unwrap_or(soil::log::DEFAULT_KEEP);
-    let mut mycelium_home = config.mycelium_home;
+    let mut mycelium_home = config.mycelium_home.clone();
     let mut publish_leases = config.publish_leases.unwrap_or(true);
+    let http_origins = config.http_origins.clone();
+    let http_credentials = soil::command::http_credentials(&config.http_credentials)?;
     let mut roots_from_cli = false;
 
     let mut i = 0;
@@ -248,6 +250,8 @@ fn parse_options(args: &[String]) -> Result<Options> {
         roots,
         records,
         vfs_root,
+        http_origins,
+        http_credentials,
         bus,
         max_instances,
         image_runtime,
