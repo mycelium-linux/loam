@@ -79,6 +79,7 @@ fn parse_options(args: &[String]) -> Result<Options> {
     let mut book = None;
     let mut collection = None;
     let mut unibus_config = None;
+    let mut web_listen = None;
     let mut image_runtime = None;
 
     let mut i = 0;
@@ -118,6 +119,10 @@ fn parse_options(args: &[String]) -> Result<Options> {
                 unibus_config = Some(PathBuf::from(
                     args.get(i + 1).context("--unibus-config FILE")?,
                 ));
+                i += 2;
+            }
+            "--web-listen" => {
+                web_listen = Some(args.get(i + 1).context("--web-listen ADDR")?.clone());
                 i += 2;
             }
             "--image-runtime" => {
@@ -168,6 +173,7 @@ fn parse_options(args: &[String]) -> Result<Options> {
         bus,
         max_instances,
         image_runtime,
+        web_listen,
     })
 }
 

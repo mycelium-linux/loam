@@ -90,6 +90,8 @@ pub mod time;
 pub mod unibus;
 #[cfg(feature = "vfs")]
 pub mod vfs_host;
+#[cfg(feature = "wasi")]
+pub mod web;
 
 #[cfg(feature = "wasi")]
 pub use command_service::{CommandOutcome, CommandService};

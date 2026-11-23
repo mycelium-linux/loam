@@ -110,6 +110,8 @@ pub struct Options {
     pub max_instances: usize,
     /// The live Soil image runtime. `None` means use `soil-image` on PATH.
     pub image_runtime: Option<PathBuf>,
+    /// Static web surface listener. `None` leaves manifest web surfaces unserved.
+    pub web_listen: Option<String>,
 }
 
 impl Options {
@@ -121,6 +123,7 @@ impl Options {
             bus: None,
             max_instances: DEFAULT_MAX_INSTANCES,
             image_runtime: None,
+            web_listen: None,
         }
     }
 }
@@ -158,6 +161,7 @@ pub fn serve(options: Options) -> Result<()> {
     if options.max_instances == 0 {
         bail!("--max-instances must be greater than zero");
     }
+    start_web_surfaces(&options.roots, options.web_listen.as_deref())?;
     let registry = Arc::new(CommandRegistry::scan_roots(&options.roots)?);
     let plugins = PluginRegistry::scan_roots(&options.roots)?;
     let daemon = Arc::new(Daemon {
@@ -194,6 +198,140 @@ pub fn serve(options: Options) -> Result<()> {
 
     let _ = fs::remove_file(&options.socket);
     Ok(())
+}
+
+fn start_web_surfaces(roots: &[PathBuf], listen: Option<&str>) -> Result<()> {
+    let surfaces = crate::web::discover(roots)?;
+    if surfaces.is_empty() {
+        return Ok(());
+    }
+    let address = listen.unwrap_or("127.0.0.1:8799");
+    let listener = std::net::TcpListener::bind(address)
+        .with_context(|| format!("bind static web surface {address}"))?;
+    let endpoint = crate::web::loopback_endpoint(&listener)?;
+    let lease_surfaces = surfaces.clone();
+    let lease_endpoint = endpoint.clone();
+    let renew = surfaces
+        .iter()
+        .map(|surface| surface.ttl_secs)
+        .min()
+        .unwrap_or(240)
+        / 3;
+    publish_web_leases(&lease_surfaces, &lease_endpoint);
+    let _ = thread::Builder::new()
+        .name("loamd-web-lease".into())
+        .spawn(move || {
+            loop {
+                thread::sleep(Duration::from_secs(renew.max(1)));
+                publish_web_leases(&lease_surfaces, &lease_endpoint);
+            }
+        });
+    let _ = thread::Builder::new()
+        .name("loamd-web".into())
+        .spawn(move || {
+            if let Err(error) = crate::web::serve(surfaces, listener) {
+                eprintln!("loamd: static web surface: {error:#}");
+            }
+        });
+    Ok(())
+}
+
+fn publish_web_leases(surfaces: &[crate::web::StaticSurface], endpoint: &str) {
+    let home = std::env::var_os("MYCELIUM_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".mycelium")));
+    let Some(home) = home else { return };
+    let mut identity = match crate::spore::identity::Identity::read(&home) {
+        Ok(identity) => identity,
+        Err(error) => {
+            eprintln!("loamd: static web surface has no Mycelium identity: {error}");
+            return;
+        }
+    };
+    // `Identity` carries the short certificate digest; Mycelium leases use the
+    // full peer key. Prefer the daemon's published id, then an explicit env var.
+    if let Some(node_id) = std::env::var("MYCELIUM_NODE_ID")
+        .ok()
+        .filter(|id| id.len() == 64)
+    {
+        identity.node_id = node_id;
+    } else if let Ok(bytes) = fs::read(home.join("application-services.json"))
+        && let Ok(value) = serde_json::from_slice::<Value>(&bytes)
+        && let Some(id) = value["observations"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry["provenance"]["observer"].as_str())
+            .find(|id| id.len() == 64)
+    {
+        identity.node_id = id.to_owned();
+    }
+    let publisher = crate::spore::publisher::TrustedPublisher {
+        principal: "loam-local".into(),
+        grant_id: "loam-local".into(),
+        key_id: "loam-local".into(),
+    };
+    let path = home.join("application-services.json");
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs());
+    let mut document: Value = fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_else(|| json!({"schema_version": 1, "observations": []}));
+    let Some(observations) = document
+        .get_mut("observations")
+        .and_then(Value::as_array_mut)
+    else {
+        eprintln!("loamd: application-services.json is not a catalog");
+        return;
+    };
+    for surface in surfaces {
+        let lock = fs::read_to_string(surface.package.join("spore.lock"))
+            .ok()
+            .and_then(|source| crate::spore::Lock::parse(&source).ok())
+            .unwrap_or_else(|| crate::spore::Lock {
+                id: surface.spore_id.clone(),
+                version: surface.version.clone(),
+                files: Vec::new(),
+                digest: "sha256:local".into(),
+            });
+        let rendered = match crate::spore::lease::document_for(
+            &surface.spore_id,
+            &surface.version,
+            &surface.anycast,
+            &lock,
+            &publisher,
+            &identity,
+            &[endpoint.to_owned()],
+            now,
+        ) {
+            Ok(document) => document,
+            Err(error) => {
+                eprintln!("loamd: static web lease {}: {error}", surface.name);
+                continue;
+            }
+        };
+        let service_id = match crate::spore::lease::service_id_for(&surface.anycast, &identity) {
+            Ok(service_id) => service_id,
+            Err(_) => continue,
+        };
+        observations.retain(|entry| {
+            entry["service_id"] != service_id
+                && !(entry["value"]["kind"] == surface.kind
+                    && entry["value"]["names"]
+                        .as_array()
+                        .is_some_and(|names| names.iter().any(|name| name == &surface.name)))
+        });
+        if let Some(observation) = rendered["observations"].get(0).cloned() {
+            observations.push(observation);
+        }
+    }
+    if let Ok(text) = serde_json::to_vec_pretty(&document)
+        && let Err(error) = fs::write(&path, text)
+    {
+        eprintln!("loamd: write {}: {error}", path.display());
+    }
 }
 
 fn bind_socket(path: &Path) -> Result<UnixListener> {
