@@ -222,3 +222,90 @@
   .wizard-step h2 { font-size: clamp(27px, 8vw, 38px); }
   .wizard-desks, .wizard-open-grid { grid-template-columns: minmax(0, 1fr); }
 }
+.btn-wizard:disabled { opacity: .35; cursor: default; filter: none; }
+.choice-grid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; margin-top: 24px; }
+.choice-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 18px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--wizard-tile-bg);
+  color: var(--color-ink);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 160ms var(--ease-out), background 160ms var(--ease-out), transform 160ms var(--ease-out);
+}
+.choice-card:hover { background: var(--profile-bg-hover); border-color: var(--hairline-strong); transform: translateY(-2px); }
+.choice-card.is-selected { border-color: var(--color-accent); background: rgba(255,208,138,.07); }
+.choice-mark {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  margin-bottom: 9px;
+  border-radius: 50%;
+  background: linear-gradient(145deg, #e8b06b, #c87357);
+  color: #341b12;
+  font: 700 13px var(--font-mono);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.25);
+}
+.choice-mark--work { background: linear-gradient(145deg, #8ae0d5, #4a8ecb); color: #082b35; }
+.choice-card strong { font-size: 14px; font-weight: 620; letter-spacing: -.02em; }
+.choice-card small { color: var(--color-ink-3); font-size: 11px; line-height: 1.4; }
+.build-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px; margin-top: 24px; }
+.build-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-height: 116px;
+  padding: 13px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--wizard-tile-bg);
+  color: var(--color-ink);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 160ms var(--ease-out), background 160ms var(--ease-out), transform 160ms var(--ease-out);
+}
+.build-option:hover { background: var(--profile-bg-hover); border-color: var(--hairline-strong); transform: translateY(-2px); }
+.build-option.is-selected { border-color: var(--color-accent); background: rgba(255,208,138,.07); }
+.build-icon { display: grid; place-items: center; width: 29px; height: 29px; margin-bottom: 7px; border-radius: 8px; background: rgba(255,255,255,.06); color: var(--color-accent); }
+.build-option.is-selected .build-icon { background: rgba(255,208,138,.14); }
+.build-icon svg { width: 16px; height: 16px; }
+.build-option strong { font-size: 11.5px; font-weight: 620; }
+.build-option small { color: var(--color-ink-3); font-size: 9.5px; line-height: 1.35; }
+.connection-list { display: grid; gap: 7px; margin-top: 22px; }
+.connection {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 11px;
+  border: 1px solid var(--hairline);
+  border-radius: 9px;
+  background: var(--wizard-tile-bg);
+  color: var(--color-ink-2);
+  text-align: left;
+  cursor: pointer;
+}
+.connection:hover { background: var(--profile-bg-hover); color: var(--color-ink); }
+.connection.is-selected { border-color: rgba(255,208,138,.38); background: rgba(255,208,138,.055); color: var(--color-ink); }
+.connection-mark { display: grid; place-items: center; width: 28px; height: 28px; flex: 0 0 28px; border-radius: 8px; background: rgba(255,255,255,.06); color: var(--color-accent); font: 700 10px var(--font-mono); }
+.connection.is-selected .connection-mark { background: rgba(255,208,138,.14); }
+.connection-copy { flex: 1; min-width: 0; }
+.connection-copy strong { display: block; font-size: 11.5px; font-weight: 620; }
+.connection-copy small { display: block; margin-top: 1px; color: var(--color-ink-3); font-size: 9.5px; }
+.connection-check { display: grid; place-items: center; width: 17px; height: 17px; border: 1px solid var(--hairline-strong); border-radius: 50%; color: transparent; font-size: 10px; }
+.connection.is-selected .connection-check { border-color: var(--color-accent); background: var(--color-accent); color: var(--accent-ink); }
+@media (max-width: 760px) {
+  .choice-grid { grid-template-columns: minmax(0,1fr); }
+  .build-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
+}
+@media (max-width: 420px) {
+  .build-grid { grid-template-columns: minmax(0,1fr); }
+  .build-option { min-height: 0; }
+}

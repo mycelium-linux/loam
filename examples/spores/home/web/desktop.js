@@ -16,8 +16,18 @@
     }
   }
 
+  const appLabels = { notes: 'Notes', contacts: 'People', files: 'Files', desk: 'This Desk' };
+  function setAgentContext(kind = 'desk') {
+    const detail = appLabels[kind] || 'Desktop';
+    window.__MYCELIUM_AGENT_CONTEXT = { app: 'This Mac', detail: kind === 'desk' ? 'Desktop' : detail };
+    window.dispatchEvent(new CustomEvent('mycelium-agent-context', {
+      detail: window.__MYCELIUM_AGENT_CONTEXT,
+    }));
+  }
+
   function focusWindow(el) {
     el.style.zIndex = String(++z);
+    if (el.dataset.window) setAgentContext(el.dataset.window);
   }
 
   function open(kind) {
@@ -39,6 +49,7 @@
     el.classList.remove('is-open');
     const frame = el.querySelector('iframe');
     if (frame) frame.src = 'about:blank';
+    setAgentContext('desk');
   }
 
   document.addEventListener('click', (event) => {
@@ -60,13 +71,46 @@
     const wizardNext = event.target.closest('[data-wizard-next]');
     if (wizardNext) {
       event.preventDefault();
-      setWizardStep(Number(onboarding?.dataset.step || 1) + 1);
+      if (!wizardNext.disabled) setWizardStep(Number(onboarding?.dataset.step || 1) + 1);
       return;
     }
     const wizardBack = event.target.closest('[data-wizard-back]');
     if (wizardBack) {
       event.preventDefault();
       setWizardStep(Number(onboarding?.dataset.step || 1) - 1);
+      return;
+    }
+    const wizardWhere = event.target.closest('[data-where]');
+    if (wizardWhere) {
+      event.preventDefault();
+      wizardAnswers.where = wizardWhere.dataset.where;
+      paintWizardChoices();
+      refreshWizardControls();
+      return;
+    }
+    const wizardWhat = event.target.closest('[data-what]');
+    if (wizardWhat) {
+      event.preventDefault();
+      wizardAnswers.what = wizardWhat.dataset.what;
+      paintWizardChoices();
+      refreshWizardControls();
+      return;
+    }
+    const connection = event.target.closest('[data-connection]');
+    if (connection) {
+      event.preventDefault();
+      const name = connection.dataset.connection;
+      if (wizardConnections.has(name)) wizardConnections.delete(name);
+      else wizardConnections.add(name);
+      paintConnections();
+      return;
+    }
+    const wizardStart = event.target.closest('[data-wizard-start]');
+    if (wizardStart) {
+      event.preventDefault();
+      saveWizardAnswers();
+      closeOrientation();
+      open(wizardAnswers.what === 'website' ? 'files' : 'notes');
       return;
     }
     const wizardOpen = event.target.closest('[data-wizard-open]');
@@ -272,7 +316,115 @@
     .catch(() => {});
 
   const onboarding = document.getElementById('onboarding');
+  const connectionsTitle = document.getElementById('connections-title');
+  const connectionsCopy = document.getElementById('connections-copy');
+  const connectionsList = document.getElementById('connections-list');
   let wizardStep = 1;
+  let wizardAnswers = { where: null, what: null };
+  let wizardConnections = new Set();
+
+  const connectionCatalog = {
+    website: {
+      myself: [['Cloudflare', 'Domains, DNS, and the public edge'], ['GitHub', 'The code behind the site'], ['Stripe', 'Payments when you need them'], ['Plausible', 'Quiet analytics']],
+      business: [['Cloudflare', 'Domains, DNS, and the public edge'], ['GitHub', 'Site code and review'], ['Stripe', 'Checkout and billing'], ['Linear', 'The launch plan']],
+    },
+    automation: {
+      myself: [['GitHub', 'Repositories and triggers'], ['Slack', 'Notifications where you already are'], ['Google Drive', 'The files the flow touches'], ['Home Assistant', 'Your local devices']],
+      business: [['GitHub', 'Repositories and review'], ['Slack', 'Team notifications'], ['Linear', 'Work items and handoffs'], ['Google Workspace', 'Mail, calendar, and files']],
+    },
+    agent: {
+      myself: [['OpenAI', 'A model to reason with'], ['Anthropic', 'A second model'], ['GitHub', 'The code it can change'], ['Slack', 'A place to report back']],
+      business: [['OpenAI', 'Team model access'], ['Anthropic', 'A second provider'], ['GitHub', 'Code and review'], ['Slack', 'Team context']],
+    },
+    presentation: {
+      myself: [['Figma', 'The visual source'], ['Google Drive', 'Slides and files'], ['Notion', 'The outline'], ['Loom', 'A quick recording']],
+      business: [['Figma', 'Brand and layout'], ['Google Drive', 'Shared decks'], ['Notion', 'The narrative'], ['Slack', 'Review and feedback']],
+    },
+    document: {
+      myself: [['Notion', 'Long-form writing'], ['Google Drive', 'Files and exports'], ['Dropbox', 'The archive'], ['Readwise', 'The reading trail']],
+      business: [['Notion', 'The team wiki'], ['Google Drive', 'Shared documents'], ['Dropbox', 'The archive'], ['Linear', 'The work it belongs to']],
+    },
+  };
+
+  const whatLabels = {
+    website: 'a website',
+    automation: 'an automation',
+    agent: 'an agent',
+    presentation: 'a presentation',
+    document: 'a document',
+  };
+
+  function paintWizardChoices() {
+    onboarding?.querySelectorAll('[data-where]').forEach((node) => {
+      node.classList.toggle('is-selected', node.dataset.where === wizardAnswers.where);
+      node.setAttribute('aria-pressed', String(node.dataset.where === wizardAnswers.where));
+    });
+    onboarding?.querySelectorAll('[data-what]').forEach((node) => {
+      node.classList.toggle('is-selected', node.dataset.what === wizardAnswers.what);
+      node.setAttribute('aria-pressed', String(node.dataset.what === wizardAnswers.what));
+    });
+  }
+
+  function refreshWizardControls() {
+    const whereNext = onboarding?.querySelector('[data-wizard-step="4"] [data-wizard-next]');
+    const whatNext = onboarding?.querySelector('[data-wizard-step="5"] [data-wizard-next]');
+    if (whereNext) whereNext.disabled = !wizardAnswers.where;
+    if (whatNext) whatNext.disabled = !wizardAnswers.what;
+  }
+
+  function paintConnections() {
+    if (!connectionsList) return;
+    connectionsList.querySelectorAll('[data-connection]').forEach((node) => {
+      const selected = wizardConnections.has(node.dataset.connection);
+      node.classList.toggle('is-selected', selected);
+      node.setAttribute('aria-pressed', String(selected));
+    });
+  }
+
+  function renderConnections() {
+    if (!connectionsList) return;
+    const where = wizardAnswers.where || 'myself';
+    const what = wizardAnswers.what || 'document';
+    const options = connectionCatalog[what]?.[where] || [];
+    wizardConnections = new Set(options.map(([name]) => name));
+    connectionsList.replaceChildren();
+    if (connectionsTitle) connectionsTitle.textContent = 'Start with these.';
+    if (connectionsCopy) {
+      connectionsCopy.textContent = `For ${where === 'business' ? 'a business' : 'yourself'}, starting with ${whatLabels[what]}, these are the first connections we would prioritize. You can change them later.`;
+    }
+    for (const [name, note] of options) {
+      const button = document.createElement('button');
+      button.className = 'connection';
+      button.type = 'button';
+      button.dataset.connection = name;
+      button.setAttribute('aria-pressed', 'true');
+      const mark = document.createElement('span');
+      mark.className = 'connection-mark';
+      mark.textContent = name.slice(0, 1);
+      const copy = document.createElement('span');
+      copy.className = 'connection-copy';
+      const strong = document.createElement('strong');
+      strong.textContent = name;
+      const small = document.createElement('small');
+      small.textContent = note;
+      copy.append(strong, small);
+      const check = document.createElement('span');
+      check.className = 'connection-check';
+      check.textContent = '✓';
+      button.append(mark, copy, check);
+      connectionsList.append(button);
+    }
+    paintConnections();
+  }
+
+  function saveWizardAnswers() {
+    try {
+      localStorage.setItem('mycelium.orientation.answers', JSON.stringify({
+        ...wizardAnswers,
+        connections: [...wizardConnections],
+      }));
+    } catch {}
+  }
 
   function setWizardStep(step) {
     if (!onboarding) return;
@@ -285,14 +437,20 @@
     onboarding.querySelectorAll('.onboarding-progress i').forEach((node, index) => {
       node.classList.toggle('is-active', index < wizardStep);
     });
+    if (wizardStep === 6) renderConnections();
+    paintWizardChoices();
+    refreshWizardControls();
     const focusable = onboarding.querySelector(
-      `[data-wizard-step="${wizardStep}"] button, [data-wizard-step="${wizardStep}"] input`,
+      `[data-wizard-step="${wizardStep}"] button:not(:disabled), [data-wizard-step="${wizardStep}"] input`,
     );
     focusable?.focus();
   }
 
   function openOrientation() {
     if (!onboarding) return;
+    wizardAnswers = { where: null, what: null };
+    wizardConnections = new Set();
+    paintWizardChoices();
     setWizardStep(1);
     onboarding.hidden = false;
   }
@@ -306,6 +464,8 @@
       window.setTimeout(openOrientation, 700);
     }
   } catch {}
+
+  setAgentContext('desk');
 
   const clock = document.getElementById('clock');
   function tick() {

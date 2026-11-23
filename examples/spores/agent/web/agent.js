@@ -35,6 +35,10 @@
     context = { app: next.app || context.app, detail: next.detail || context.detail };
     app.textContent = context.app;
     detail.textContent = context.detail;
+    const emptyTitle = document.getElementById('empty-title');
+    if (emptyTitle) {
+      emptyTitle.textContent = context.app === 'This app' ? 'Work inside the app.' : `You're in ${context.app}.`;
+    }
   }
 
   window.addEventListener('message', (event) => {
