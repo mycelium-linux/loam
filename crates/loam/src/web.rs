@@ -66,6 +66,7 @@ pub fn discover(roots: &[PathBuf]) -> Result<Vec<StaticSurface>> {
                     .and_then(|source| SoilManifest::parse(&source).ok())
                     .and_then(|manifest| {
                         let anycast = manifest.anycast.clone()?;
+                        let writable = manifest.grants.contains_key("soil:vfs-mut");
                         static_surface(
                             &package,
                             manifest.id,
@@ -73,8 +74,8 @@ pub fn discover(roots: &[PathBuf]) -> Result<Vec<StaticSurface>> {
                             anycast,
                             &manifest.surfaces,
                             None,
-                            None,
-                            false,
+                            manifest.web,
+                            writable,
                         )
                     })
             } else if toml.is_file() {
@@ -864,6 +865,34 @@ mod tests {
         assert_eq!(surface.kind, "web");
         assert_eq!(surface.anycast.alpns, vec!["soil/http/1"]);
         assert_eq!(surface.entry, temp.path().join("site/index.html"));
+    }
+
+    #[test]
+    fn a_soil_manifest_keeps_its_web_root_and_write_grant() {
+        let temp = tempfile::tempdir().expect("temp");
+        package(
+            temp.path(),
+            "spore.soil",
+            r#"(spore
+                 (id "fpl.fabrication-studio")
+                 (version "0.1.0")
+                 (anycast (name "studio") (kind "web") (alpns ("soil/http/1")))
+                 (surfaces (surface "web" (kind "web") (entry "index.html")))
+                 (web (vfs-root "studio"))
+                 (grants
+                   ("soil:vfs" "read pipeline documents")
+                   ("soil:vfs-mut" "save pipeline documents")))"#,
+        );
+        let surfaces = discover(&[temp.path().to_path_buf()]).expect("discover");
+        let surface = &surfaces[0];
+        assert_eq!(
+            surface.web.as_ref().map(|web| web.vfs_root.as_str()),
+            Some("studio")
+        );
+        assert!(
+            surface.writable,
+            "the soil:vfs-mut grant must survive discovery"
+        );
     }
 
     #[test]

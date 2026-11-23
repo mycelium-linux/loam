@@ -35,6 +35,10 @@ pub struct SoilManifest {
     pub module: Option<String>,
     pub anycast: Option<Anycast>,
     pub surfaces: Vec<Surface>,
+    /// Declared grants: the request half of consent. The host decides.
+    pub grants: std::collections::BTreeMap<String, String>,
+    /// The bounded workspace prefix a web surface may address.
+    pub web: Option<crate::spore::Web>,
 }
 
 impl SoilManifest {
@@ -59,6 +63,8 @@ impl SoilManifest {
         let mut module = None;
         let mut anycast = None;
         let mut surfaces = Vec::new();
+        let mut grants = std::collections::BTreeMap::new();
+        let mut web = None;
         for field in spore.iter().skip(1) {
             let Sexp::List(items) = field else {
                 continue;
@@ -73,6 +79,28 @@ impl SoilManifest {
                 "module" => module = string(items.get(1)),
                 "anycast" => anycast = parse_anycast(items)?,
                 "surfaces" => surfaces = parse_surfaces(items)?,
+                // (grants ("soil:vfs" "why it is needed") ...)
+                "grants" => {
+                    for grant in items.iter().skip(1) {
+                        let Sexp::List(pair) = grant else { continue };
+                        if let Some(name) = string(pair.first()) {
+                            let reason = string(pair.get(1)).unwrap_or_default();
+                            grants.insert(name, reason);
+                        }
+                    }
+                }
+                // (web (vfs-root "studio"))
+                "web" => {
+                    for field in items.iter().skip(1) {
+                        let Sexp::List(pair) = field else { continue };
+                        if let (Some(Sexp::Atom(key)), Some(value)) =
+                            (pair.first(), string(pair.get(1)))
+                            && key == "vfs-root"
+                        {
+                            web = Some(crate::spore::Web { vfs_root: value });
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -87,6 +115,8 @@ impl SoilManifest {
             module,
             anycast,
             surfaces,
+            grants,
+            web,
         })
     }
 }
@@ -174,11 +204,6 @@ fn parse_surfaces(items: &[Sexp]) -> Result<Vec<Surface>> {
                     let value = string(pair.get(1))
                         .ok_or_else(|| Error::Invalid("surface kind needs a value".into()))?;
                     kind = SurfaceKind::parse(&value);
-                    if kind.is_none() {
-                        return Err(Error::Invalid(format!(
-                            "surface {name:?} has unknown kind {value:?}"
-                        )));
-                    }
                 }
                 "entry" => entry = string(pair.get(1)),
                 "assets" => {
@@ -194,11 +219,13 @@ fn parse_surfaces(items: &[Sexp]) -> Result<Vec<Surface>> {
                 _ => {}
             }
         }
-        let kind = kind.or_else(|| SurfaceKind::parse(&name)).ok_or_else(|| {
-            Error::Invalid(format!(
-                "surface {name:?} declares no kind and its name is not one"
-            ))
-        })?;
+        let Some(kind) = kind.or_else(|| SurfaceKind::parse(&name)) else {
+            // This reader answers one question: what does a router serve? A
+            // `cli` or build-only surface is real in the source manifest but
+            // has no presentation route here, so skip it rather than dropping
+            // the whole manifest (and the web surface beside it).
+            continue;
+        };
         surfaces.push(Surface {
             name,
             kind,
@@ -331,6 +358,28 @@ mod tests {
         assert_eq!(manifest.surfaces.len(), 1);
         assert_eq!(manifest.surfaces[0].kind, SurfaceKind::Web);
         assert_eq!(manifest.surfaces[0].entry.as_deref(), Some("index.html"));
+    }
+
+    #[test]
+    fn reads_the_web_root_and_grants_from_the_source_manifest() {
+        let manifest = SoilManifest::parse(
+            r#"(spore
+                 (id "fpl.fabrication-studio")
+                 (version "0.1.0")
+                 (surfaces
+                   (surface "web" (kind "web") (entry "web/index.html"))
+                   (surface "cli" (kind "cli") (world "wasi:cli/command@0.2.0")))
+                 (web (vfs-root "studio"))
+                 (grants
+                   ("soil:vfs" "read pipeline documents")
+                   ("soil:vfs-mut" "save pipeline documents")))"#,
+        )
+        .expect("a soil manifest");
+        assert_eq!(manifest.web.expect("web root").vfs_root, "studio");
+        assert_eq!(manifest.surfaces.len(), 1);
+        assert_eq!(manifest.surfaces[0].kind, SurfaceKind::Web);
+        assert!(manifest.grants.contains_key("soil:vfs"));
+        assert!(manifest.grants.contains_key("soil:vfs-mut"));
     }
 
     #[test]
