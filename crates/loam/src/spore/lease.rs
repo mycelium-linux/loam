@@ -88,6 +88,7 @@ pub fn document(
             "confidence": "strong",
             "value": {
                 "kind": anycast.kind,
+                "names": [anycast.name],
                 "endpoints": endpoints,
                 "protocols": [scheme_of(&endpoints[0])],
                 "formats": [],

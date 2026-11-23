@@ -1933,7 +1933,7 @@ fn grants(value: &str) -> bool {
     let Some((package, interface)) = value.split_once(':') else {
         return false;
     };
-    matches!(package, "soil" | "wasi" | "fungos" | "loam")
+    matches!(package, "soil" | "wasi" | "fungos" | "loam" | "ajmwagar")
         && !interface.is_empty()
         && interface.chars().all(|c| {
             c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '.' | '_' | '/')
@@ -2376,6 +2376,25 @@ pub fn imported_packages(bytes: &[u8]) -> Result<BTreeSet<String>> {
     Ok(packages)
 }
 
+/// The packages a component exports. A provider's exported interface may pull
+/// in its own type package as an import; that package is part of the provider
+/// contract, not a capability the consumer must declare.
+pub fn exported_packages(bytes: &[u8]) -> Result<BTreeSet<String>> {
+    let (resolve, world) = decoded_world(bytes)?;
+    let mut packages = BTreeSet::new();
+    for key in resolve.worlds[world].exports.keys() {
+        let wit_parser::WorldKey::Interface(id) = key else {
+            continue;
+        };
+        let Some(package) = resolve.interfaces[*id].package else {
+            continue;
+        };
+        let name = &resolve.packages[package].name;
+        packages.insert(format!("{}:{}", name.namespace, name.name));
+    }
+    Ok(packages)
+}
+
 /// WASI packages a component built from a normal language toolchain imports
 /// without asking.
 ///
@@ -2428,7 +2447,11 @@ fn check_imported_grants(
     grants: &BTreeMap<String, String>,
 ) -> Result<()> {
     let imported = imported_packages(bytes)?;
-    let undeclared = undeclared_packages(&imported, grants);
+    let exported = exported_packages(bytes)?;
+    let undeclared = undeclared_packages(&imported, grants)
+        .into_iter()
+        .filter(|package| !exported.contains(package))
+        .collect::<Vec<_>>();
     if !undeclared.is_empty() {
         return Err(Error::Invalid(format!(
             "{face} {module} imports {} but [grants] does not declare {}",
@@ -3482,6 +3505,7 @@ mod anycast_tests {
             format!("service/{}/application/confluence", identity.node_id)
         );
         assert_eq!(observation["value"]["kind"], "confluence");
+        assert_eq!(observation["value"]["names"][0], "confluence");
         assert_eq!(
             observation["value"]["endpoints"][0],
             "http://10.253.0.6:8788"
