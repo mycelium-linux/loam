@@ -304,6 +304,15 @@ struct WireVersion {
 }
 
 #[cfg(feature = "records")]
+#[derive(serde::Deserialize)]
+struct WireFilter {
+    field: String,
+    op: String,
+    #[serde(default)]
+    value: Option<String>,
+}
+
+#[cfg(feature = "records")]
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct WireEntry {
@@ -504,6 +513,58 @@ fn records_api(
                     params.cursor,
                     limit,
                 ) {
+                    Ok(page) => {
+                        json!({"ok": {"entries": page.entries.into_iter().map(WireEntry::from_entry).collect::<Vec<_>>(), "next": page.next}})
+                    }
+                    Err(error) => records_error(error),
+                }
+            }
+            "query" => {
+                #[derive(serde::Deserialize)]
+                struct Params {
+                    #[serde(default)]
+                    prefix: Option<String>,
+                    #[serde(default)]
+                    filters: Vec<WireFilter>,
+                    #[serde(default)]
+                    fields: Vec<String>,
+                    #[serde(default)]
+                    cursor: Option<String>,
+                    #[serde(default)]
+                    limit: Option<u32>,
+                }
+                let Ok(params) = serde_json::from_value::<Params>(request.call.params.clone())
+                else {
+                    return call_error("invalid", "query params");
+                };
+                let mut filters = Vec::with_capacity(params.filters.len());
+                for filter in params.filters {
+                    let op = match filter.op.as_str() {
+                        "eq" => records::FilterOp::Eq,
+                        "prefix" => records::FilterOp::Prefix,
+                        "contains" => records::FilterOp::Contains,
+                        "exists" => records::FilterOp::Exists,
+                        "lt" => records::FilterOp::Lt,
+                        "lte" => records::FilterOp::Lte,
+                        "gt" => records::FilterOp::Gt,
+                        "gte" => records::FilterOp::Gte,
+                        _ => return call_error("invalid", "unknown query filter"),
+                    };
+                    filters.push(records::Filter {
+                        field: filter.field,
+                        op,
+                        value: filter.value,
+                    });
+                }
+                let spec = records::QuerySpec {
+                    collection: collection_hint.to_owned(),
+                    prefix: params.prefix,
+                    filters,
+                    fields: params.fields,
+                    cursor: params.cursor,
+                    limit: params.limit.unwrap_or(50).clamp(1, 200),
+                };
+                match crate::records_host::query(&mut host, spec) {
                     Ok(page) => {
                         json!({"ok": {"entries": page.entries.into_iter().map(WireEntry::from_entry).collect::<Vec<_>>(), "next": page.next}})
                     }

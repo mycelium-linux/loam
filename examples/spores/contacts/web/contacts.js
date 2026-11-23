@@ -6,6 +6,7 @@
   const form = document.getElementById('form');
   const reload = document.getElementById('reload-contacts');
   const loadMore = document.getElementById('load-more');
+  const searchInput = document.getElementById('contact-search');
   const fields = {
     name: document.getElementById('field-name'),
     email: document.getElementById('field-email'),
@@ -26,6 +27,8 @@
   let dirty = false;
   let conflict = false;
   let saveTimer = 0;
+  let searchTimer = 0;
+  let searchTerm = '';
 
   const decodeText = (base64) => {
     const binary = atob(base64);
@@ -143,11 +146,13 @@
 
   function render() {
     list.replaceChildren();
-    count.textContent = `${order.length} loaded${cursor ? '' : ' · all'}`;
+    count.textContent = searchTerm
+      ? `${order.length} match${order.length === 1 ? '' : 'es'}${cursor ? '+' : ''}`
+      : `${order.length} loaded${cursor ? '' : ' · all'}`;
     if (!order.length) {
       const quiet = document.createElement('p');
       quiet.className = 'contact-empty';
-      quiet.textContent = 'No contacts yet.';
+      quiet.textContent = searchTerm ? 'No matches.' : 'No contacts yet.';
       list.append(quiet);
     } else {
       for (const id of order) {
@@ -162,13 +167,28 @@
     order.sort((left, right) => (contacts.get(left)?.name || '').localeCompare(contacts.get(right)?.name || '', undefined, { sensitivity: 'base' }));
   }
 
-  async function loadPage() {
+  async function loadPage({ reset = false } = {}) {
     if (loading) return;
+    if (reset) {
+      contacts.clear();
+      order = [];
+      cursor = null;
+      selected = null;
+      form.hidden = true;
+      empty.hidden = false;
+    }
     loading = true;
     if (loadMore) loadMore.disabled = true;
-    setStatus('Loading records…');
+    setStatus(searchTerm ? `Searching for “${searchTerm}”…` : 'Loading records…');
     try {
-      const page = await call('scan', { collection: COLLECTION, cursor, limit: PAGE });
+      const page = searchTerm
+        ? await call('query', {
+            collection: COLLECTION,
+            filters: [{ field: 'display_name', op: 'contains', value: searchTerm }],
+            cursor,
+            limit: PAGE,
+          })
+        : await call('scan', { collection: COLLECTION, cursor, limit: PAGE });
       for (const entry of page.entries || []) {
         const contact = contactFromEntry(entry);
         if (!contacts.has(contact.id)) order.push(contact.id);
@@ -177,7 +197,9 @@
       cursor = page.next || null;
       sortOrder();
       render();
-      setStatus(`Loaded ${order.length}${cursor ? '+' : ''} contacts`);
+      setStatus(searchTerm
+        ? `Found ${order.length}${cursor ? '+' : ''} for “${searchTerm}”`
+        : `Loaded ${order.length}${cursor ? '+' : ''} contacts`);
     } catch (error) {
       setStatus(error.message, true);
     } finally {
@@ -364,6 +386,18 @@
       scheduleSave();
     });
   }
+  searchInput?.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = window.setTimeout(async () => {
+      searchTerm = searchInput.value.trim();
+      if (dirty && !conflict) await saveContact();
+      if (conflict) {
+        setStatus('Reload the current contact before searching', true);
+        return;
+      }
+      await loadPage({ reset: true });
+    }, 300);
+  });
   document.getElementById('new-contact').addEventListener('click', newContact);
   document.getElementById('delete-contact').addEventListener('click', deleteContact);
   reload?.addEventListener('click', () => void reloadContact());

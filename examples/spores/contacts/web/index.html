@@ -14,7 +14,12 @@
   <main class="contacts-page">
     <header class="contacts-head">
       <div><p class="eyebrow">Personal</p><h1>People</h1><p id="status">Loading records…</p></div>
-      <div><span class="contact-count" id="count">0 contacts</span> <button id="load-more" type="button" hidden>Load more</button> <button id="new-contact" type="button">New contact</button></div>
+      <div class="contacts-head-tools">
+        <input id="contact-search" type="search" placeholder="Search names" aria-label="Search contacts by name" autocomplete="off">
+        <span class="contact-count" id="count">0 contacts</span>
+        <button id="load-more" type="button" hidden>Load more</button>
+        <button id="new-contact" type="button">New contact</button>
+      </div>
     </header>
     <div class="contacts-grid">
       <aside class="contacts-list" id="contact-list" aria-label="Contacts"></aside>

@@ -3,6 +3,9 @@ body { background: var(--paper-raised); }
 .contacts-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
 .contacts-head h1 { margin: 0; font-family: var(--font-display); font-size: clamp(28px, 4vw, 44px); letter-spacing: -.045em; }
 .contacts-head p { margin: 4px 0 0; color: var(--ink-3); font: 10.5px var(--font-mono); }
+.contacts-head-tools { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.contacts-head-tools input { width: 180px; height: 30px; border: 1px solid var(--hairline-strong); border-radius: 5px; background: var(--paper); color: var(--ink); padding: 0 9px; font: 12px var(--font-ui); }
+.contacts-head-tools input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 .contacts-head button, .contact-actions button { border: 1px solid var(--hairline-strong); border-radius: 5px; background: var(--paper-raised); color: var(--ink-2); padding: 6px 10px; font-size: 11px; cursor: pointer; }
 .contacts-head button:hover, .contact-actions button:hover { background: var(--paper-muted); color: var(--ink); }
 .contacts-grid { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 18px; min-height: 430px; }

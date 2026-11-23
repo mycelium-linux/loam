@@ -77,9 +77,11 @@ collection = "contact"
                 "params":{"collection":"contact","limit":50}}}
 ```
 
-Supported functions are `scan`, `get`, `upsert`, `compare-and-swap`, and
-`delete`. Reads require a records grant; writes require `soil:records.write`.
-The page only sees the declared collection and never names the book itself.
+Supported functions are `scan`, `query`, `get`, `upsert`, `compare-and-swap`,
+and `delete`. `query` takes the canonical filters/cursor/limit shape, which is
+what the People search box uses for paged name search. Reads require a records
+grant; writes require `soil:records.write`. The page only sees the declared
+collection and never names the book itself.
 
 The pages are static assets and talk only to their own origin. A desktop shell
 embeds them as iframes; the gateway forwards the browser Host as
