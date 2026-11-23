@@ -26,7 +26,9 @@
     el.hidden = false;
     el.classList.add('is-open');
     const frame = el.querySelector('iframe[data-src]');
-    if (frame && !frame.src) frame.src = frame.dataset.src;
+    if (frame && frame.getAttribute('src') !== frame.dataset.src) {
+      frame.src = frame.dataset.src;
+    }
     focusWindow(el);
   }
 
