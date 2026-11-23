@@ -20,7 +20,7 @@ use std::{
     },
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, RwLock,
         atomic::{AtomicBool, Ordering},
     },
     thread,
@@ -78,6 +78,7 @@ pub enum Request {
     Stop {
         id: String,
     },
+    Reload,
     Shutdown,
 }
 
@@ -138,8 +139,9 @@ pub fn serve(options: Options) -> Result<()> {
     let registry = Arc::new(CommandRegistry::scan_roots(&options.roots)?);
     let plugins = PluginRegistry::scan_roots(&options.roots)?;
     let daemon = Arc::new(Daemon {
-        registry,
-        plugins,
+        roots: options.roots,
+        registry: RwLock::new(registry),
+        plugins: RwLock::new(plugins),
         records: options.records,
         bus: options.bus,
         max_instances: options.max_instances,
@@ -250,8 +252,9 @@ fn peer_uid(_stream: &UnixStream) -> Result<u32> {
 }
 
 struct Daemon {
-    registry: Arc<CommandRegistry>,
-    plugins: PluginRegistry,
+    roots: Vec<PathBuf>,
+    registry: RwLock<Arc<CommandRegistry>>,
+    plugins: RwLock<PluginRegistry>,
     records: Option<RecordsBinding>,
     bus: Option<Arc<dyn Bus>>,
     max_instances: usize,
@@ -380,6 +383,7 @@ impl Daemon {
                 max_memory_bytes,
             ),
             Request::Stop { id } => self.stop(&id),
+            Request::Reload => self.reload_request(),
             Request::Shutdown => self.shutdown(),
         }
     }
@@ -401,9 +405,25 @@ impl Daemon {
         if id.trim().is_empty() {
             return error("instance id must not be empty");
         }
-        let entry = match self.registry.get(&command) {
-            Some(entry) => entry.clone(),
-            None => return error(format!("unknown command {command:?}")),
+        let mut entry = self
+            .registry
+            .read()
+            .expect("registry lock poisoned")
+            .get(&command)
+            .cloned();
+        if entry.is_none() {
+            if let Err(failure) = self.reload() {
+                return error(format!("reload command roots: {failure:#}"));
+            }
+            entry = self
+                .registry
+                .read()
+                .expect("registry lock poisoned")
+                .get(&command)
+                .cloned();
+        }
+        let Some(entry) = entry else {
+            return error(format!("unknown command {command:?}"));
         };
         let limits = RunLimits {
             timeout_ms: timeout_ms.unwrap_or(entry.timeout_ms),
@@ -431,8 +451,9 @@ impl Daemon {
         }
         drop(instances);
 
+        let plugins = self.plugins.read().expect("plugin lock poisoned").clone();
         let runner = match CommandRunner::new(self.records.clone(), self.bus.clone()) {
-            Ok(runner) => runner.with_plugins(self.plugins.clone()),
+            Ok(runner) => runner.with_plugins(plugins),
             Err(failure) => return error(format!("{failure:#}")),
         };
         let cancel = runner.engine().clone();
@@ -490,6 +511,31 @@ impl Daemon {
         });
 
         ok(json!({"id": id, "state": "running"}))
+    }
+
+    fn reload(&self) -> Result<()> {
+        let registry = Arc::new(CommandRegistry::scan_roots(&self.roots)?);
+        let plugins = PluginRegistry::scan_roots(&self.roots)?;
+        *self.registry.write().expect("registry lock poisoned") = registry;
+        *self.plugins.write().expect("plugin lock poisoned") = plugins;
+        Ok(())
+    }
+
+    fn reload_request(&self) -> Value {
+        match self.reload() {
+            Ok(()) => {
+                let registry = self.registry.read().expect("registry lock poisoned");
+                let plugins = self.plugins.read().expect("plugin lock poisoned");
+                ok(json!({
+                    "commands": registry.path(),
+                    "providers": plugins.interfaces().count(),
+                    "refused": plugins.refused().iter().map(|refusal| {
+                        json!({"name": refusal.name, "reason": refusal.reason})
+                    }).collect::<Vec<_>>(),
+                }))
+            }
+            Err(failure) => error(format!("{failure:#}")),
+        }
     }
 
     fn stop(&self, id: &str) -> Value {
@@ -556,6 +602,40 @@ mod tests {
         let (left, right) = UnixStream::pair().unwrap();
         assert_eq!(peer_uid(&left).unwrap(), unsafe { libc::geteuid() });
         assert_eq!(peer_uid(&right).unwrap(), unsafe { libc::geteuid() });
+    }
+
+    #[test]
+    fn reload_picks_up_a_new_command_package() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("loamd.sock");
+        let options = Options::new(&socket, vec![dir.path().to_path_buf()]);
+        let server = thread::spawn(move || serve(options));
+        for _ in 0..40 {
+            if socket.exists() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        let package = dir.path().join("hello");
+        fs::create_dir_all(&package).unwrap();
+        fs::write(package.join("module.wasm"), b"\0asm").unwrap();
+        fs::write(
+            package.join("command.toml"),
+            "schema = 1\n[command]\nname = \"hello\"\nversion = \"0.1.0\"\nsummary = \"test\"\nmodule = \"module.wasm\"\n",
+        )
+        .unwrap();
+        let reload = request(&socket, &Request::Reload).unwrap();
+        assert_eq!(reload["ok"], true);
+        assert!(
+            reload["data"]["commands"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|name| name == "hello")
+        );
+        let shutdown = request(&socket, &Request::Shutdown).unwrap();
+        assert_eq!(shutdown["ok"], true);
+        server.join().unwrap().unwrap();
     }
 
     #[test]

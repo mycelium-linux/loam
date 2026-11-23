@@ -14,7 +14,7 @@ const DEFAULT_MAX_INSTANCES: usize = 8;
 fn usage() -> &'static str {
     r#"usage: loamd [serve] [--socket PATH] [--root DIR]...
        loamd start COMMAND [ARGS...] [--id ID] [--socket PATH]
-       loamd list|ping|inspect ID|logs ID|stop ID|shutdown [--socket PATH]"#
+       loamd list|ping|inspect ID|logs ID|stop ID|reload|shutdown [--socket PATH]"#
 }
 
 fn main() {
@@ -36,7 +36,7 @@ fn run() -> Result<()> {
     let (operation, args) = match args.first().map(String::as_str) {
         Some(
             operation @ ("serve" | "ping" | "list" | "inspect" | "logs" | "start" | "stop"
-            | "shutdown"),
+            | "reload" | "shutdown"),
         ) => (operation.to_string(), args[1..].to_vec()),
         _ => ("serve".to_string(), args),
     };
@@ -253,6 +253,7 @@ fn parse_client(operation: &str, args: &[String]) -> Result<(PathBuf, Request)> 
         "stop" => Request::Stop {
             id: id.context("stop needs ID")?,
         },
+        "reload" => Request::Reload,
         "shutdown" => Request::Shutdown,
         "start" => {
             let command = command.context("start needs COMMAND")?;
