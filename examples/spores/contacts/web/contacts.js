@@ -77,6 +77,8 @@
     for (const [key, input] of Object.entries(fields)) input.value = contact[key] || '';
     markDirty(false);
     setStatus('Open');
+    window.__MYCELIUM_AGENT_CONTEXT = { app: 'People', detail: contact.name || contact.email || id };
+    window.dispatchEvent(new CustomEvent('mycelium-agent-context', { detail: window.__MYCELIUM_AGENT_CONTEXT }));
     render();
   }
 

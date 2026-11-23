@@ -82,6 +82,8 @@
       meta.textContent = version == null ? '' : `v${version}`;
       markDirty(false);
       setStatus('Open');
+      window.__MYCELIUM_AGENT_CONTEXT = { app: 'Notes', detail: path };
+      window.dispatchEvent(new CustomEvent('mycelium-agent-context', { detail: window.__MYCELIUM_AGENT_CONTEXT }));
       for (const row of list.querySelectorAll('.note-row')) row.setAttribute('aria-current', String(row.dataset.path === path));
     } catch (error) {
       setStatus(error.message, true);

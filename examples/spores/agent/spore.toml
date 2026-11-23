@@ -1,0 +1,35 @@
+schema = 1
+
+[spore]
+id = "org.mycelium.agent"
+name = "agent"
+version = "0.1.0"
+license = "Apache-2.0 OR MIT"
+summary = "A right-edge agent sidebar for any Mycelium Spore"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+
+[launch]
+default = "web"
+surfaces = ["web"]
+
+[[surfaces]]
+name = "web"
+kind = "web"
+entry = "web/index.html"
+
+[anycast]
+name = "agent"
+kind = "agent"
+alpns = ["soil/http/1"]
+ttl_secs = 240
+
+[denied]
+"soil:http" = ["the UI is a surface; inference and tool authority belong to the host"]
+"wasi:filesystem" = ["the sidebar edits the app through the host, not the disk"]
+
+[presentation]
+badge = "A"
+color = "#c9b3ff"

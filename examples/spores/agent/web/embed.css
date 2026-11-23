@@ -1,0 +1,93 @@
+.mycelium-agent-root {
+  --agent-accent: #c9b3ff;
+  --agent-accent-2: #8b6fd6;
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  pointer-events: none;
+  font: 13px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+}
+.mycelium-agent-rail {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 16px;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  cursor: w-resize;
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+}
+.mycelium-agent-rail::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 3px;
+  width: 2px;
+  height: 54px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--agent-accent) 62%, transparent), transparent);
+  opacity: .55;
+  transform: translateY(-50%);
+  transition: opacity 160ms ease, height 200ms ease, width 200ms ease;
+}
+.mycelium-agent-rail::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 2px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--agent-accent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--agent-accent) 72%, transparent);
+  opacity: 0;
+  transform: translateY(-50%);
+  transition: opacity 160ms ease;
+}
+.mycelium-agent-rail:hover::before,
+.mycelium-agent-root[data-open="true"] .mycelium-agent-rail::before {
+  width: 3px;
+  height: 84px;
+  opacity: .95;
+}
+.mycelium-agent-rail:hover::after,
+.mycelium-agent-root[data-open="true"] .mycelium-agent-rail::after { opacity: 1; }
+.mycelium-agent-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: min(404px, calc(100vw - 12px));
+  height: 100%;
+  border-left: 1px solid rgba(255,255,255,.13);
+  background: #0b0f15;
+  box-shadow: -24px 0 70px rgba(0,0,0,.46);
+  pointer-events: auto;
+  transform: translateX(104%);
+  opacity: 0;
+  visibility: hidden;
+  transition: transform 260ms cubic-bezier(.22,.8,.22,1), opacity 180ms ease, visibility 0s linear 260ms;
+}
+.mycelium-agent-root[data-open="true"] .mycelium-agent-panel {
+  transform: translateX(0);
+  opacity: 1;
+  visibility: visible;
+  transition: transform 260ms cubic-bezier(.22,.8,.22,1), opacity 180ms ease, visibility 0s;
+}
+.mycelium-agent-panel iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #0b0f15;
+}
+@media (max-width: 620px) {
+  .mycelium-agent-panel { width: 100vw; }
+  .mycelium-agent-rail { width: 22px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mycelium-agent-panel,
+  .mycelium-agent-rail::before,
+  .mycelium-agent-rail::after { transition: none; }
+}
