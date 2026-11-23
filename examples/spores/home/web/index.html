@@ -144,24 +144,63 @@
     <footer class="account-foot"><span class="account-dot" aria-hidden="true"></span>Local · Mycelium</footer>
   </section>
 
-  <section class="orientation" id="orientation" aria-label="Orientation" hidden>
-    <button class="orientation-scrim" type="button" data-orientation-close aria-label="Close orientation"></button>
-    <div class="orientation-panel" role="dialog" aria-modal="true" aria-labelledby="orientation-title">
-      <header class="orientation-head">
-        <span class="orientation-kicker">Orientation</span>
-        <button class="orientation-skip" type="button" data-orientation-close>Skip</button>
-      </header>
-      <div class="orientation-body">
-        <span class="orientation-art" id="orientation-art" aria-hidden="true">01</span>
-        <p class="orientation-count" id="orientation-count">01 / 04</p>
-        <h1 id="orientation-title">This desk is yours.</h1>
-        <p class="orientation-copy" id="orientation-copy"></p>
+  <section class="onboarding" id="onboarding" data-step="1" aria-label="Welcome to Mycelium" hidden>
+    <div class="onboarding-panel">
+      <button class="wizard-skip" type="button" data-wizard-skip>Skip setup</button>
+      <div class="onboarding-progress" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+
+      <div class="wizard-step" data-wizard-step="1">
+        <p class="welcome-kicker">Your desk</p>
+        <h1>Welcome.</h1>
+        <p class="welcome-copy">This Mac is awake. Your apps, files, and agent are mounted here, not in a browser tab.</p>
+        <div class="wizard-actions"><button class="btn-wizard" type="button" data-wizard-next>Continue</button></div>
       </div>
-      <footer class="orientation-foot">
-        <button class="orientation-back" id="orientation-back" type="button">Back</button>
-        <div class="orientation-dots" id="orientation-dots" aria-hidden="true"></div>
-        <button class="orientation-next" id="orientation-next" type="button">Next</button>
-      </footer>
+
+      <div class="wizard-step" data-wizard-step="2" hidden>
+        <p class="welcome-kicker">Two places</p>
+        <h2>One for you. One for this Mac.</h2>
+        <p class="welcome-copy">Personal is private. This Mac is the local workspace every Spore shares.</p>
+        <div class="wizard-desks">
+          <div class="wizard-desk"><span class="profile-circle profile-circle--personal" aria-hidden="true"></span><div><strong>Personal</strong><span>Private · yours</span></div></div>
+          <div class="wizard-desk"><span class="profile-circle profile-circle--work" aria-hidden="true"></span><div><strong>This Mac</strong><span>Local · ~/fungOS</span></div></div>
+        </div>
+        <div class="wizard-actions"><button class="wizard-back" type="button" data-wizard-back>Back</button><button class="btn-wizard" type="button" data-wizard-next>Continue</button></div>
+      </div>
+
+      <div class="wizard-step" data-wizard-step="3" hidden>
+        <p class="welcome-kicker">How it works</p>
+        <h2>Each desktop has its own world.</h2>
+        <p class="welcome-copy">Apps, files, and the agent belong to one desktop. The VFS is the part you can see in Finder.</p>
+        <div class="wizard-how">
+          <div class="wizard-how-row"><span class="wizard-how-mark wizard-how-mark--personal" aria-hidden="true"></span><div><strong>Personal stays private</strong><span>Only you can open it. Its files and apps stay yours.</span></div></div>
+          <div class="wizard-how-row"><span class="wizard-how-mark wizard-how-mark--work" aria-hidden="true"></span><div><strong>This Mac is local</strong><span>Writes land in the VFS at ~/fungOS and the store behind it.</span></div></div>
+          <div class="wizard-how-row"><span class="wizard-how-mark wizard-how-mark--vfs" aria-hidden="true"></span><div><strong>Apps are Spores</strong><span>Notes, People, and Files share one workspace, not a hosted backend.</span></div></div>
+        </div>
+        <div class="wizard-actions"><button class="wizard-back" type="button" data-wizard-back>Back</button><button class="btn-wizard" type="button" data-wizard-next>Continue</button></div>
+      </div>
+
+      <div class="wizard-step" data-wizard-step="4" hidden>
+        <p class="welcome-kicker">The agent</p>
+        <h2>Help is on the right edge.</h2>
+        <p class="welcome-copy">The agent lives beside the app. Hover the right edge to see the teaser, then click to pin it open.</p>
+        <div class="wizard-how">
+          <div class="wizard-how-row"><span class="wizard-how-mark wizard-how-mark--personal" aria-hidden="true"></span><div><strong>Hover the edge</strong><span>A small teaser appears without taking over the app.</span></div></div>
+          <div class="wizard-how-row"><span class="wizard-how-mark wizard-how-mark--work" aria-hidden="true"></span><div><strong>Click to pin</strong><span>It stays open while you work. Close it with Esc or the X.</span></div></div>
+          <div class="wizard-how-row"><span class="wizard-how-mark wizard-how-mark--vfs" aria-hidden="true"></span><div><strong>Drag to make room</strong><span>Resize from its left edge, or expand it full screen.</span></div></div>
+        </div>
+        <div class="wizard-actions"><button class="wizard-back" type="button" data-wizard-back>Back</button><button class="btn-wizard" type="button" data-wizard-next>Continue</button></div>
+      </div>
+
+      <div class="wizard-step" data-wizard-step="5" hidden>
+        <p class="welcome-kicker">Ready</p>
+        <h2>Choose where to start.</h2>
+        <p class="welcome-copy">You can reopen this tour from the avatar menu whenever you want.</p>
+        <div class="wizard-open-grid">
+          <button class="wizard-open" type="button" data-wizard-open="notes"><span class="app-tile app-notes" aria-hidden="true">N</span><span>Open Notes</span></button>
+          <button class="wizard-open" type="button" data-wizard-open="contacts"><span class="app-tile app-people" aria-hidden="true">P</span><span>Open People</span></button>
+        </div>
+        <div class="wizard-actions"><button class="wizard-back" type="button" data-wizard-back>Back</button></div>
+      </div>
     </div>
   </section>
 

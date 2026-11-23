@@ -51,10 +51,29 @@
       closeCommand();
       return;
     }
-    const orientationClose = event.target.closest('[data-orientation-close]');
-    if (orientationClose) {
+    const wizardSkip = event.target.closest('[data-wizard-skip]');
+    if (wizardSkip) {
       event.preventDefault();
       closeOrientation();
+      return;
+    }
+    const wizardNext = event.target.closest('[data-wizard-next]');
+    if (wizardNext) {
+      event.preventDefault();
+      setWizardStep(Number(onboarding?.dataset.step || 1) + 1);
+      return;
+    }
+    const wizardBack = event.target.closest('[data-wizard-back]');
+    if (wizardBack) {
+      event.preventDefault();
+      setWizardStep(Number(onboarding?.dataset.step || 1) - 1);
+      return;
+    }
+    const wizardOpen = event.target.closest('[data-wizard-open]');
+    if (wizardOpen) {
+      event.preventDefault();
+      closeOrientation();
+      open(wizardOpen.dataset.wizardOpen);
       return;
     }
     const orientationTrigger = event.target.closest('[data-orientation]');
@@ -252,83 +271,36 @@
     })
     .catch(() => {});
 
-  const orientationSteps = [
-    {
-      title: 'This desk is yours.',
-      copy: 'Everything here is local. The visible files live in the VFS at <code>~/fungOS</code>; the durable store is <code>~/.local/share/fungos/vfs</code>.',
-    },
-    {
-      title: 'Apps are Spores.',
-      copy: 'Notes, People and Files are separate packages mounted into windows. They share one workspace, not a hosted backend.',
-    },
-    {
-      title: 'The agent lives on the right.',
-      copy: 'Hover the right edge for the teaser. Click it to pin the agent open, drag its left edge to make room, or expand it full screen.',
-    },
-    {
-      title: 'The loop is visible.',
-      copy: 'Write a note, open People, or ask the agent. Your work lands in the same VFS — open <code>~/fungOS</code> in Finder to see it.',
-    },
-  ];
-  const orientation = document.getElementById('orientation');
-  const orientationArt = document.getElementById('orientation-art');
-  const orientationCount = document.getElementById('orientation-count');
-  const orientationTitle = document.getElementById('orientation-title');
-  const orientationCopy = document.getElementById('orientation-copy');
-  const orientationDots = document.getElementById('orientation-dots');
-  const orientationBack = document.getElementById('orientation-back');
-  const orientationNext = document.getElementById('orientation-next');
-  let orientationStep = 0;
+  const onboarding = document.getElementById('onboarding');
+  let wizardStep = 1;
 
-  function paintOrientation() {
-    const step = orientationSteps[orientationStep];
-    const number = String(orientationStep + 1).padStart(2, '0');
-    if (orientationArt) orientationArt.textContent = number;
-    if (orientationCount) orientationCount.textContent = `${number} / ${String(orientationSteps.length).padStart(2, '0')}`;
-    if (orientationTitle) orientationTitle.textContent = step.title;
-    if (orientationCopy) orientationCopy.innerHTML = step.copy;
-    if (orientationBack) orientationBack.disabled = orientationStep === 0;
-    if (orientationNext) orientationNext.textContent = orientationStep === orientationSteps.length - 1 ? 'Done' : 'Next';
-    if (orientationDots) {
-      orientationDots.replaceChildren();
-      orientationSteps.forEach((_, index) => {
-        const dot = document.createElement('span');
-        dot.className = `orientation-dot${index === orientationStep ? ' is-current' : ''}`;
-        orientationDots.append(dot);
-      });
-    }
+  function setWizardStep(step) {
+    if (!onboarding) return;
+    const max = onboarding.querySelectorAll('[data-wizard-step]').length;
+    wizardStep = Math.min(max, Math.max(1, Number(step) || 1));
+    onboarding.dataset.step = String(wizardStep);
+    onboarding.querySelectorAll('[data-wizard-step]').forEach((node) => {
+      node.hidden = Number(node.dataset.wizardStep) !== wizardStep;
+    });
+    onboarding.querySelectorAll('.onboarding-progress i').forEach((node, index) => {
+      node.classList.toggle('is-active', index < wizardStep);
+    });
+    const focusable = onboarding.querySelector(
+      `[data-wizard-step="${wizardStep}"] button, [data-wizard-step="${wizardStep}"] input`,
+    );
+    focusable?.focus();
   }
+
   function openOrientation() {
-    orientationStep = 0;
-    paintOrientation();
-    if (orientation) orientation.hidden = false;
-    orientationNext?.focus();
+    if (!onboarding) return;
+    setWizardStep(1);
+    onboarding.hidden = false;
   }
   function closeOrientation() {
-    if (!orientation || orientation.hidden) return;
-    orientation.hidden = true;
+    if (!onboarding || onboarding.hidden) return;
+    onboarding.hidden = true;
     try { localStorage.setItem('mycelium.orientation.seen', '1'); } catch {}
   }
-  orientationBack?.addEventListener('click', () => {
-    if (orientationStep > 0) {
-      orientationStep -= 1;
-      paintOrientation();
-    }
-  });
-  orientationNext?.addEventListener('click', () => {
-    if (orientationStep < orientationSteps.length - 1) {
-      orientationStep += 1;
-      paintOrientation();
-    } else {
-      closeOrientation();
-    }
-  });
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') {
-      closeAccountMenu();
-      closeOrientation();
-    }
-  });
   try {
     if (localStorage.getItem('mycelium.orientation.seen') !== '1') {
       window.setTimeout(openOrientation, 700);
