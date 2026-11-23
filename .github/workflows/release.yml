@@ -38,6 +38,7 @@ jobs:
           name="loam-${GITHUB_REF_NAME}-${TARGET}"
           mkdir -p "dist/$name/bin" "dist/$name/share/loam"
           cp "target/${TARGET}/release/loam" "dist/$name/bin/"
+          cp "target/${TARGET}/release/loamd" "dist/$name/bin/"
           cp "target/${TARGET}/release/loam-ble-host" "dist/$name/bin/"
           cp "target/${TARGET}/release/loam-mcp" "dist/$name/bin/"
           cp -R wit "dist/$name/share/loam/wit"

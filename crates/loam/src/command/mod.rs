@@ -84,6 +84,29 @@ fn default_memory() -> usize {
     256 * 1024 * 1024
 }
 
+/// Per-run limits, normally taken from the package's command entry.
+///
+/// A supervisor may override these for one instance without rewriting the
+/// package manifest. The runner treats them as hard host limits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RunLimits {
+    pub timeout_ms: u64,
+    pub max_stdout_bytes: usize,
+    pub max_stderr_bytes: usize,
+    pub max_memory_bytes: usize,
+}
+
+impl RunLimits {
+    pub fn from_entry(entry: &CommandEntry) -> Self {
+        Self {
+            timeout_ms: entry.timeout_ms,
+            max_stdout_bytes: entry.max_stdout_bytes,
+            max_stderr_bytes: entry.max_stderr_bytes,
+            max_memory_bytes: entry.max_memory_bytes,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CommandEntry {
     pub name: String,
@@ -96,6 +119,10 @@ pub struct CommandEntry {
     /// before it promises a program.
     pub requires: Vec<String>,
     pub module: PathBuf,
+    /// Composed runtime module, when resource providers were linked at install.
+    pub runtime_module: Option<PathBuf>,
+    /// Composition cache identity for `runtime_module`.
+    pub composition_key: Option<String>,
     pub timeout_ms: u64,
     pub max_stdout_bytes: usize,
     pub max_stderr_bytes: usize,
@@ -455,7 +482,8 @@ pub fn warm(roots: &[PathBuf]) -> Result<WarmReport> {
     let engine = Engine::new(&caching_config())?;
     let mut report = WarmReport::default();
     for entry in registry.entries() {
-        let digest = match std::fs::read(&entry.module) {
+        let module = entry.runtime_module.as_ref().unwrap_or(&entry.module);
+        let digest = match std::fs::read(module) {
             Ok(bytes) => hex(&Sha256::digest(&bytes)),
             Err(error) => {
                 report
@@ -465,11 +493,13 @@ pub fn warm(roots: &[PathBuf]) -> Result<WarmReport> {
             }
         };
         let marker = warm_marker(&entry.package, &entry.name);
-        if marker_digest(&marker).as_deref() == Some(digest.as_str()) {
+        if marker_digest(&marker).as_deref() == Some(digest.as_str())
+            && marker_key(&marker).as_deref() == entry.composition_key.as_deref()
+        {
             report.already.push(entry.name.clone());
             continue;
         }
-        if let Err(error) = wasmtime::component::Component::from_file(&engine, &entry.module) {
+        if let Err(error) = wasmtime::component::Component::from_file(&engine, module) {
             report
                 .skipped
                 .push((entry.name.clone(), format!("compile: {error}")));
@@ -477,8 +507,9 @@ pub fn warm(roots: &[PathBuf]) -> Result<WarmReport> {
         }
         let body = serde_json::json!({
             "name": entry.name,
-            "module": entry.module.display().to_string(),
+            "module": module.display().to_string(),
             "sha256": digest,
+            "composition_key": entry.composition_key,
             "warmed_at": std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|elapsed| elapsed.as_secs())
@@ -523,6 +554,15 @@ fn marker_digest(marker: &Path) -> Option<String> {
         .map(str::to_owned)
 }
 
+fn marker_key(marker: &Path) -> Option<String> {
+    let bytes = std::fs::read(marker).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    value
+        .get("composition_key")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+}
+
 fn hex(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -556,6 +596,74 @@ fn package_name(package: &Path) -> String {
     )
 }
 
+fn installed_runtime(package: &Path) -> (Option<PathBuf>, Option<String>) {
+    let runtime = package.join("runtime.wasm");
+    if !runtime.is_file() {
+        return (None, None);
+    }
+    let key = std::fs::read_to_string(package.join("runtime.key"))
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    (Some(runtime), key)
+}
+
+/// Read every command declared by one package directory.
+///
+/// A standalone command package is one command. A Spore package is every
+/// `[[commands]]` entry it declares. The caller supplies the package root; this
+/// does not scan a parent directory.
+pub fn package_commands(package: &Path) -> Result<Vec<CommandEntry>> {
+    if package.join("command.toml").is_file() {
+        standalone_command(package).map(|entry| vec![entry])
+    } else if package.join("spore.toml").is_file() {
+        spore_commands(package)
+    } else {
+        bail!(
+            "{} is neither a command package nor a Spore package",
+            package.display()
+        )
+    }
+}
+
+/// Compile one command module and write its warm marker for `package`.
+///
+/// The installer uses this before swapping a new generation into place, so a
+/// compile failure cannot disturb the active install. The marker is written
+/// beside the final package path, not the staging path.
+pub fn warm_entry(entry: &CommandEntry, package: &Path) -> Result<PathBuf> {
+    let module = entry.runtime_module.as_ref().unwrap_or(&entry.module);
+    let bytes =
+        std::fs::read(module).with_context(|| format!("read module {}", module.display()))?;
+    let digest = hex(&Sha256::digest(&bytes));
+    let marker = warm_marker(package, &entry.name);
+    if marker_digest(&marker).as_deref() == Some(digest.as_str())
+        && marker_key(&marker).as_deref() == entry.composition_key.as_deref()
+    {
+        return Ok(marker);
+    }
+    let engine = Engine::new(&caching_config())?;
+    wasmtime::component::Component::from_file(&engine, module)
+        .map_err(|error| anyhow::anyhow!("compile module {}: {error}", module.display()))?;
+    let body = serde_json::json!({
+        "name": entry.name,
+        "module": module.display().to_string(),
+        "sha256": digest,
+        "composition_key": entry.composition_key,
+        "warmed_at": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_secs())
+            .unwrap_or_default(),
+    });
+    if let Some(dir) = marker.parent() {
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("create warm directory {}", dir.display()))?;
+    }
+    std::fs::write(&marker, serde_json::to_vec_pretty(&body)?)
+        .with_context(|| format!("write {}", marker.display()))?;
+    Ok(marker)
+}
+
 /// One package that stands alone: `command.toml` beside its module.
 fn standalone_command(package: &Path) -> Result<CommandEntry> {
     let manifest_path = package.join("command.toml");
@@ -576,6 +684,7 @@ fn standalone_command(package: &Path) -> Result<CommandEntry> {
     if !module.is_file() {
         bail!("command {} module missing", manifest.command.name);
     }
+    let (runtime_module, composition_key) = installed_runtime(package);
     Ok(CommandEntry {
         name: manifest.command.name,
         version: manifest.command.version,
@@ -585,6 +694,8 @@ fn standalone_command(package: &Path) -> Result<CommandEntry> {
         // runner either satisfies `requires` or refuses the command.
         requires: manifest.command.requires,
         module,
+        runtime_module,
+        composition_key,
         timeout_ms: manifest.limits.timeout_ms,
         max_stdout_bytes: manifest.limits.max_stdout_bytes,
         max_stderr_bytes: manifest.limits.max_stderr_bytes,
@@ -609,6 +720,7 @@ fn spore_commands(package: &Path) -> Result<Vec<CommandEntry>> {
         if !module.is_file() {
             bail!("spore command {} module missing", command.name);
         }
+        let (runtime_module, composition_key) = installed_runtime(package);
         entries.push(CommandEntry {
             name: command.name.clone(),
             version: manifest.spore.version.clone(),
@@ -616,6 +728,8 @@ fn spore_commands(package: &Path) -> Result<Vec<CommandEntry>> {
             package: package.to_path_buf(),
             requires: manifest.grants.keys().cloned().collect(),
             module,
+            runtime_module,
+            composition_key,
             timeout_ms: limits.timeout_ms,
             max_stdout_bytes: limits.max_stdout_bytes,
             max_stderr_bytes: limits.max_stderr_bytes,
@@ -679,22 +793,38 @@ impl CommandRunner {
         self
     }
 
+    /// The engine this runner uses. A supervisor that needs per-instance
+    /// cancellation can keep a clone and call [`wasmtime::Engine::increment_epoch`].
+    pub fn engine(&self) -> &Engine {
+        &self.engine
+    }
+
     pub fn run(&self, entry: &CommandEntry, request: &RunRequest) -> Result<RunOutput> {
+        self.run_with_limits(entry, request, RunLimits::from_entry(entry))
+    }
+
+    /// Run one command with explicit host limits.
+    pub fn run_with_limits(
+        &self,
+        entry: &CommandEntry,
+        request: &RunRequest,
+        limits: RunLimits,
+    ) -> Result<RunOutput> {
+        let module = entry.runtime_module.as_ref().unwrap_or(&entry.module);
         let component = {
             let mut cache = self
                 .components
                 .lock()
                 .map_err(|_| anyhow::anyhow!("command component cache poisoned"))?;
-            if let Some(component) = cache.get(&entry.module) {
+            if let Some(component) = cache.get(module) {
                 component.clone()
             } else {
                 let component = Arc::new(
-                    wasmtime::component::Component::from_file(&self.engine, &entry.module)
-                        .map_err(|error| {
-                            anyhow::anyhow!("load command {}: {error}", entry.module.display())
-                        })?,
+                    wasmtime::component::Component::from_file(&self.engine, module).map_err(
+                        |error| anyhow::anyhow!("load command {}: {error}", module.display()),
+                    )?,
                 );
-                cache.insert(entry.module.clone(), component.clone());
+                cache.insert(module.clone(), component.clone());
                 component
             }
         };
@@ -738,8 +868,8 @@ impl CommandRunner {
             crate::unibus::add_to_linker::<Host>(&mut linker)?;
         }
 
-        let stdout = MemoryOutputPipe::new(entry.max_stdout_bytes);
-        let stderr = MemoryOutputPipe::new(entry.max_stderr_bytes);
+        let stdout = MemoryOutputPipe::new(limits.max_stdout_bytes);
+        let stderr = MemoryOutputPipe::new(limits.max_stderr_bytes);
         let mut wasi = WasiCtxBuilder::new();
         let mut argv = vec![entry.name.clone()];
         argv.extend(request.args.iter().cloned());
@@ -752,8 +882,8 @@ impl CommandRunner {
         wasi.stdout(stdout.clone());
         wasi.stderr(stderr.clone());
 
-        let limits = StoreLimitsBuilder::new()
-            .memory_size(entry.max_memory_bytes)
+        let store_limits = StoreLimitsBuilder::new()
+            .memory_size(limits.max_memory_bytes)
             .build();
         let ipc = self
             .plugins
@@ -770,7 +900,7 @@ impl CommandRunner {
             Host {
                 wasi: wasi.build(),
                 table: wasmtime::component::ResourceTable::new(),
-                limits,
+                limits: store_limits,
                 records,
                 bus,
                 ipc,
@@ -779,7 +909,7 @@ impl CommandRunner {
         store.limiter(|host| &mut host.limits);
         store.set_epoch_deadline(1);
         let engine = self.engine.clone();
-        let timeout = entry.timeout_ms;
+        let timeout = limits.timeout_ms;
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(timeout));
             engine.increment_epoch();
@@ -1068,6 +1198,22 @@ mod tests {
         assert_eq!(registry.path(), vec!["a", "b"]);
         assert!(registry.get("a").is_some());
         assert!(registry.refused().is_empty());
+    }
+
+    #[test]
+    fn a_composed_runtime_module_is_selected() {
+        let dir = tempfile::tempdir().unwrap();
+        standalone(dir.path(), "a");
+        let package = dir.path().join("a");
+        std::fs::write(package.join("runtime.wasm"), b"\0asm").unwrap();
+        std::fs::write(package.join("runtime.key"), b"abc123\n").unwrap();
+        let registry = CommandRegistry::scan(dir.path()).unwrap();
+        let entry = registry.get("a").unwrap();
+        assert_eq!(
+            entry.runtime_module.as_deref(),
+            Some(package.join("runtime.wasm").as_path())
+        );
+        assert_eq!(entry.composition_key.as_deref(), Some("abc123"));
     }
 
     #[test]
