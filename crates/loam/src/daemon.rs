@@ -119,6 +119,11 @@ pub struct Options {
     pub log_max_bytes: u64,
     /// Generations kept beside the current file.
     pub log_keep: usize,
+    /// The Mycelium home used to publish manifest web leases. `None` uses
+    /// `$MYCELIUM_HOME` or `~/.mycelium`.
+    pub mycelium_home: Option<PathBuf>,
+    /// Whether manifest web surfaces publish a Mycelium service lease.
+    pub publish_leases: bool,
 }
 
 impl Options {
@@ -134,6 +139,8 @@ impl Options {
             log_root: None,
             log_max_bytes: crate::log::DEFAULT_MAX_BYTES,
             log_keep: crate::log::DEFAULT_KEEP,
+            mycelium_home: None,
+            publish_leases: true,
         }
     }
 }
@@ -184,7 +191,12 @@ pub fn serve(options: Options) -> Result<()> {
         "loamd",
         format!("{} loamd started roots={:?}\n", now_millis(), options.roots).as_bytes(),
     );
-    start_web_surfaces(&options.roots, options.web_listen.as_deref())?;
+    start_web_surfaces(
+        &options.roots,
+        options.web_listen.as_deref(),
+        options.mycelium_home.as_deref(),
+        options.publish_leases,
+    )?;
     let registry = Arc::new(CommandRegistry::scan_roots(&options.roots)?);
     let plugins = PluginRegistry::scan_roots(&options.roots)?;
     let daemon = Arc::new(Daemon {
@@ -228,7 +240,12 @@ pub fn serve(options: Options) -> Result<()> {
     Ok(())
 }
 
-fn start_web_surfaces(roots: &[PathBuf], listen: Option<&str>) -> Result<()> {
+fn start_web_surfaces(
+    roots: &[PathBuf],
+    listen: Option<&str>,
+    mycelium_home: Option<&Path>,
+    publish_leases: bool,
+) -> Result<()> {
     let surfaces = crate::web::discover(roots)?;
     if surfaces.is_empty() {
         return Ok(());
@@ -237,23 +254,26 @@ fn start_web_surfaces(roots: &[PathBuf], listen: Option<&str>) -> Result<()> {
     let listener = std::net::TcpListener::bind(address)
         .with_context(|| format!("bind static web surface {address}"))?;
     let endpoint = crate::web::loopback_endpoint(&listener)?;
-    let lease_surfaces = surfaces.clone();
-    let lease_endpoint = endpoint.clone();
-    let renew = surfaces
-        .iter()
-        .map(|surface| surface.ttl_secs)
-        .min()
-        .unwrap_or(240)
-        / 3;
-    publish_web_leases(&lease_surfaces, &lease_endpoint);
-    let _ = thread::Builder::new()
-        .name("loamd-web-lease".into())
-        .spawn(move || {
-            loop {
-                thread::sleep(Duration::from_secs(renew.max(1)));
-                publish_web_leases(&lease_surfaces, &lease_endpoint);
-            }
-        });
+    if publish_leases {
+        let lease_surfaces = surfaces.clone();
+        let lease_endpoint = endpoint.clone();
+        let lease_home = mycelium_home.map(Path::to_path_buf);
+        let renew = surfaces
+            .iter()
+            .map(|surface| surface.ttl_secs)
+            .min()
+            .unwrap_or(240)
+            / 3;
+        publish_web_leases(&lease_surfaces, &lease_endpoint, lease_home.as_deref());
+        let _ = thread::Builder::new()
+            .name("loamd-web-lease".into())
+            .spawn(move || {
+                loop {
+                    thread::sleep(Duration::from_secs(renew.max(1)));
+                    publish_web_leases(&lease_surfaces, &lease_endpoint, lease_home.as_deref());
+                }
+            });
+    }
     let _ = thread::Builder::new()
         .name("loamd-web".into())
         .spawn(move || {
@@ -264,9 +284,14 @@ fn start_web_surfaces(roots: &[PathBuf], listen: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-fn publish_web_leases(surfaces: &[crate::web::StaticSurface], endpoint: &str) {
-    let home = std::env::var_os("MYCELIUM_HOME")
-        .map(PathBuf::from)
+fn publish_web_leases(
+    surfaces: &[crate::web::StaticSurface],
+    endpoint: &str,
+    mycelium_home: Option<&Path>,
+) {
+    let home = mycelium_home
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::var_os("MYCELIUM_HOME").map(PathBuf::from))
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".mycelium")));
     let Some(home) = home else { return };
     let mut identity = match crate::spore::identity::Identity::read(&home) {

@@ -6,14 +6,16 @@ use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 use anyhow::{Context, Result, bail};
 use soil::{
     command::RecordsBinding,
+    config::Config,
     daemon::{self, Options, Request},
 };
 
 const DEFAULT_MAX_INSTANCES: usize = 8;
 
 fn usage() -> &'static str {
-    r#"usage: loamd [serve] [--socket PATH] [--root DIR]... [--log-dir DIR]
-                     [--log-max-bytes N] [--log-keep N]
+    r#"usage: loamd [serve] [--config FILE] [--socket PATH] [--root DIR]...
+                     [--log-dir DIR] [--log-max-bytes N] [--log-keep N]
+                     [--mycelium-home DIR] [--no-publish-leases]
        loamd start COMMAND [ARGS...] [--id ID] [--socket PATH]
        loamd image plan SPORE [--socket PATH]
        loamd image start SPORE [--id ID] [--socket PATH]
@@ -73,27 +75,43 @@ fn run() -> Result<()> {
 }
 
 fn parse_options(args: &[String]) -> Result<Options> {
-    let mut socket = daemon::default_socket();
-    let mut roots = Vec::new();
-    let mut max_instances = DEFAULT_MAX_INSTANCES;
+    let config = match config_path(args)? {
+        Some(path) => Config::load(&path)?,
+        None => Config::default(),
+    };
+    let mut socket = config.socket.unwrap_or_else(daemon::default_socket);
+    let mut roots = config.roots;
+    let mut max_instances = config.max_instances.unwrap_or(DEFAULT_MAX_INSTANCES);
     let mut records_root = None;
     let mut book = None;
     let mut collection = None;
     let mut unibus_config = None;
-    let mut web_listen = None;
-    let mut image_runtime = None;
-    let mut log_dir = None;
-    let mut log_max_bytes = soil::log::DEFAULT_MAX_BYTES;
-    let mut log_keep = soil::log::DEFAULT_KEEP;
+    let mut web_listen = config.web_listen;
+    let mut image_runtime = config.image_runtime;
+    let mut log_dir = config.log_root;
+    let mut log_max_bytes = config.log_max_bytes.unwrap_or(soil::log::DEFAULT_MAX_BYTES);
+    let mut log_keep = config.log_keep.unwrap_or(soil::log::DEFAULT_KEEP);
+    let mut mycelium_home = config.mycelium_home;
+    let mut publish_leases = config.publish_leases.unwrap_or(true);
+    let mut roots_from_cli = false;
 
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
+            "--config" => {
+                // Loaded before the loop, so this only consumes its value.
+                let _ = args.get(i + 1).context("--config FILE")?;
+                i += 2;
+            }
             "--socket" => {
                 socket = PathBuf::from(args.get(i + 1).context("--socket PATH")?);
                 i += 2;
             }
             "--root" => {
+                if !roots_from_cli {
+                    roots.clear();
+                    roots_from_cli = true;
+                }
                 roots.push(PathBuf::from(args.get(i + 1).context("--root DIR")?));
                 i += 2;
             }
@@ -155,6 +173,16 @@ fn parse_options(args: &[String]) -> Result<Options> {
                     .context("--log-keep N")?;
                 i += 2;
             }
+            "--mycelium-home" => {
+                mycelium_home = Some(PathBuf::from(
+                    args.get(i + 1).context("--mycelium-home DIR")?,
+                ));
+                i += 2;
+            }
+            "--no-publish-leases" => {
+                publish_leases = false;
+                i += 1;
+            }
             other => bail!("unknown loamd option {other}"),
         }
     }
@@ -201,7 +229,32 @@ fn parse_options(args: &[String]) -> Result<Options> {
         log_root: log_dir,
         log_max_bytes,
         log_keep,
+        mycelium_home,
+        publish_leases,
     })
+}
+
+fn config_path(args: &[String]) -> Result<Option<PathBuf>> {
+    let mut explicit = None;
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--config" {
+            let path = PathBuf::from(args.get(i + 1).context("--config FILE")?);
+            if explicit.replace(path).is_some() {
+                bail!("--config may be given once");
+            }
+            i += 2;
+        } else {
+            i += 1;
+        }
+    }
+    if explicit.is_some() {
+        return Ok(explicit);
+    }
+    if let Some(path) = std::env::var_os("LOAM_CONFIG").filter(|value| !value.is_empty()) {
+        return Ok(Some(PathBuf::from(path)));
+    }
+    Ok(Config::default_path().filter(|path| path.is_file()))
 }
 
 fn parse_image(args: &[String]) -> Result<(PathBuf, Request)> {
@@ -391,4 +444,50 @@ fn parse_client(operation: &str, args: &[String]) -> Result<(PathBuf, Request)> 
         other => bail!("unknown loamd operation {other}"),
     };
     Ok((socket, request))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_supplies_defaults_and_cli_overrides_them() {
+        let temp = tempfile::tempdir().expect("temp");
+        let config = temp.path().join("loam.conf.soil");
+        std::fs::write(
+            &config,
+            format!(
+                r#"(loam
+                     (version 1)
+                     (daemon
+                       (socket "{socket}")
+                       (max-instances 3)
+                       (roots ("/config-root"))
+                       (log (dir "{logs}") (max-bytes 4096) (keep 9))
+                       (web (listen "127.0.0.1:9000")))
+                     (mycelium (publish-leases #t)))"#,
+                socket = temp.path().join("loamd.sock").display(),
+                logs = temp.path().join("logs").display(),
+            ),
+        )
+        .expect("config");
+        let options = parse_options(&[
+            "--config".into(),
+            config.display().to_string(),
+            "--root".into(),
+            "/cli-root".into(),
+            "--log-keep".into(),
+            "2".into(),
+            "--no-publish-leases".into(),
+        ])
+        .expect("options");
+        assert_eq!(options.socket, temp.path().join("loamd.sock"));
+        assert_eq!(options.max_instances, 3);
+        assert_eq!(options.roots, [PathBuf::from("/cli-root")]);
+        assert_eq!(options.web_listen.as_deref(), Some("127.0.0.1:9000"));
+        assert_eq!(options.log_root, Some(temp.path().join("logs")));
+        assert_eq!(options.log_max_bytes, 4096);
+        assert_eq!(options.log_keep, 2);
+        assert!(!options.publish_leases);
+    }
 }

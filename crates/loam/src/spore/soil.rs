@@ -40,7 +40,7 @@ pub struct SoilManifest {
 impl SoilManifest {
     /// Read one `(spore ...)` form.
     pub fn parse(source: &str) -> Result<Self> {
-        let forms = parse_sexps(source)?;
+        let forms = parse_sexps(source).map_err(Error::Invalid)?;
         let spore = forms
             .iter()
             .find_map(|form| match form {
@@ -209,14 +209,14 @@ fn parse_surfaces(items: &[Sexp]) -> Result<Vec<Surface>> {
     Ok(surfaces)
 }
 
-fn string(value: Option<&Sexp>) -> Option<String> {
+pub(crate) fn string(value: Option<&Sexp>) -> Option<String> {
     match value {
         Some(Sexp::String(value)) | Some(Sexp::Atom(value)) => Some(value.clone()),
         _ => None,
     }
 }
 
-fn strings(value: Option<&Sexp>) -> Vec<String> {
+pub(crate) fn strings(value: Option<&Sexp>) -> Vec<String> {
     match value {
         Some(Sexp::List(values)) => values
             .iter()
@@ -228,13 +228,13 @@ fn strings(value: Option<&Sexp>) -> Vec<String> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Sexp {
+pub(crate) enum Sexp {
     Atom(String),
     String(String),
     List(Vec<Sexp>),
 }
 
-fn parse_sexps(source: &str) -> Result<Vec<Sexp>> {
+pub(crate) fn parse_sexps(source: &str) -> std::result::Result<Vec<Sexp>, String> {
     let mut stack = vec![Vec::new()];
     let mut chars = source.char_indices().peekable();
     while let Some((_, ch)) = chars.next() {
@@ -248,12 +248,10 @@ fn parse_sexps(source: &str) -> Result<Vec<Sexp>> {
             }
             '(' => stack.push(Vec::new()),
             ')' => {
-                let list = stack
-                    .pop()
-                    .ok_or_else(|| Error::Invalid("spore.soil has an unbalanced )".into()))?;
+                let list = stack.pop().ok_or_else(|| "unbalanced )".to_owned())?;
                 stack
                     .last_mut()
-                    .ok_or_else(|| Error::Invalid("spore.soil has an unbalanced )".into()))?
+                    .ok_or_else(|| "unbalanced )".to_owned())?
                     .push(Sexp::List(list));
             }
             '"' => {
@@ -265,23 +263,15 @@ fn parse_sexps(source: &str) -> Result<Vec<Sexp>> {
                             Some('n') => value.push('\n'),
                             Some('t') => value.push('\t'),
                             Some(ch) => value.push(ch),
-                            None => {
-                                return Err(Error::Invalid(
-                                    "spore.soil has an unterminated string".into(),
-                                ));
-                            }
+                            None => return Err("unterminated string".to_owned()),
                         },
                         Some(ch) => value.push(ch),
-                        None => {
-                            return Err(Error::Invalid(
-                                "spore.soil has an unterminated string".into(),
-                            ));
-                        }
+                        None => return Err("unterminated string".to_owned()),
                     }
                 }
                 stack
                     .last_mut()
-                    .ok_or_else(|| Error::Invalid("string outside a form".into()))?
+                    .ok_or_else(|| "string outside a form".to_owned())?
                     .push(Sexp::String(value));
             }
             ch if ch.is_whitespace() => {}
@@ -296,13 +286,13 @@ fn parse_sexps(source: &str) -> Result<Vec<Sexp>> {
                 }
                 stack
                     .last_mut()
-                    .ok_or_else(|| Error::Invalid("atom outside a form".into()))?
+                    .ok_or_else(|| "atom outside a form".to_owned())?
                     .push(Sexp::Atom(atom));
             }
         }
     }
     if stack.len() != 1 {
-        return Err(Error::Invalid("spore.soil has an unterminated form".into()));
+        return Err("unterminated form".to_owned());
     }
     Ok(stack.pop().unwrap_or_default())
 }
