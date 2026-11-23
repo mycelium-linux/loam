@@ -43,6 +43,7 @@ name = "mcp-client"
 version = "0.1.0"
 summary = "exercise the mcp plugin end to end"
 module = "module.wasm"
+requires = ["soil:mcp"]
 TOML
 "$LOAM" install "$CONSUMER" --root "$COMMANDS" --provider-root "$SPORES" --allow-unsigned-dev >/dev/null
 OUT=$("$LOAM" run --root "$COMMANDS" --root "$SPORES" mcp-client)

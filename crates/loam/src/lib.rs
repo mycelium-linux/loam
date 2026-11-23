@@ -65,6 +65,7 @@ mod gateway;
 mod host;
 #[cfg(any(feature = "http", feature = "wasi"))]
 pub mod http_host;
+pub mod image;
 pub mod install;
 pub mod instance;
 #[cfg(feature = "principal")]

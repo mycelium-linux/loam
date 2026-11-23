@@ -30,7 +30,8 @@ consumer grant       what the consumer may call
 An export is a declaration, not a grant. A plugin that exports an interface does
 not thereby gain any capability. Its own imports are still checked against its
 own `[grants]`. A consumer still has to declare or be granted the interface it
-calls.
+calls: the runner links only providers covered by the consumer's
+`requires`/grants, so an installed but ungranted provider is a missing binding.
 
 ## Complete minimal example
 

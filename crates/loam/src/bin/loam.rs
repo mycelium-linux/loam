@@ -14,6 +14,8 @@ commands:
   install PATH [--root DIR] [--allow-unsigned-dev] [--provider-root DIR]...
                                   verify, compose, warm, and atomically install a package
   status [--root DIR]... [--json] show managed installs (default: command + Spore roots)
+  image plan PATH [--root DIR]... [--json]
+                                  build the granted WIT/provider host plan for an image Spore
   rollback ID [--root DIR]        switch an install back one generation
   surface FILE [--size WxH] [--capture FILE.rgba]
                                   open a native surface or capture one frame
@@ -87,6 +89,7 @@ fn run() -> Result<()> {
             }
         }
         "install" => install_cli(&args[1..]),
+        "image" => image_cli(&args[1..]),
         "status" => status_cli(&args[1..]),
         "rollback" => rollback_cli(&args[1..]),
         "plugin" => soil::command::plugin::cli(&args[1..]),
@@ -186,6 +189,76 @@ fn install_cli(args: &[String]) -> Result<()> {
         composition_cache,
     })?;
     println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
+}
+
+fn image_cli(args: &[String]) -> Result<()> {
+    let Some(command) = args.first().map(String::as_str) else {
+        bail!("image needs a command (plan)");
+    };
+    if command != "plan" {
+        bail!("unknown image command {command}");
+    }
+    let mut path = None;
+    let mut roots = Vec::new();
+    let mut json = false;
+    let mut allow_unsigned_dev = false;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--root" => {
+                roots.push(std::path::PathBuf::from(
+                    args.get(i + 1).context("--root DIR")?,
+                ));
+                i += 2;
+            }
+            "--json" => {
+                json = true;
+                i += 1;
+            }
+            "--allow-unsigned-dev" => {
+                allow_unsigned_dev = true;
+                i += 1;
+            }
+            value if value.starts_with('-') => bail!("unknown image option {value}"),
+            value => {
+                if path.replace(std::path::PathBuf::from(value)).is_some() {
+                    bail!("image plan takes one package path");
+                }
+                i += 1;
+            }
+        }
+    }
+    let package = path.context("image plan needs a package path")?;
+    let registry = if roots.is_empty() {
+        soil::command::plugin::PluginRegistry::scan_default_dev(allow_unsigned_dev)?
+    } else {
+        soil::command::plugin::PluginRegistry::scan_roots_dev(&roots, allow_unsigned_dev)?
+    };
+    let plan = soil::image::ImageHostPlan::build(&package, &registry)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&plan)?);
+    } else {
+        println!(
+            "{} {}: {} granted import(s), {} refused",
+            plan.spore_id,
+            plan.spore_version,
+            plan.imports.len(),
+            plan.refused.len()
+        );
+        for import in &plan.imports {
+            println!(
+                "  {} -> {} {} ({})",
+                import.interface,
+                import.provider.id,
+                import.provider.version,
+                import.provider.module_sha256
+            );
+        }
+        for refusal in &plan.refused {
+            println!("  refused {}: {}", refusal.interface, refusal.reason);
+        }
+    }
     Ok(())
 }
 
