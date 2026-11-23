@@ -20,6 +20,10 @@ name = "web"
 kind = "web"
 entry = "web/index.html"
 
+[grants]
+"soil:vfs" = "read the workspace desktop index"
+"soil:vfs-mut" = "create and update desktop metadata"
+
 [web]
 vfs_root = ""
 

@@ -284,6 +284,14 @@ fn vfs_api(
                 origin,
             );
         }
+        if path == "/api/vfs/desktops" {
+            return json_response(
+                stream,
+                200,
+                &json!({"desktops": configured_desktops(), "active": desktop_id(query, web)}),
+                origin,
+            );
+        }
         let selected = active_root_id(query);
         let workspace = match workspace_for_root(selected.as_deref()) {
             Some(path) => path,
@@ -298,7 +306,13 @@ fn vfs_api(
             }
         };
         let requested = query_value(query, "path").unwrap_or_default();
-        let Some(vfs_path) = scoped_path(&web.vfs_root, &requested) else {
+        let desktop = desktop_id(query, web);
+        let desktop_root = match (desktop.is_empty(), web.vfs_root.is_empty()) {
+            (true, _) => web.vfs_root.clone(),
+            (false, true) => desktop,
+            (false, false) => format!("{desktop}/{}", web.vfs_root),
+        };
+        let Some(vfs_path) = scoped_path(&desktop_root, &requested) else {
             return json_response(
                 stream,
                 400,
@@ -325,7 +339,7 @@ fn vfs_api(
                     .map(|entry| {
                         let relative = entry
                             .path
-                            .strip_prefix(&format!("{}/", web.vfs_root.trim_end_matches('/')))
+                            .strip_prefix(&format!("{}/", desktop_root.trim_end_matches('/')))
                             .unwrap_or(&entry.path)
                             .trim_start_matches('/')
                             .to_owned();
@@ -450,6 +464,85 @@ fn scoped_path(scope: &str, requested: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+fn desktop_id(query: &str, web: &Web) -> String {
+    let candidate = query_value(query, "desktop").unwrap_or_default();
+    let candidate = candidate.trim_matches('/').to_owned();
+    if !candidate.is_empty()
+        && candidate
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return candidate;
+    }
+    if web.vfs_root.is_empty() {
+        String::new()
+    } else {
+        "personal".to_owned()
+    }
+}
+
+fn titlecase(value: &str) -> String {
+    let mut chars = value.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => value.to_owned(),
+    }
+}
+
+#[cfg(feature = "vfs")]
+fn configured_desktops() -> Vec<serde_json::Value> {
+    let workspace = workspace_root();
+    let Ok(mut vfs) = Vfs::open_with_role(&workspace, NodeRole::Full) else {
+        return vec![];
+    };
+    let entries = vfs.list("").unwrap_or_default();
+    let mut prefixes = std::collections::BTreeSet::new();
+    for entry in entries {
+        let Some((prefix, _)) = entry.path.split_once('/') else {
+            continue;
+        };
+        if !prefix.is_empty() && !prefix.starts_with('.') {
+            prefixes.insert(prefix.to_owned());
+        }
+    }
+    let mut desktops = Vec::new();
+    for prefix in prefixes {
+        let metadata = vfs
+            .get(&format!("{prefix}/desktop.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+        let name = metadata
+            .as_ref()
+            .and_then(|value| value["name"].as_str())
+            .map(str::to_owned)
+            .unwrap_or_else(|| titlecase(&prefix));
+        let kind = metadata
+            .as_ref()
+            .and_then(|value| value["kind"].as_str())
+            .unwrap_or_else(|| {
+                if prefix == "personal" {
+                    "personal"
+                } else {
+                    "work"
+                }
+            });
+        desktops.push(json!({
+            "id": prefix,
+            "name": name,
+            "kind": kind,
+            "path": format!("/{prefix}"),
+        }));
+    }
+    desktops.sort_by(|left, right| {
+        let left_id = left["id"].as_str().unwrap_or_default();
+        let right_id = right["id"].as_str().unwrap_or_default();
+        (left_id != "personal")
+            .cmp(&(right_id != "personal"))
+            .then_with(|| left_id.cmp(right_id))
+    });
+    desktops
 }
 
 fn active_root_id(query: &str) -> Option<String> {

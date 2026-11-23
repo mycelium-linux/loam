@@ -2,6 +2,9 @@
   const root = document.documentElement;
   const windows = new Map();
   let z = 10;
+  let desktops = [];
+  let activeDesktop = localStorage.getItem('mycelium.desktop') || 'personal';
+  let activeDesktopName = 'This Mac';
 
   for (const el of document.querySelectorAll('[data-window]')) {
     windows.set(el.dataset.window, el);
@@ -30,14 +33,21 @@
     if (el.dataset.window) setAgentContext(el.dataset.window);
   }
 
+  function frameUrl(frame) {
+    const url = new URL(frame.dataset.src);
+    if (activeDesktop) url.searchParams.set('desktop', activeDesktop);
+    return url.toString();
+  }
+
   function open(kind) {
     const el = windows.get(kind);
     if (!el) return;
     el.hidden = false;
     el.classList.add('is-open');
     const frame = el.querySelector('iframe[data-src]');
-    if (frame && frame.getAttribute('src') !== frame.dataset.src) {
-      frame.src = frame.dataset.src;
+    if (frame) {
+      const next = frameUrl(frame);
+      if (frame.getAttribute('src') !== next) frame.src = next;
     }
     focusWindow(el);
   }
@@ -83,7 +93,17 @@
     const wizardWhere = event.target.closest('[data-where]');
     if (wizardWhere) {
       event.preventDefault();
+      const previous = wizardAnswers.where;
       wizardAnswers.where = wizardWhere.dataset.where;
+      if (previous !== wizardAnswers.where) {
+        if (wizardAnswers.where === 'myself' && (!wizardAnswers.desktopName || wizardAnswers.desktopName === 'Work')) {
+          wizardAnswers.desktopName = 'Personal';
+        }
+        if (wizardAnswers.where === 'business' && (!wizardAnswers.desktopName || wizardAnswers.desktopName === 'Personal')) {
+          wizardAnswers.desktopName = wizardAnswers.businessName || 'Work';
+        }
+      }
+      syncNameFields();
       paintWizardChoices();
       refreshWizardControls();
       return;
@@ -99,10 +119,16 @@
     const wizardStart = event.target.closest('[data-wizard-start]');
     if (wizardStart) {
       event.preventDefault();
-      saveWizardAnswers();
-      closeOrientation();
-      open(wizardAnswers.what === 'website' ? 'files' : 'notes');
-      window.setTimeout(() => window.MyceliumAgent?.seed(buildAgentSeed()), 420);
+      void (async () => {
+        const desktop = await ensureDesktop();
+        saveWizardAnswers();
+        localStorage.setItem('mycelium.desktop', desktop.id);
+        await loadDesktops();
+        applyDesktop(desktop.id, desktop.name);
+        closeOrientation();
+        open(wizardAnswers.what === 'website' ? 'files' : 'notes');
+        window.setTimeout(() => window.MyceliumAgent?.seed(buildAgentSeed()), 420);
+      })();
       return;
     }
     const wizardOpen = event.target.closest('[data-wizard-open]');
@@ -272,6 +298,88 @@
   });
 
 
+  const desktopName = document.getElementById('desktop-name');
+  const desktopSwitcher = document.getElementById('desktop-switcher');
+  const desktopGrid = document.getElementById('desktop-grid');
+  const accountName = document.getElementById('account-name');
+
+  function applyDesktop(id, name, reload = true) {
+    activeDesktop = id || 'personal';
+    activeDesktopName = name || 'This Mac';
+    try { localStorage.setItem('mycelium.desktop', activeDesktop); } catch {}
+    if (desktopName) desktopName.textContent = activeDesktopName;
+    if (accountName) accountName.textContent = activeDesktopName;
+    if (accountWorkspace) accountWorkspace.textContent = `~/fungOS/${activeDesktop}`;
+    if (reload) {
+      for (const el of windows.values()) {
+        const frame = el.querySelector('iframe[data-src]');
+        if (frame && !el.hidden) frame.src = frameUrl(frame);
+      }
+    }
+    setAgentContext('desk');
+  }
+
+  function renderDesktopGrid() {
+    if (!desktopGrid) return;
+    desktopGrid.replaceChildren();
+    for (const desktop of desktops) {
+      const button = document.createElement('button');
+      button.className = 'profile-button';
+      button.type = 'button';
+      button.dataset.desktopSelect = desktop.id;
+      button.setAttribute('aria-current', String(desktop.id === activeDesktop));
+      const circle = document.createElement('span');
+      circle.className = `profile-circle profile-circle--${desktop.kind === 'personal' ? 'personal' : 'work'}`;
+      circle.textContent = (desktop.name || '?').slice(0, 1).toUpperCase();
+      const name = document.createElement('span');
+      name.className = 'profile-name';
+      name.textContent = desktop.name;
+      const kind = document.createElement('span');
+      kind.className = 'profile-kind';
+      kind.textContent = desktop.kind === 'personal' ? 'Personal' : 'Work';
+      const path = document.createElement('span');
+      path.className = 'profile-meta';
+      path.textContent = `~/fungOS/${desktop.id}`;
+      button.append(circle, name, kind, path);
+      if (desktop.id === activeDesktop) {
+        const current = document.createElement('span');
+        current.className = 'profile-current';
+        current.textContent = 'Current';
+        button.append(current);
+      }
+      button.addEventListener('click', () => {
+        applyDesktop(desktop.id, desktop.name);
+        desktopSwitcher.hidden = true;
+      });
+      desktopGrid.append(button);
+    }
+  }
+
+  async function loadDesktops() {
+    try {
+      const response = await fetch('/api/vfs/desktops');
+      const data = await response.json();
+      desktops = Array.isArray(data.desktops) ? data.desktops : [];
+    } catch {
+      desktops = [];
+    }
+    if (!desktops.length) desktops = [{ id: 'personal', name: 'Personal', kind: 'personal' }];
+    const selected = desktops.find((desktop) => desktop.id === activeDesktop) || desktops[0];
+    applyDesktop(selected.id, selected.name, false);
+    renderDesktopGrid();
+  }
+
+  document.querySelector('[data-desktop-switcher]')?.addEventListener('click', () => {
+    renderDesktopGrid();
+    desktopSwitcher.hidden = false;
+  });
+  document.querySelectorAll('[data-desktop-close]').forEach((button) => {
+    button.addEventListener('click', () => { desktopSwitcher.hidden = true; });
+  });
+  desktopSwitcher?.addEventListener('click', (event) => {
+    if (event.target === desktopSwitcher) desktopSwitcher.hidden = true;
+  });
+
   const accountToggle = document.getElementById('account-toggle');
   const accountMenu = document.getElementById('account-menu');
   const accountWorkspace = document.getElementById('account-workspace');
@@ -296,23 +404,16 @@
     closeAccountMenu();
   }, true);
 
-  fetch('/api/vfs/roots')
-    .then((response) => response.ok ? response.json() : null)
-    .then((data) => {
-      const vfs = data?.roots?.find((root) => root.id === 'vfs');
-      const path = vfs?.mount || vfs?.root;
-      if (path && accountWorkspace) {
-        accountWorkspace.textContent = path.replace(/^\/Users\/[^/]+/, '~');
-      }
-    })
-    .catch(() => {});
 
   const onboarding = document.getElementById('onboarding');
   const connectionsTitle = document.getElementById('connections-title');
   const connectionsCopy = document.getElementById('connections-copy');
   const connectionsList = document.getElementById('connections-list');
+  const businessField = document.getElementById('business-field');
+  const businessNameInput = document.getElementById('business-name');
+  const desktopNameInput = document.getElementById('desktop-name');
   let wizardStep = 1;
-  let wizardAnswers = { where: null, what: null };
+  let wizardAnswers = { where: null, what: null, desktopName: '', businessName: '' };
 
   const fplAuthBase = 'https://sso.fpl.dev';
   const providerCatalog = {
@@ -349,6 +450,49 @@
     document: 'Document',
   };
 
+  function syncNameFields() {
+    const business = wizardAnswers.where === 'business';
+    if (businessField) businessField.hidden = !business;
+    if (wizardAnswers.where === 'myself' && (!wizardAnswers.desktopName || wizardAnswers.desktopName === 'Work')) {
+      wizardAnswers.desktopName = 'Personal';
+    }
+    if (business && (!wizardAnswers.desktopName || wizardAnswers.desktopName === 'Personal')) {
+      wizardAnswers.desktopName = wizardAnswers.businessName || 'Work';
+    }
+    if (businessNameInput) businessNameInput.value = wizardAnswers.businessName || '';
+    if (desktopNameInput) desktopNameInput.value = wizardAnswers.desktopName || '';
+  }
+
+  function slug(value) {
+    return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'work';
+  }
+
+  function buildDesktop() {
+    const name = (wizardAnswers.desktopName || '').trim();
+    const business = (wizardAnswers.businessName || '').trim();
+    let prefix = slug(name || business || (wizardAnswers.where === 'business' ? 'work' : 'personal'));
+    if (wizardAnswers.where === 'business' && !business && (!name || name.toLowerCase() === 'work')) prefix = 'work';
+    if (wizardAnswers.where !== 'business' && prefix !== 'personal' && !name) prefix = 'personal';
+    return {
+      id: prefix,
+      name: name || business || (wizardAnswers.where === 'business' ? 'Work' : 'Personal'),
+      kind: wizardAnswers.where === 'business' ? 'work' : 'personal',
+      business,
+    };
+  }
+
+  async function ensureDesktop() {
+    const desktop = buildDesktop();
+    try {
+      await fetch(`/api/vfs/write?path=desktop.json&desktop=${encodeURIComponent(desktop.id)}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: desktop.name, kind: desktop.kind, business: desktop.business }),
+      });
+    } catch {}
+    return desktop;
+  }
+
   function paintWizardChoices() {
     onboarding?.querySelectorAll('[data-where]').forEach((node) => {
       node.classList.toggle('is-selected', node.dataset.where === wizardAnswers.where);
@@ -363,7 +507,7 @@
   function refreshWizardControls() {
     const whereNext = onboarding?.querySelector('[data-wizard-step="4"] [data-wizard-next]');
     const whatNext = onboarding?.querySelector('[data-wizard-step="5"] [data-wizard-next]');
-    if (whereNext) whereNext.disabled = !wizardAnswers.where;
+    if (whereNext) whereNext.disabled = !wizardAnswers.where || !wizardAnswers.desktopName.trim();
     if (whatNext) whatNext.disabled = !wizardAnswers.what;
   }
 
@@ -440,32 +584,32 @@
     };
     const tools = {
       website: [
-        { label: 'VFS', note: '~/fungOS site files', state: 'preparing' },
+        { label: 'VFS', note: `~/fungOS/${buildDesktop().id} site files`, state: 'preparing' },
         { label: 'Frontdoor', note: 'local preview', state: 'preparing' },
         { label: 'FPL Auth', note: 'Cloudflare · GitHub', state: 'waiting' },
         { label: 'Geode', note: 'credential vault', state: 'preparing' },
       ],
       automation: [
-        { label: 'VFS', note: 'workspace and triggers', state: 'preparing' },
+        { label: 'VFS', note: `~/fungOS/${buildDesktop().id} workspace`, state: 'preparing' },
         { label: 'Loam', note: 'run the first step', state: 'preparing' },
         { label: 'FPL Auth', note: 'Google · GitHub', state: 'waiting' },
         { label: 'Geode', note: 'credential vault', state: 'preparing' },
       ],
       agent: [
         { label: 'Loam', note: 'agent harness', state: 'preparing' },
-        { label: 'VFS', note: 'notes and files', state: 'preparing' },
+        { label: 'VFS', note: `~/fungOS/${buildDesktop().id} notes`, state: 'preparing' },
         { label: 'FPL Auth', note: 'OpenAI · xAI', state: 'waiting' },
         { label: 'Geode', note: 'provider keys', state: 'preparing' },
       ],
       presentation: [
         { label: 'Notes', note: 'outline and slides', state: 'preparing' },
-        { label: 'VFS', note: 'source material', state: 'preparing' },
+        { label: 'VFS', note: `~/fungOS/${buildDesktop().id} source`, state: 'preparing' },
         { label: 'FPL Auth', note: 'Google', state: 'waiting' },
         { label: 'Geode', note: 'credential vault', state: 'preparing' },
       ],
       document: [
         { label: 'Notes', note: 'long-form editor', state: 'preparing' },
-        { label: 'VFS', note: 'workspace', state: 'preparing' },
+        { label: 'VFS', note: `~/fungOS/${buildDesktop().id} workspace`, state: 'preparing' },
         { label: 'FPL Auth', note: 'Google', state: 'waiting' },
         { label: 'Geode', note: 'credential vault', state: 'preparing' },
       ],
@@ -473,15 +617,39 @@
     return {
       prompt: prompts[what] || prompts.document,
       ready: ready[what] || ready.document,
-      context: { app: 'This Mac', detail: whatTitles[what] || 'Workspace' },
+      context: { app: activeDesktopName || 'This Mac', detail: whatTitles[what] || 'Workspace' },
       tools: tools[what] || tools.document,
     };
   }
+
+  businessNameInput?.addEventListener('input', () => {
+    wizardAnswers.businessName = businessNameInput.value;
+    if (!desktopNameInput?.dataset.touched || desktopNameInput.value === 'Work') {
+      wizardAnswers.desktopName = businessNameInput.value.trim() || 'Work';
+      if (desktopNameInput) desktopNameInput.value = wizardAnswers.desktopName;
+    }
+    refreshWizardControls();
+  });
+  desktopNameInput?.addEventListener('input', () => {
+    desktopNameInput.dataset.touched = 'true';
+    wizardAnswers.desktopName = desktopNameInput.value;
+    refreshWizardControls();
+  });
+  document.querySelector('[data-unknown-business]')?.addEventListener('click', () => {
+    wizardAnswers.businessName = '';
+    wizardAnswers.desktopName = 'Work';
+    if (businessNameInput) businessNameInput.value = '';
+    if (desktopNameInput) {
+      desktopNameInput.value = 'Work';
+      delete desktopNameInput.dataset.touched;
+    }
+  });
 
   function saveWizardAnswers() {
     try {
       localStorage.setItem('mycelium.orientation.answers', JSON.stringify({
         ...wizardAnswers,
+        desktop: buildDesktop(),
       }));
     } catch {}
   }
@@ -498,6 +666,7 @@
       node.classList.toggle('is-active', index < wizardStep);
     });
     if (wizardStep === 6) renderConnections();
+    syncNameFields();
     paintWizardChoices();
     refreshWizardControls();
     const focusable = onboarding.querySelector(
@@ -508,7 +677,9 @@
 
   function openOrientation() {
     if (!onboarding) return;
-    wizardAnswers = { where: null, what: null };
+    wizardAnswers = { where: null, what: null, desktopName: '', businessName: '' };
+    if (desktopNameInput) { desktopNameInput.value = ''; delete desktopNameInput.dataset.touched; }
+    if (businessNameInput) businessNameInput.value = '';
     paintWizardChoices();
     setWizardStep(1);
     onboarding.hidden = false;
@@ -525,6 +696,7 @@
   } catch {}
 
   setAgentContext('desk');
+  void loadDesktops();
 
   const clock = document.getElementById('clock');
   function tick() {

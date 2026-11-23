@@ -351,3 +351,25 @@
 .account-auth { margin: 12px 0 0; color: var(--color-ink-3); font-size: 10px; }
 .account-auth a { color: var(--color-ink-2); text-underline-offset: 2px; }
 .account-logo img.is-light { filter: invert(1) brightness(1.5); }
+.name-fields { display: grid; gap: 11px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--hairline); }
+.name-field { display: grid; gap: 5px; color: var(--color-ink-3); font: 9px var(--font-mono); letter-spacing: .10em; text-transform: uppercase; }
+.name-field[hidden] { display: none; }
+.name-field input {
+  width: 100%;
+  height: 38px;
+  padding: 0 11px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 7px;
+  background: var(--field-bg);
+  color: var(--color-ink);
+  font: 13px var(--font-ui);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.name-field input::placeholder { color: var(--color-ink-4); }
+.unknown-business { justify-self: start; padding: 0; border: 0; background: transparent; color: var(--color-ink-3); font-size: 10px; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.unknown-business:hover { color: var(--color-ink); }
+.name-hint { margin: 0; color: var(--color-ink-3); font-size: 10px; line-height: 1.45; }
+.profile-switcher[hidden] { display: none; }
+#desktop-grid .profile-button { min-height: 154px; }
+#desktop-grid .profile-circle { width: 58px; height: 58px; font-size: 20px; }

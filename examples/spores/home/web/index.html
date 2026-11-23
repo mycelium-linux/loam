@@ -21,8 +21,8 @@
         <span>Mycelium</span>
       </button>
       <span class="topbar-sep" aria-hidden="true"></span>
-      <button class="desktop-current" type="button" data-open="desk" aria-label="Open This Desk">
-        <span class="workspace-name">This Mac</span>
+      <button class="desktop-current" type="button" data-desktop-switcher aria-label="Switch desktop">
+        <span class="workspace-name" id="desktop-name">This Mac</span>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 10 4 4 4-4"/></svg>
       </button>
       <span class="plan-badge">Local</span>
@@ -125,7 +125,7 @@
   <section class="account-menu" id="account-menu" aria-label="Settings" hidden>
     <header class="account-head">
       <span class="avatar" aria-hidden="true">M</span>
-      <span><strong>This Mac</strong><small id="account-workspace">Local VFS</small></span>
+      <span><strong id="account-name">This Mac</strong><small id="account-workspace">Local VFS</small></span>
     </header>
     <div class="account-items">
       <a class="account-item" href="https://sso.fpl.dev/connections" target="_blank" rel="noopener">
@@ -148,6 +148,16 @@
       </button>
     </div>
     <footer class="account-foot"><span class="account-dot" aria-hidden="true"></span>Local · Mycelium</footer>
+  </section>
+
+  <section class="profile-switcher" id="desktop-switcher" aria-label="Switch desktop" hidden>
+    <div class="profile-panel">
+      <p class="profile-kicker">Desktops</p>
+      <h1 class="profile-title">Which world?</h1>
+      <p class="profile-copy">Each desktop is its own VFS root. Apps can only see the desktop you are in.</p>
+      <div class="profile-grid" id="desktop-grid"></div>
+      <button class="profile-dismiss" type="button" data-desktop-close>Cancel</button>
+    </div>
   </section>
 
   <section class="onboarding" id="onboarding" data-step="1" aria-label="Welcome to Mycelium" hidden>
@@ -201,6 +211,18 @@
             <strong>For a Business</strong>
             <small>A shared desk for a team, a company, or a client.</small>
           </button>
+        </div>
+        <div class="name-fields" id="name-fields">
+          <label class="name-field" id="business-field" hidden>
+            <span>Business name</span>
+            <input id="business-name" type="text" autocomplete="organization" placeholder="What is this business called?">
+            <button class="unknown-business" type="button" data-unknown-business>I don't know yet</button>
+          </label>
+          <label class="name-field">
+            <span>Desktop name</span>
+            <input id="desktop-name" type="text" autocomplete="off" placeholder="Personal">
+          </label>
+          <p class="name-hint">The desktop is a private root. You can rename its display name later; its folder stays isolated.</p>
         </div>
         <div class="wizard-actions"><button class="wizard-back" type="button" data-wizard-back>Back</button><button class="btn-wizard" type="button" data-wizard-next disabled>Continue</button></div>
       </div>

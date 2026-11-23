@@ -16,8 +16,10 @@
   let selected = null;
   let dirty = false;
 
+  const desktop = new URLSearchParams(location.search).get('desktop') || 'personal';
+  const withDesktop = (path) => `${path}${path.includes('?') ? '&' : '?'}desktop=${encodeURIComponent(desktop)}`;
   const api = async (path, options = {}) => {
-    const response = await fetch(path, options);
+    const response = await fetch(withDesktop(path), options);
     const value = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(value.error || `${response.status} ${response.statusText}`);
     return value;

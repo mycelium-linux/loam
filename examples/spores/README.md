@@ -5,8 +5,8 @@ Three manifest-declared web surfaces used by `loamd` and the local frontdoor:
 | Spore | Name | Data |
 |---|---|---|
 | `home` | `home.myc` | desktop shell; iframes `notes.myc`, `contacts.myc`, `files.myc` |
-| `notes` | `notes.myc` | Markdown files under the `notes/` VFS root |
-| `contacts` | `contacts.myc` | `contacts/contacts.json` in the VFS |
+| `notes` | `notes.myc` | Markdown under `<desktop>/notes/` |
+| `contacts` | `contacts.myc` | `<desktop>/contacts/contacts.json` |
 | `agent` | `agent.myc` | right-edge agent sidebar; embed it in any Spore |
 
 Install a package by copying its directory under `~/.mycelium/spores/` and run:
@@ -41,6 +41,23 @@ vfs_root = "notes"
 Paths are relative to `vfs_root`; the host rejoins and normalizes them, so a
 page cannot escape the declared prefix. The default workspace is
 `~/.local/share/fungos/vfs`; `MYCELIUM_VFS_ROOT` overrides it.
+
+## Desktops
+
+A desktop is a top-level VFS folder and a privacy boundary. The apps receive a
+`desktop` query parameter and the host prefixes every path with it:
+
+```text
+~/fungOS/personal/notes/welcome.md
+~/fungOS/fpl/notes/plan.md
+~/fungOS/work/notes/untitled.md
+```
+
+`GET /api/vfs/desktops` lists the available desktops from the default VFS. A
+desktop may carry `<desktop>/desktop.json` for its display name and kind.
+`home.myc` keeps the active desktop in local storage and appends `?desktop=` to
+its iframe URLs. The app only ever sees paths inside that desktop, so the
+desktop can be renamed or moved without changing the app's internal paths.
 
 The pages are static assets and talk only to their own origin. A desktop shell
 embeds them as iframes; the gateway forwards the browser Host as
