@@ -77,9 +77,9 @@ Those are Soil code, Spores, or plugins.
 
 ```sh
 loam run NAME [ARGS...]        # run an installed wasm command
-loam install PATH --root DIR   # verify, compose, warm, install atomically
-loam status --root DIR [--json]
-loam rollback ID --root DIR
+loam install PATH [--root DIR] # verify, compose, warm, install atomically
+loam status [--root DIR]... [--json]
+loam rollback ID [--root DIR]
 loam surface FILE [--size WxH] # open a native winit + WebGPU surface
 loam edit <op> ... [--json]    # edit a personal source overlay
 loam doctor                    # print the linked capability profile
@@ -90,9 +90,9 @@ loam help
 previous digest for rollback:
 
 ```sh
-loam install spores/marbles --root ~/.local/share/fungos/commands
-loam status --root ~/.local/share/fungos/commands --json
-loam rollback acme:marbles --root ~/.local/share/fungos/commands
+loam install spores/marbles
+loam status --json
+loam rollback acme:marbles
 ```
 
 See [`docs/installer.md`](docs/installer.md).

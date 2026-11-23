@@ -11,10 +11,10 @@ fn usage() -> &'static str {
     r#"usage: loam <command>
 commands:
   run [OPTIONS] NAME [ARGS...]    run an installed wasm command
-  install PATH --root DIR [--allow-unsigned-dev] [--provider-root DIR]...
+  install PATH [--root DIR] [--allow-unsigned-dev] [--provider-root DIR]...
                                   verify, compose, warm, and atomically install a package
-  status --root DIR [--json]      show managed installs
-  rollback ID --root DIR          switch an install back one generation
+  status [--root DIR]... [--json] show managed installs (default: command + Spore roots)
+  rollback ID [--root DIR]        switch an install back one generation
   surface FILE [--size WxH] [--capture FILE.rgba]
                                   open a native surface or capture one frame
   plugin [list|verify|roots|pack DIR|compose ROOT PROVIDER IMPORT OUT|compose-cached ROOT PROVIDER IMPORT OUT]
@@ -105,6 +105,36 @@ fn run() -> Result<()> {
     }
 }
 
+fn default_command_root() -> std::path::PathBuf {
+    std::env::var_os("FUNGOS_COMMAND_ROOT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::var_os("HOME")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_default()
+                .join(".local/share/fungos/commands")
+        })
+}
+
+fn default_roots() -> Vec<std::path::PathBuf> {
+    let commands = default_command_root();
+    let spores = soil::command::spore_root(&commands);
+    if spores == commands {
+        vec![commands]
+    } else {
+        vec![commands, spores]
+    }
+}
+
+fn default_install_root(path: &std::path::Path) -> std::path::PathBuf {
+    let commands = default_command_root();
+    if path.join("spore.toml").is_file() {
+        soil::command::spore_root(&commands)
+    } else {
+        commands
+    }
+}
+
 fn install_cli(args: &[String]) -> Result<()> {
     let mut path = None;
     let mut root = None;
@@ -145,9 +175,11 @@ fn install_cli(args: &[String]) -> Result<()> {
             }
         }
     }
+    let path = path.context("install needs PATH")?;
+    let root = root.unwrap_or_else(|| default_install_root(&path));
     let report = soil::install::install(soil::install::InstallOptions {
-        path: path.context("install needs PATH")?,
-        root: root.context("install needs --root DIR")?,
+        path,
+        root,
         allow_unsigned_dev,
         provider_roots,
         composition_cache,
@@ -157,13 +189,13 @@ fn install_cli(args: &[String]) -> Result<()> {
 }
 
 fn status_cli(args: &[String]) -> Result<()> {
-    let mut root = None;
+    let mut roots = Vec::new();
     let mut json = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--root" => {
-                root = Some(std::path::PathBuf::from(
+                roots.push(std::path::PathBuf::from(
                     args.get(i + 1).context("--root DIR")?,
                 ));
                 i += 2;
@@ -175,27 +207,33 @@ fn status_cli(args: &[String]) -> Result<()> {
             other => bail!("unknown status option {other}"),
         }
     }
-    let report = soil::install::status(&root.context("status needs --root DIR")?)?;
+    if roots.is_empty() {
+        roots = default_roots();
+    }
+    let report = soil::install::status_roots(&roots)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
-    } else {
-        if report.installs.is_empty() {
-            println!("no managed installs in {}", report.root.display());
-            return Ok(());
+        return Ok(());
+    }
+    if report.installs.is_empty() {
+        for root in &report.roots {
+            println!("no managed installs in {}", root.display());
         }
+        return Ok(());
+    }
+    println!(
+        "{:<24} {:<12} {:<20} {:>5}  ROOT",
+        "ID", "VERSION", "PACKAGE", "WARM"
+    );
+    for record in &report.installs {
         println!(
-            "{:<24} {:<12} {:<24} {:>5}",
-            "ID", "VERSION", "PACKAGE", "WARM"
+            "{:<24} {:<12} {:<20} {:>5}  {}",
+            record.id,
+            record.version,
+            record.package,
+            if record.warm { "yes" } else { "no" },
+            record.root.display()
         );
-        for record in &report.installs {
-            println!(
-                "{:<24} {:<12} {:<24} {:>5}",
-                record.id,
-                record.version,
-                record.package,
-                if record.warm { "yes" } else { "no" }
-            );
-        }
     }
     Ok(())
 }
@@ -221,10 +259,30 @@ fn rollback_cli(args: &[String]) -> Result<()> {
             }
         }
     }
-    let report = soil::install::rollback(
-        &root.context("rollback needs --root DIR")?,
-        &id.context("rollback needs ID")?,
-    )?;
+    let id = id.context("rollback needs ID")?;
+    let root = match root {
+        Some(root) => root,
+        None => {
+            let status = soil::install::status_roots(&default_roots())?;
+            let mut matches = status
+                .installs
+                .into_iter()
+                .filter(|record| record.id == id)
+                .map(|record| record.root);
+            let first = matches
+                .next()
+                .with_context(|| format!("no managed install {id:?}"))?;
+            if let Some(second) = matches.next() {
+                bail!(
+                    "install {id:?} is in more than one root ({} and {}); pass --root",
+                    first.display(),
+                    second.display()
+                );
+            }
+            first
+        }
+    };
+    let report = soil::install::rollback(&root, &id)?;
     println!("{}", serde_json::to_string_pretty(&report)?);
     Ok(())
 }

@@ -43,6 +43,7 @@ pub struct InstallOptions {
 #[derive(Debug, Clone, Serialize)]
 pub struct InstallReport {
     pub id: String,
+    pub root: PathBuf,
     pub version: String,
     pub package: String,
     pub package_digest: String,
@@ -57,6 +58,10 @@ pub struct InstallReport {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstallRecord {
     pub id: String,
+    /// Install root this record belongs to. Older records may omit it; status
+    /// fills it in from the root it was read from.
+    #[serde(default)]
+    pub root: PathBuf,
     pub version: String,
     pub package: String,
     pub package_digest: String,
@@ -72,7 +77,7 @@ pub struct InstallRecord {
 /// `loam status` output.
 #[derive(Debug, Clone, Serialize)]
 pub struct StatusReport {
-    pub root: PathBuf,
+    pub roots: Vec<PathBuf>,
     pub installs: Vec<InstallRecord>,
 }
 
@@ -173,6 +178,7 @@ pub fn install(options: InstallOptions) -> Result<InstallReport> {
     let previous = state.installs.get(&id).map(|record| record.current.clone());
     let record = InstallRecord {
         id: id.clone(),
+        root: options.root.clone(),
         version,
         package: package_dir.clone(),
         package_digest,
@@ -191,6 +197,7 @@ pub fn install(options: InstallOptions) -> Result<InstallReport> {
 
     Ok(InstallReport {
         id,
+        root: record.root,
         version: record.version,
         package: package_dir,
         package_digest: record.package_digest,
@@ -204,10 +211,23 @@ pub fn install(options: InstallOptions) -> Result<InstallReport> {
 
 /// Read the installed state for one root.
 pub fn status(root: &Path) -> Result<StatusReport> {
-    let state = load_state(root)?;
-    let installs = state.installs.into_values().collect();
+    status_roots(&[root.to_path_buf()])
+}
+
+/// Read the installed state for several roots, in the order given.
+pub fn status_roots(roots: &[PathBuf]) -> Result<StatusReport> {
+    let mut installs = Vec::new();
+    for root in roots {
+        let state = load_state(root)?;
+        for mut record in state.installs.into_values() {
+            if record.root.as_os_str().is_empty() {
+                record.root = root.clone();
+            }
+            installs.push(record);
+        }
+    }
     Ok(StatusReport {
-        root: root.to_path_buf(),
+        roots: roots.to_vec(),
         installs,
     })
 }
@@ -251,6 +271,7 @@ pub fn rollback(root: &Path, id: &str) -> Result<InstallReport> {
 
     Ok(InstallReport {
         id: id.to_string(),
+        root: rolled_back.root,
         version: rolled_back.version,
         package: rolled_back.package,
         package_digest: rolled_back.package_digest,
@@ -626,6 +647,21 @@ mod tests {
         assert_eq!(second.previous.as_deref(), Some(first.generation.as_str()));
         let rolled = rollback(root.path(), &first.id).unwrap();
         assert_eq!(rolled.generation, first.generation);
+    }
+
+    #[test]
+    fn status_reads_several_roots() {
+        let source = tempfile::tempdir().unwrap();
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+        let package = command_package(source.path(), "hello", &component_bytes());
+        let report = install(options(&package, first.path(), true)).unwrap();
+        let status =
+            status_roots(&[first.path().to_path_buf(), second.path().to_path_buf()]).unwrap();
+        assert_eq!(status.roots.len(), 2);
+        assert_eq!(status.installs.len(), 1);
+        assert_eq!(status.installs[0].id, report.id);
+        assert_eq!(status.installs[0].root, first.path());
     }
 
     #[test]
