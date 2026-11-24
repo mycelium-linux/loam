@@ -92,7 +92,17 @@ impl SoilManifest {
                 "id" => id = string(items.get(1)),
                 "name" => name = string(items.get(1)),
                 "version" => version = string(items.get(1)),
-                "module" => module = string(items.get(1)),
+                // (module "path") and (module (path "path")) both mean the
+                // same thing; the nested form mirrors the toml's [module] path,
+                // which is what packages converted from toml still write.
+                "module" => {
+                    module = match items.get(1) {
+                        Some(Sexp::List(inner)) if string(inner.first()).as_deref() == Some("path") => {
+                            string(inner.get(1))
+                        }
+                        other => string(other),
+                    }
+                }
                 "anycast" => anycast = parse_anycast(items)?,
                 "surfaces" => surfaces = parse_surfaces(items)?,
                 // (grants ("soil:vfs" "why it is needed") ...)
