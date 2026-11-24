@@ -66,52 +66,71 @@ pub fn discover(roots: &[PathBuf]) -> Result<Vec<StaticSurface>> {
             }
             let soil = package.join("spore.soil");
             let toml = package.join("spore.toml");
-            let surface = if soil.is_file() {
-                fs::read_to_string(&soil)
-                    .ok()
-                    .and_then(|source| SoilManifest::parse(&source).ok())
-                    .and_then(|manifest| {
-                        let anycast = manifest.anycast.clone()?;
-                        static_surface(
-                            &package,
-                            manifest.id,
-                            manifest.version,
-                            anycast,
-                            &manifest.surfaces,
-                            None,
-                            None,
-                            false,
-                            None,
-                            false,
-                        )
-                    })
-            } else if toml.is_file() {
-                fs::read_to_string(&toml)
-                    .ok()
-                    .and_then(|source| Manifest::parse(&source).ok())
-                    .and_then(|manifest| {
-                        let anycast = manifest.anycast.clone()?;
-                        let writable = manifest.grants.contains_key("soil:vfs-mut");
-                        let records_writable = manifest.grants.contains_key("soil:records")
-                            || manifest.grants.contains_key("soil:records.write");
-                        static_surface(
-                            &package,
-                            manifest.spore.id,
-                            manifest.spore.version,
-                            anycast,
-                            &manifest.surfaces,
-                            manifest.ui.as_ref(),
-                            manifest.web.clone(),
-                            writable,
-                            manifest.records.clone(),
-                            records_writable,
-                        )
-                    })
-            } else {
-                None
-            };
-            if let Some(surface) = surface {
-                found.push(surface);
+            // A package that looks like a web surface but produces none is the
+            // hardest failure to see: discovery simply returns nothing and the
+            // name resolves to the frontdoor's default route, which answers 200
+            // with the wrong app. Say why, per package, instead of dropping it.
+            let outcome: Result<Option<StaticSurface>, String> = (|| {
+                if soil.is_file() {
+                    let source = fs::read_to_string(&soil)
+                        .map_err(|error| format!("read spore.soil: {error}"))?;
+                    let manifest = SoilManifest::parse(&source)
+                        .map_err(|error| format!("spore.soil: {error}"))?;
+                    let Some(anycast) = manifest.anycast.clone() else {
+                        return Ok(None);
+                    };
+                    // The soil manifest carries the same two facts the toml
+                    // does, and they were being dropped on the floor here:
+                    // `web` (the bounded VFS root) and the `soil:vfs-mut`
+                    // grant. Passing `false` made every soil-declared web
+                    // surface read-only, which is what broke saving.
+                    let writable = manifest.grants.contains_key("soil:vfs-mut");
+                    return Ok(static_surface(
+                        &package,
+                        manifest.id,
+                        manifest.version,
+                        anycast,
+                        &manifest.surfaces,
+                        None,
+                        manifest.web.clone(),
+                        writable,
+                        None,
+                        false,
+                    ));
+                }
+                if toml.is_file() {
+                    let source = fs::read_to_string(&toml)
+                        .map_err(|error| format!("read spore.toml: {error}"))?;
+                    let manifest =
+                        Manifest::parse(&source).map_err(|error| format!("spore.toml: {error}"))?;
+                    let Some(anycast) = manifest.anycast.clone() else {
+                        return Ok(None);
+                    };
+                    let writable = manifest.grants.contains_key("soil:vfs-mut");
+                    let records_writable = manifest.grants.contains_key("soil:records")
+                        || manifest.grants.contains_key("soil:records.write");
+                    return Ok(static_surface(
+                        &package,
+                        manifest.spore.id,
+                        manifest.spore.version,
+                        anycast,
+                        &manifest.surfaces,
+                        manifest.ui.as_ref(),
+                        manifest.web.clone(),
+                        writable,
+                        manifest.records.clone(),
+                        records_writable,
+                    ));
+                }
+                Ok(None)
+            })();
+            match outcome {
+                Ok(Some(surface)) => found.push(surface),
+                Ok(None) => {}
+                Err(reason) => eprintln!(
+                    "loamd: web surface skipped in {}: {reason}",
+                    package.display()
+                ),
             }
         }
     }
@@ -207,6 +226,9 @@ fn handle(mut stream: TcpStream, sites: &[(StaticSurface, PathBuf)]) -> Result<(
         .target
         .split_once('?')
         .unwrap_or((&request.target, ""));
+    if path == "/api/agent/settings" {
+        return agent_settings_api(&request, origin, &mut stream);
+    }
     if path == "/api/agent" {
         return agent_api(&request, origin, &mut stream);
     }
@@ -1140,6 +1162,257 @@ fn agent_config() -> Option<AgentConfig> {
         workspace: config.agent_workspace,
         model: config.agent_model,
     })
+}
+
+fn agent_settings_path() -> Option<PathBuf> {
+    std::env::var_os("LOAM_CONFIG")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| crate::config::Config::default_path())
+}
+
+fn operator_config_path() -> Option<PathBuf> {
+    std::env::var_os("OPERATOR_CONFIG")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".operator/config.toml"))
+        })
+}
+
+fn operator_bifrost() -> serde_json::Value {
+    let Some(path) = operator_config_path() else {
+        return json!({});
+    };
+    let Ok(source) = fs::read_to_string(path) else {
+        return json!({});
+    };
+    let Ok(value) = toml::from_str::<toml::Value>(&source) else {
+        return json!({});
+    };
+    let bifrost = value.get("bifrost");
+    let text = |key: &str| {
+        bifrost
+            .and_then(|table| table.get(key))
+            .and_then(toml::Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    json!({
+        "baseUrl": text("base_url"),
+        "model": text("model"),
+        "apiKeyFile": text("api_key_file"),
+    })
+}
+
+fn agent_models(endpoint: &str) -> Vec<String> {
+    let mut models = Vec::new();
+    if let Ok(result) = acp_rpc(endpoint, "session/list", json!({})) {
+        if let Some(sessions) = result.get("sessions").and_then(|value| value.as_array()) {
+            for session in sessions {
+                if let Some(model) = session.get("model").and_then(|value| value.as_str()) {
+                    if !models.iter().any(|existing| existing == model) {
+                        models.push(model.to_string());
+                    }
+                }
+            }
+        }
+    }
+    models
+}
+
+fn agent_settings() -> serde_json::Value {
+    let Some(path) = agent_settings_path() else {
+        return json!({});
+    };
+    let config = crate::config::Config::load(&path).unwrap_or_default();
+    let endpoint = config.agent_endpoint.unwrap_or_default();
+    let bifrost = operator_bifrost();
+    let mut models = agent_models(&endpoint);
+    if let Some(model) = bifrost.get("model").and_then(|value| value.as_str()) {
+        if !model.is_empty() && !models.iter().any(|known| known == model) {
+            models.push(model.to_string());
+        }
+    }
+    json!({
+        "configPath": path.display().to_string(),
+        "endpoint": endpoint,
+        "workspace": config.agent_workspace.unwrap_or_default(),
+        "model": config.agent_model.unwrap_or_default(),
+        "models": models,
+        "bifrost": bifrost,
+        "operatorConfigPath": operator_config_path().map(|path| path.display().to_string()).unwrap_or_default(),
+    })
+}
+
+fn agent_settings_api(
+    request: &Request,
+    origin: Option<&str>,
+    stream: &mut TcpStream,
+) -> Result<()> {
+    if request.method == "OPTIONS" {
+        return respond(stream, 204, "text/plain", b"", origin);
+    }
+    if request.method == "GET" {
+        return json_response(stream, 200, &agent_settings(), origin);
+    }
+    if request.method != "POST" {
+        return json_response(stream, 405, &json!({"error": "GET or POST"}), origin);
+    }
+    let body: serde_json::Value = match serde_json::from_slice(&request.body) {
+        Ok(body) => body,
+        Err(error) => {
+            return json_response(stream, 400, &json!({"error": error.to_string()}), origin);
+        }
+    };
+    let text = |key: &str| body.get(key).and_then(|value| value.as_str());
+    if let Some(endpoint) = text("endpoint") {
+        if !(endpoint.starts_with("http://") || endpoint.starts_with("https://")) {
+            return json_response(
+                stream,
+                400,
+                &json!({"error": "endpoint must be an absolute http(s) URL"}),
+                origin,
+            );
+        }
+    }
+    if let Some(path) = agent_settings_path() {
+        let source = fs::read_to_string(&path).unwrap_or_else(|_| "(loam\n  (version 1))\n".into());
+        let endpoint = text("endpoint");
+        let workspace = text("workspace");
+        let model = text("model");
+        let updated = update_agent_form(
+            &source,
+            endpoint.unwrap_or_default(),
+            workspace.unwrap_or_default(),
+            model.unwrap_or_default(),
+        );
+        if let Err(error) = fs::write(&path, updated) {
+            return json_response(stream, 500, &json!({"error": error.to_string()}), origin);
+        }
+    }
+    if let Some(path) = operator_config_path() {
+        if body.get("bifrost").is_some() {
+            let current = fs::read_to_string(&path).unwrap_or_default();
+            let bifrost = body.get("bifrost").cloned().unwrap_or_else(|| json!({}));
+            let updated = update_bifrost(
+                &current,
+                bifrost.get("baseUrl").and_then(|value| value.as_str()),
+                bifrost.get("model").and_then(|value| value.as_str()),
+                bifrost.get("apiKeyFile").and_then(|value| value.as_str()),
+            );
+            if let Err(error) = fs::write(&path, updated) {
+                return json_response(stream, 500, &json!({"error": error.to_string()}), origin);
+            }
+        }
+    }
+    json_response(stream, 200, &agent_settings(), origin)
+}
+
+fn update_agent_form(source: &str, endpoint: &str, workspace: &str, model: &str) -> String {
+    let block = format!(
+        "(agent\n    (endpoint \"{}\")\n    (workspace \"{}\")\n    (model \"{}\"))",
+        escape_soil(endpoint),
+        escape_soil(workspace),
+        escape_soil(model)
+    );
+    if let Some(start) = source.find("(agent") {
+        let bytes = source.as_bytes();
+        let mut depth = 0i32;
+        let mut end = None;
+        for (index, byte) in bytes.iter().enumerate().skip(start) {
+            match byte {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(index + 1);
+                        break;
+                    }
+                }
+                b'"' => {}
+                _ => {}
+            }
+        }
+        if let Some(end) = end {
+            let mut out = String::new();
+            out.push_str(&source[..start]);
+            out.push_str(&block);
+            out.push_str(&source[end..]);
+            return out;
+        }
+    }
+    let Some(at) = source.rfind(')') else {
+        return source.to_string();
+    };
+    let mut out = String::new();
+    out.push_str(&source[..at]);
+    out.push_str("  ");
+    out.push_str(&block);
+    out.push('\n');
+    out.push_str(&source[at..]);
+    out
+}
+
+fn escape_soil(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn update_bifrost(
+    source: &str,
+    base_url: Option<&str>,
+    model: Option<&str>,
+    api_key_file: Option<&str>,
+) -> String {
+    let mut lines: Vec<String> = source.lines().map(str::to_string).collect();
+    let mut section = None;
+    for index in 0..lines.len() {
+        let trimmed = lines[index].trim().to_string();
+        if trimmed.starts_with('[') {
+            section = if trimmed == "[bifrost]" {
+                Some(index)
+            } else {
+                None
+            };
+        }
+        if section.is_none() {
+            continue;
+        }
+        for (key, value) in [
+            ("base_url", base_url),
+            ("model", model),
+            ("api_key_file", api_key_file),
+        ] {
+            let Some(value) = value else { continue };
+            if trimmed.starts_with(&format!("{key} ")) || trimmed.starts_with(&format!("{key}=")) {
+                lines[index] = format!("{key} = \"{}\"", escape_toml(value));
+            }
+        }
+    }
+    if !lines.iter().any(|line| line.trim() == "[bifrost]") {
+        let mut prefix = vec!["[bifrost]".to_string()];
+        if let Some(value) = base_url {
+            prefix.push(format!("base_url = \"{}\"", escape_toml(value)));
+        }
+        if let Some(value) = model {
+            prefix.push(format!("model = \"{}\"", escape_toml(value)));
+        }
+        if let Some(value) = api_key_file {
+            prefix.push(format!("api_key_file = \"{}\"", escape_toml(value)));
+        }
+        prefix.push(String::new());
+        prefix.append(&mut lines);
+        lines = prefix;
+    }
+    let mut out = lines.join("\n");
+    if source.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+fn escape_toml(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 fn agent_api(request: &Request, origin: Option<&str>, stream: &mut TcpStream) -> Result<()> {
