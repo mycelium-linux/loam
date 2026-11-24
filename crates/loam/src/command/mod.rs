@@ -627,7 +627,7 @@ fn installed_runtime(package: &Path) -> (Option<PathBuf>, Option<String>) {
 pub fn package_commands(package: &Path) -> Result<Vec<CommandEntry>> {
     if package.join("command.toml").is_file() {
         standalone_command(package).map(|entry| vec![entry])
-    } else if package.join("spore.toml").is_file() {
+    } else if package.join("spore.soil").is_file() || package.join("spore.toml").is_file() {
         spore_commands(package)
     } else {
         bail!(
@@ -719,7 +719,10 @@ fn standalone_command(package: &Path) -> Result<CommandEntry> {
 /// Limits are the command defaults: a Spore declares what it runs, not how much
 /// memory the host may give it.
 fn spore_commands(package: &Path) -> Result<Vec<CommandEntry>> {
-    if !package.join("spore.toml").is_file() {
+    // A Spore declared in Soil has no commands yet: `spore.soil` carries them in
+    // its own `(commands ...)` form, which is not read here. It is still a Spore
+    // package, so it must not be refused for lacking a toml.
+    if !(package.join("spore.soil").is_file() || package.join("spore.toml").is_file()) {
         return Ok(Vec::new());
     }
     let manifest = crate::spore::Manifest::load(package)

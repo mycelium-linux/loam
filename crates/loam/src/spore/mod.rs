@@ -32,6 +32,8 @@ pub mod manual;
 pub mod publisher;
 pub mod soil;
 
+use soil::SoilManifest;
+
 pub const SCHEMA: u32 = 1;
 pub const LOCK_NAME: &str = "spore.lock";
 pub const SIGNATURE_DIR: &str = "signatures";
@@ -167,9 +169,14 @@ pub fn secret_shaped(name: &str) -> bool {
         || upper.starts_with("AWS_")
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
+    /// Which file this manifest was read from: `spore.soil` or `spore.toml`.
+    /// Not part of any manifest's syntax; the lock has to cover the file that
+    /// actually declared the package.
+    #[serde(skip)]
+    pub manifest_file: Option<String>,
     pub schema: u32,
     pub spore: SporeMeta,
     pub engine: Engine,
@@ -543,7 +550,7 @@ pub const CHROME_REGIONS: [&str; 8] = [
     "window",
 ];
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SporeMeta {
     pub id: String,
@@ -566,7 +573,7 @@ pub struct SporeMeta {
     pub homepage: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Engine {
     pub soil: String,
@@ -594,7 +601,7 @@ pub struct Ui {
     pub hot_reload: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Launch {
     /// The surface a bare launch opens.
@@ -968,13 +975,56 @@ impl Manifest {
         Ok(manifest)
     }
 
+    /// Read a package manifest. `spore.soil` is the source format; `spore.toml`
+    /// is still read for packages that predate it, so a shop is never stranded
+    /// on the old form while it is being converted.
     pub fn load(root: &Path) -> Result<Self> {
-        let path = root.join("spore.toml");
-        let source = fs::read_to_string(&path)
-            .map_err(|error| Error::Io(format!("{}: {error}", path.display())))?;
-        let manifest = Self::parse(&source)?;
+        let soil = root.join("spore.soil");
+        let toml = root.join("spore.toml");
+        let manifest = if soil.is_file() {
+            let source = fs::read_to_string(&soil)
+                .map_err(|error| Error::Io(format!("{}: {error}", soil.display())))?;
+            let mut manifest = Self::from_soil(SoilManifest::parse(&source)?)?;
+            manifest.manifest_file = Some("spore.soil".to_owned());
+            manifest
+        } else {
+            let source = fs::read_to_string(&toml)
+                .map_err(|error| Error::Io(format!("{}: {error}", toml.display())))?;
+            let mut manifest = Self::parse(&source)?;
+            manifest.manifest_file = Some("spore.toml".to_owned());
+            manifest
+        };
         manifest.check_skills(root)?;
         Ok(manifest)
+    }
+
+    /// The same package, declared in Soil. Everything absent from the Soil
+    /// dialect keeps its structural default rather than an invented value.
+    pub fn from_soil(soil: SoilManifest) -> Result<Self> {
+        Ok(Self {
+            schema: 1,
+            spore: SporeMeta {
+                id: soil.id,
+                title: Some(soil.name.clone()),
+                name: soil.name,
+                version: soil.version,
+                license: String::new(),
+                summary: String::new(),
+                description: None,
+                homepage: None,
+            },
+            engine: Engine {
+                soil: ">=0.1".to_owned(),
+                target: "wasm32-wasip2".to_owned(),
+                abi: BTreeMap::new(),
+            },
+            module: soil.module.map(|path| Module { path, sha256: None }),
+            surfaces: soil.surfaces,
+            anycast: soil.anycast,
+            grants: soil.grants,
+            web: soil.web,
+            ..Self::default()
+        })
     }
 
     /// A stable, non-secret projection for authoring tools.
@@ -1793,7 +1843,9 @@ impl Manifest {
     /// benefit. `spore.lock` is added when packing.
     pub fn package_paths(&self) -> Vec<PathBuf> {
         let mut paths = self.declared_paths();
-        paths.push(PathBuf::from("spore.toml"));
+        paths.push(PathBuf::from(
+            self.manifest_file.as_deref().unwrap_or("spore.soil"),
+        ));
         paths.sort();
         paths.dedup();
         paths

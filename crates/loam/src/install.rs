@@ -103,11 +103,12 @@ pub fn install(options: InstallOptions) -> Result<InstallReport> {
     fs::create_dir_all(&options.root)
         .with_context(|| format!("create install root {}", options.root.display()))?;
 
-    let is_spore = source.join("spore.toml").is_file();
+    let is_spore =
+        source.join("spore.soil").is_file() || source.join("spore.toml").is_file();
     let is_command = source.join("command.toml").is_file();
     if !is_spore && !is_command {
         bail!(
-            "{} has neither spore.toml nor command.toml",
+            "{} has neither spore.soil, spore.toml nor command.toml",
             source.display()
         );
     }
