@@ -21,6 +21,10 @@
 //!       (geode "geode://service/acp")
 //!       (purpose "acp-http")
 //!       (header "authorization")))
+//!   (agent
+//!     (endpoint "http://127.0.0.1:8792/")
+//!     (workspace "/Users/me/src/app")
+//!     (model "gpt-5.6-luna"))
 //!   (mycelium
 //!     (home "~/.mycelium")
 //!     (publish-leases #t)))
@@ -54,6 +58,12 @@ pub struct Config {
     pub http_origins: Vec<String>,
     /// Host-owned mappings from a guest handle to a Geode reference.
     pub http_credentials: Vec<HttpCredential>,
+    /// The agent sidebar's ACP HTTP endpoint.
+    pub agent_endpoint: Option<String>,
+    /// The trusted workspace a sidebar session opens in.
+    pub agent_workspace: Option<String>,
+    /// The model the sidebar asks the harness to select.
+    pub agent_model: Option<String>,
 }
 
 /// One outbound credential the host is willing to resolve for a guest.
@@ -97,6 +107,7 @@ impl Config {
                 }
                 "daemon" => config.parse_daemon(items)?,
                 "http" => config.parse_http(items)?,
+                "agent" => config.parse_agent(items)?,
                 "mycelium" => config.parse_mycelium(items)?,
                 other => bail!("loam.conf.soil: unknown top-level option {other:?}"),
             }
@@ -194,6 +205,30 @@ impl Config {
                         Some(string(pair.get(1)).context("web listen needs an address")?)
                 }
                 other => bail!("loam.conf.soil: unknown web option {other:?}"),
+            }
+        }
+        Ok(())
+    }
+
+    fn parse_agent(&mut self, items: &[Sexp]) -> Result<()> {
+        for field in items.iter().skip(1) {
+            let Sexp::List(pair) = field else {
+                continue;
+            };
+            let Some(Sexp::Atom(key)) = pair.first() else {
+                continue;
+            };
+            match key.as_str() {
+                "endpoint" => {
+                    let endpoint = string(pair.get(1)).context("agent endpoint needs a URL")?;
+                    if !(endpoint.starts_with("http://") || endpoint.starts_with("https://")) {
+                        bail!("agent endpoint must be an absolute http(s) URL");
+                    }
+                    self.agent_endpoint = Some(endpoint);
+                }
+                "workspace" => self.agent_workspace = string(pair.get(1)),
+                "model" => self.agent_model = string(pair.get(1)),
+                other => bail!("loam.conf.soil: unknown agent option {other:?}"),
             }
         }
         Ok(())
@@ -410,5 +445,25 @@ mod tests {
             config.http_credentials[0].header.as_deref(),
             Some("authorization")
         );
+    }
+    #[test]
+    fn reads_the_agent_sidebar_endpoint() {
+        let config = Config::parse(
+            r#"
+            (loam
+              (version 1)
+              (agent
+                (endpoint "http://127.0.0.1:8792/")
+                (workspace "/tmp/work")
+                (model "gpt-5.6-luna")))
+            "#,
+        )
+        .expect("agent config");
+        assert_eq!(
+            config.agent_endpoint.as_deref(),
+            Some("http://127.0.0.1:8792/")
+        );
+        assert_eq!(config.agent_workspace.as_deref(), Some("/tmp/work"));
+        assert_eq!(config.agent_model.as_deref(), Some("gpt-5.6-luna"));
     }
 }

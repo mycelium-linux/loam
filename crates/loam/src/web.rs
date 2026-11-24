@@ -13,9 +13,10 @@
 use std::{
     collections::BTreeMap,
     fs,
-    io::{Read, Write},
+    io::{BufRead, Read, Write},
     net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use anyhow::{Context, Result};
@@ -206,6 +207,9 @@ fn handle(mut stream: TcpStream, sites: &[(StaticSurface, PathBuf)]) -> Result<(
         .target
         .split_once('?')
         .unwrap_or((&request.target, ""));
+    if path == "/api/agent" {
+        return agent_api(&request, origin, &mut stream);
+    }
     if path == "/api/vfs" || path.starts_with("/api/vfs/") {
         return vfs_api(
             site,
@@ -1116,6 +1120,183 @@ fn percent_decode(value: &str) -> String {
         index += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+#[derive(Clone)]
+struct AgentConfig {
+    endpoint: String,
+    workspace: Option<String>,
+    model: Option<String>,
+}
+
+fn agent_config() -> Option<AgentConfig> {
+    let path = std::env::var_os("LOAM_CONFIG")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| crate::config::Config::default_path().filter(|path| path.is_file()))?;
+    let config = crate::config::Config::load(&path).ok()?;
+    Some(AgentConfig {
+        endpoint: config.agent_endpoint?,
+        workspace: config.agent_workspace,
+        model: config.agent_model,
+    })
+}
+
+fn agent_api(request: &Request, origin: Option<&str>, stream: &mut TcpStream) -> Result<()> {
+    if request.method == "OPTIONS" {
+        return respond(stream, 204, "text/plain", b"", origin);
+    }
+    if request.method != "POST" {
+        return json_response(stream, 405, &json!({"error": "POST only"}), origin);
+    }
+    let Some(config) = agent_config() else {
+        return json_response(
+            stream,
+            503,
+            &json!({"error": "agent endpoint is not configured in loam.conf.soil"}),
+            origin,
+        );
+    };
+    let body: serde_json::Value = match serde_json::from_slice(&request.body) {
+        Ok(body) => body,
+        Err(error) => {
+            return json_response(stream, 400, &json!({"error": error.to_string()}), origin);
+        }
+    };
+    let text = body
+        .get("text")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    if text.trim().is_empty() {
+        return json_response(stream, 400, &json!({"error": "text is required"}), origin);
+    }
+    let session = body
+        .get("sessionId")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+    match acp_prompt(&config, &session, text) {
+        Ok((session, reply)) => json_response(
+            stream,
+            200,
+            &json!({"sessionId": session, "reply": reply}),
+            origin,
+        ),
+        Err(error) => json_response(stream, 502, &json!({"error": error}), origin),
+    }
+}
+
+fn acp_rpc(
+    endpoint: &str,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let request = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
+    let response = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(180))
+        .build()
+        .post(endpoint)
+        .set("content-type", "application/json")
+        .send_string(&request.to_string())
+        .map_err(|error| error.to_string())?;
+    let text = response.into_string().map_err(|error| error.to_string())?;
+    let value: serde_json::Value =
+        serde_json::from_str(text.trim()).map_err(|error| error.to_string())?;
+    if let Some(error) = value.get("error") {
+        return Err(error.to_string());
+    }
+    Ok(value.get("result").cloned().unwrap_or(value))
+}
+
+fn acp_prompt(config: &AgentConfig, session: &str, text: &str) -> Result<(String, String), String> {
+    let session = if session.is_empty() {
+        let created = acp_rpc(
+            &config.endpoint,
+            "session/new",
+            json!({"cwd": config.workspace.clone().unwrap_or_else(|| "/".into()), "mcpServers": []}),
+        )?;
+        created
+            .get("sessionId")
+            .and_then(|value| value.as_str())
+            .ok_or("session/new returned no id")?
+            .to_string()
+    } else {
+        session.to_string()
+    };
+    if let Some(model) = &config.model {
+        let _ = acp_rpc(
+            &config.endpoint,
+            "session/set_mode",
+            json!({"sessionId": session, "modeId": model}),
+        );
+    }
+    let sse = if let Some(prefix) = config.endpoint.strip_suffix("/acp") {
+        format!("{prefix}/sse?sessionId={session}")
+    } else {
+        format!(
+            "{}/sse?sessionId={session}",
+            config.endpoint.trim_end_matches('/')
+        )
+    };
+    let stream = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(300))
+        .timeout_read(Duration::from_secs(2))
+        .build()
+        .get(&sse)
+        .set("accept", "text/event-stream")
+        .call()
+        .map_err(|error| error.to_string())?;
+    let result = acp_rpc(
+        &config.endpoint,
+        "session/prompt",
+        json!({"sessionId": session, "prompt": [{"type": "text", "text": text}]}),
+    )?;
+    let mut reply = String::new();
+    if let Some(content) = result.get("content").and_then(|value| value.as_array()) {
+        for part in content {
+            if let Some(text) = part.get("text").and_then(|value| value.as_str()) {
+                reply.push_str(text);
+            }
+        }
+    }
+    // ACP leaves the SSE stream open after `end_turn`. Read it on its own
+    // thread and stop collecting shortly after the prompt response returns.
+    let (sender, receiver) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        let mut reader = std::io::BufReader::new(stream.into_reader());
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    let Some(data) = line.trim().strip_prefix("data:") else {
+                        continue;
+                    };
+                    let Ok(update) = serde_json::from_str::<serde_json::Value>(data.trim()) else {
+                        continue;
+                    };
+                    if let Some(text) = update
+                        .get("content")
+                        .and_then(|content| content.get("text"))
+                        .and_then(|value| value.as_str())
+                    {
+                        if sender.send(text.to_string()).is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(4);
+    while let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) {
+        match receiver.recv_timeout(remaining) {
+            Ok(chunk) => reply.push_str(&chunk),
+            Err(_) => break,
+        }
+    }
+    Ok((session, reply))
 }
 
 struct Request {

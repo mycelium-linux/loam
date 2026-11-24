@@ -22,6 +22,7 @@
     openrouter: { label: 'OpenRouter', icon: 'https://cdn.simpleicons.org/openrouter/e5e7eb' },
   };
   let model = localStorage.getItem('mycelium.agent.model') || 'fpl';
+  let sessionId = localStorage.getItem('mycelium.agent.session') || '';
   let context = { app: 'This app', detail: '/' };
   let pinned = false;
   let fullscreen = false;
@@ -69,7 +70,7 @@
       button.setAttribute('aria-checked', String(selected));
     });
     if (announce) {
-      addMessage('system', `Model provider set to ${provider.label}. The harness is not connected yet.`);
+      addMessage('system', `Model provider preference set to ${provider.label}.`);
     }
   }
 
@@ -174,7 +175,11 @@
 
   function runSeed(payload = {}) {
     if (payload.context) setContext(payload.context);
-    if (payload.prompt) addMessage('user', payload.prompt);
+    if (payload.prompt) {
+      addMessage('user', payload.prompt);
+      void ask(payload.prompt);
+      return;
+    }
     const thinking = addThinking();
     const tools = addToolList(payload.tools || []);
     window.setTimeout(() => {
@@ -184,9 +189,9 @@
         tools.querySelector('.agent-tools-head').textContent = 'Tools ready';
       }
       if (payload.ready) addMessage('agent', payload.ready);
-      addMessage('system', payload.note || 'Harness not connected yet — FPL Auth and Geode are the next wires.');
+      addMessage('system', payload.note || 'Ready.');
       thread.scrollTop = thread.scrollHeight;
-    }, 1900);
+    }, 900);
   }
 
   function addMessage(role, text) {
@@ -210,15 +215,38 @@
     send.disabled = !prompt.value.trim();
   }
 
+  async function ask(text) {
+    const thinking = addThinking();
+    try {
+      const response = await fetch('/api/agent', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text, sessionId }),
+      });
+      const data = await response.json();
+      thinking?.remove();
+      if (!response.ok || data.error) {
+        addMessage('system', data.error || `Agent error (${response.status}).`);
+        return;
+      }
+      if (data.sessionId) {
+        sessionId = data.sessionId;
+        try { localStorage.setItem('mycelium.agent.session', sessionId); } catch {}
+      }
+      addMessage('agent', data.reply || 'The turn finished without text.');
+    } catch (error) {
+      thinking?.remove();
+      addMessage('system', `Agent unavailable: ${error.message}`);
+    }
+  }
+
   function submit() {
     const text = prompt.value.trim();
     if (!text) return;
     addMessage('user', text);
     prompt.value = '';
     resizePrompt();
-    window.setTimeout(() => {
-      addMessage('system', 'The agent harness is not connected yet. This surface is ready for it: context is attached, the prompt is composed, and the app can receive an edit intent.');
-    }, 320);
+    void ask(text);
   }
 
   composer.addEventListener('submit', (event) => {
