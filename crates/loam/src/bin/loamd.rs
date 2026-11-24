@@ -107,6 +107,7 @@ fn parse_options(args: &[String]) -> Result<Options> {
     let mut log_keep = config.log_keep.unwrap_or(soil::log::DEFAULT_KEEP);
     let mut mycelium_home = config.mycelium_home;
     let mut publish_leases = config.publish_leases.unwrap_or(true);
+    let stream = config.stream.clone();
     let mut roots_from_cli = false;
 
     let mut i = 0;
@@ -252,6 +253,7 @@ fn parse_options(args: &[String]) -> Result<Options> {
         log_keep,
         mycelium_home,
         publish_leases,
+        stream,
     })
 }
 

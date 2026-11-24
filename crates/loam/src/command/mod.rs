@@ -770,6 +770,10 @@ pub struct CommandRunner {
     /// bus) for a command that declares `soil:unibus`, so a missing hub costs
     /// a publish, not the command run.
     bus: Option<Arc<dyn crate::Bus>>,
+    /// One queue shared with the daemon's stream transports. Linked only when
+    /// the command declares `soil:streams`; a command without it cannot accept
+    /// a session even if the host runs listeners.
+    streams: Option<Arc<crate::stream::StreamHub>>,
     components: Mutex<BTreeMap<PathBuf, Arc<wasmtime::component::Component>>>,
 }
 
@@ -783,8 +787,15 @@ impl CommandRunner {
             plugins: None,
             records,
             bus,
+            streams: None,
             components: Mutex::new(BTreeMap::new()),
         })
+    }
+
+    /// Link `soil:streams` to the host's accepted-session queue.
+    pub fn with_streams(mut self, hub: crate::stream::StreamHub) -> Self {
+        self.streams = Some(Arc::new(hub));
+        self
     }
 
     /// Use a scanned plugin registry when resolving a command's imports.
@@ -867,6 +878,12 @@ impl CommandRunner {
         if bus.is_some() {
             crate::unibus::add_to_linker::<Host>(&mut linker)?;
         }
+        let streams = if entry.requires.iter().any(|cap| cap.starts_with("soil:streams")) {
+            crate::stream::add_to_linker::<Host>(&mut linker)?;
+            self.streams.clone()
+        } else {
+            None
+        };
 
         let stdout = MemoryOutputPipe::new(limits.max_stdout_bytes);
         let stderr = MemoryOutputPipe::new(limits.max_stderr_bytes);
@@ -898,6 +915,7 @@ impl CommandRunner {
         let mut store = Store::new(
             &self.engine,
             Host {
+                streams,
                 wasi: wasi.build(),
                 table: wasmtime::component::ResourceTable::new(),
                 limits: store_limits,
@@ -960,6 +978,10 @@ struct Host {
     /// bus. The command publishes through this; the records host never learns
     /// the bus exists, which is what keeps the two capabilities independent.
     bus: Option<crate::unibus::BusHost>,
+    /// `soil:streams` queue, when the command declared it and the host runs
+    /// listeners. Sessions arrive from WebSocket or Iroh; the command sees only
+    /// the protocol name.
+    streams: Option<Arc<crate::stream::StreamHub>>,
     /// `loam:plugin/ipc` backend, when a plugin provider named a sidecar.
     ipc: Option<Box<dyn crate::command::plugin_ipc::Backend>>,
 }
@@ -1175,6 +1197,91 @@ fn slug(value: &str) -> bool {
             .chars()
             .next()
             .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+}
+
+impl crate::stream::duplex::Host for Host {
+    fn accept(
+        &mut self,
+        protocol: String,
+    ) -> std::result::Result<
+        Option<wasmtime::component::Resource<crate::stream::StreamSession>>,
+        crate::stream::duplex::Error,
+    > {
+        let Some(hub) = &self.streams else {
+            return Err(crate::stream::duplex::Error::Denied);
+        };
+        let Some(session) = hub.accept(&protocol) else {
+            return Ok(None);
+        };
+        self.table
+            .push(session)
+            .map(Some)
+            .map_err(|_| crate::stream::duplex::Error::OverBudget)
+    }
+}
+
+impl crate::stream::duplex::HostSession for Host {
+    fn info(
+        &mut self,
+        session: wasmtime::component::Resource<crate::stream::StreamSession>,
+    ) -> crate::stream::duplex::Info {
+        let info = self
+            .table
+            .get(&session)
+            .map(|session| session.info.clone())
+            .unwrap_or_else(|_| crate::stream::StreamInfo {
+                protocol: String::new(),
+                peer: None,
+                principal: None,
+                media_type: None,
+            });
+        crate::stream::duplex::Info {
+            protocol: info.protocol,
+            peer: info.peer,
+            principal: info.principal,
+            media_type: info.media_type,
+        }
+    }
+
+    fn read(
+        &mut self,
+        session: wasmtime::component::Resource<crate::stream::StreamSession>,
+        max: u32,
+    ) -> std::result::Result<Option<Vec<u8>>, crate::stream::duplex::Error> {
+        self.table
+            .get_mut(&session)
+            .map_err(|_| crate::stream::duplex::Error::Invalid)?
+            .read(max)
+    }
+
+    fn write(
+        &mut self,
+        session: wasmtime::component::Resource<crate::stream::StreamSession>,
+        data: Vec<u8>,
+    ) -> std::result::Result<u64, crate::stream::duplex::Error> {
+        self.table
+            .get_mut(&session)
+            .map_err(|_| crate::stream::duplex::Error::Invalid)?
+            .write(&data)
+    }
+
+    fn close(
+        &mut self,
+        session: wasmtime::component::Resource<crate::stream::StreamSession>,
+    ) -> std::result::Result<(), crate::stream::duplex::Error> {
+        self.table
+            .get_mut(&session)
+            .map_err(|_| crate::stream::duplex::Error::Invalid)?
+            .close()
+    }
+
+    fn drop(
+        &mut self,
+        session: wasmtime::component::Resource<crate::stream::StreamSession>,
+    ) -> std::result::Result<(), wasmtime::Error> {
+        let _ = self.table.delete(session);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
