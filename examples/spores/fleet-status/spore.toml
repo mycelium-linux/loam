@@ -1,0 +1,39 @@
+schema = 1
+
+[spore]
+id = "org.mycelium.fleet-status"
+name = "fleet-status"
+version = "0.1.0"
+license = "Apache-2.0 OR MIT"
+summary = "Live Loam and Mycelium fleet status"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+
+[launch]
+default = "web"
+surfaces = ["web"]
+
+[[surfaces]]
+name = "web"
+kind = "web"
+entry = "web/index.html"
+
+[anycast]
+name = "fleet"
+kind = "fleet"
+alpns = ["soil/http/1"]
+ttl_secs = 240
+
+[grants]
+"soil:mycelium.status" = "read node, fleet, frontdoor and tunnel status"
+"soil:spore.catalog" = "read installed Spores and running surfaces"
+
+[denied]
+"soil:http" = ["the host owns the Mycelium CLI and its credentials"]
+"soil:process" = ["a status page does not spawn processes"]
+
+[presentation]
+badge = "F"
+color = "#c9b3ff"
