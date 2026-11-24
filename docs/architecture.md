@@ -171,14 +171,30 @@ installed registry do. **Exports are declarations, not grants.**
 
 ## Packaging
 
-Commands and Spores are signed packages:
+Commands and Spores are signed packages. An author writes **Soil**, and the
+installed artifact is the normalized form:
+
+```soil
+(spore
+  (id "org.mycelium.say")
+  (version "0.1.0")
+  (grants ("soil:time" "stamps its line"))
+  (commands
+    (command (name "say") (summary "print one line") (module "bin/say.wasm"))))
+```
 
 ```text
-command.toml
+spore.soil          ; source form, wins when present
+spore.toml          ; installed form
 command.grant
 command.grant.sig
 module.wasm
 ```
+
+A standalone `command.toml` is the legacy hand-installed shape: `mb` still uses
+it. The source form is the Soil manifest, including `commands`, so a Spore that
+is only a command needs no second manifest. **A command's entry point is its
+`wasi:cli/run` export**; there is no per-command entry field to declare.
 
 `loam::spore` owns package identity, lock, manifest, and signature checks. `loam::command` owns the installed command registry and the wasm command runner.
 

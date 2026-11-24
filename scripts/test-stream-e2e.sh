@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # End-to-end: a real Spore accepts a session over WebSocket through loamd.
 #
-# Builds the stream-echo fixture, installs it as a command that requires
-# soil:streams, starts loamd with a ws listener, dials it, and expects the
-# Spore's echo. This is the test the transport PRs were missing: it proves the
-# hub wiring, not just the handshake.
+# Builds the stream-echo fixture, installs it as a Spore that declares a
+# `soil:streams` grant and one command, starts loamd with a ws listener, dials
+# it, and expects the Spore's echo. This is the test the transport PRs were
+# missing: it proves the hub wiring, not just the handshake.
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -25,15 +25,9 @@ PORT=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print
 COMMANDS="$WORK/commands/stream-echo"
 mkdir -p "$COMMANDS"
 cp "$WORK/fixture-target/wasm32-wasip2/release/loam_stream_echo.wasm" "$COMMANDS/module.wasm"
-cat > "$COMMANDS/command.toml" <<'TOML'
-schema = 1
-[command]
-name = "stream-echo"
-version = "0.1.0"
-summary = "accept one soil:streams session and echo it"
-module = "module.wasm"
-requires = ["soil:streams"]
-TOML
+# The package's manifest is Soil, like everything else an author writes. The
+# grant lives in the Spore's `grants`, not on the command.
+cp "$FIXTURE/spore.soil" "$COMMANDS/spore.soil"
 
 cat > "$WORK/loam.conf.soil" <<TOML
 (loam

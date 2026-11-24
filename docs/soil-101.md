@@ -55,7 +55,7 @@ The checked-in example is static so it runs on every host while the Spore
 compiler is still a bootstrap:
 
 ```sh
-cp -R examples/hello-soil ~/.mycelium/spores/
+loam install examples/hello-soil --root ~/.mycelium/spores --allow-unsigned-dev
 loamd serve --root ~/.mycelium/spores --web-listen 127.0.0.1:8799
 ```
 

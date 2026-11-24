@@ -1,0 +1,16 @@
+; A Spore whose only entrypoint is a command: the runner calls wasi:cli/run.
+;
+; The grant is declared here, once, because the command is a face of this
+; package rather than a second policy.
+(spore
+  (id "dev.loam.stream-echo")
+  (name "stream-echo")
+  (version "0.1.0")
+  (summary "accept one soil:streams session and echo it")
+  (grants
+    ("soil:streams" "session transport end to end"))
+  (commands
+    (command
+      (name "stream-echo")
+      (summary "accept one soil:streams session and echo it")
+      (module "module.wasm"))))
