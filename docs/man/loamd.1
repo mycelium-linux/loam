@@ -1,0 +1,137 @@
+.TH LOAMD 1 "2026-11-23" "loam 0.1.0" "User Commands"
+.SH NAME
+loamd \- per-user supervisor for loam command instances
+.SH SYNOPSIS
+.B loamd
+.RI [ serve ]
+.RI [ options ]
+.br
+.B loamd
+.I start \fICOMMAND\fR
+.RI [ args ...]
+.br
+.B loamd
+.I list\fR|\fIping\fR|\fIinspect\fR|\fIlogs\fR|\fIstop\fR|\fIreload\fR|\fIshutdown
+.SH DESCRIPTION
+.B loamd
+is the per-user supervisor for command and web-surface Spores. It owns a
+command registry, a plugin registry, the instances it starts, and the local
+static web listener. It accepts only same-uid peers over a Unix socket.
+.PP
+It also publishes manifest-declared web surfaces as Mycelium service leases
+when a Mycelium identity is available. The matching
+.B mycelium-frontdoor
+derives routes from those leases.
+.SH OPTIONS
+.TP
+.B \-\-config \fIFILE\fR
+Read host defaults from
+.IR loam.conf.soil .
+.TP
+.B \-\-socket \fIPATH\fR
+Control socket. Defaults to
+.IR $XDG_RUNTIME_DIR/loam/loamd.sock .
+.TP
+.B \-\-root \fIDIR\fR
+Package root to scan. Repeatable. A first \fB\-\-root\fR replaces roots from the
+configuration file; later roots append.
+.TP
+.B \-\-max\-instances \fIN\fR
+Maximum live command instances.
+.TP
+.B \-\-web\-listen \fIADDR\fR
+Static web listener. Defaults to
+.IR 127.0.0.1:8799 .
+.TP
+.B \-\-log\-dir \fIDIR\fR
+Directory for durable instance logs.
+.TP
+.B \-\-log\-max\-bytes \fIN\fR
+Rotate an instance log before it grows past \fIN\fR bytes.
+.TP
+.B \-\-log\-keep \fIN\fR
+Keep \fIN\fR rotated generations.
+.TP
+.B \-\-mycelium\-home \fIDIR\fR
+Mycelium state directory used to publish web-surface leases.
+.TP
+.B \-\-no\-publish\-leases
+Serve web surfaces without publishing Mycelium leases.
+.TP
+.B \-\-image\-runtime \fIPATH\fR
+Live Soil image runtime. Defaults to
+.I soil-image
+on PATH.
+.TP
+.B \-\-window\-runtime \fIPATH\fR
+Native webview host. Defaults to
+.I loam-window
+on PATH.
+.SH CONTROL COMMANDS
+.TP
+.B list
+List known instances.
+.TP
+.B inspect \fIID\fR
+Show one instance.
+.TP
+.B logs \fIID\fR
+Return captured stdout/stderr. Falls back to the durable log after restart.
+.TP
+.B stop \fIID\fR
+Stop a running instance.
+.TP
+.B reload
+Rescan command, plugin, and static web roots without restarting the daemon.
+See the note below about web surfaces and certificates.
+.TP
+.B shutdown
+Stop the daemon and its instances.
+.SH WEB SURFACES
+A web surface is served only when its package declares both a web surface and
+an anycast claim. See the Spore manifest documentation or the Soil skill for
+the manifest shape. The listener rescans roots at startup, on reload, and every
+five seconds. A newly installed web package is served and leased without a
+daemon restart. Static file edits do not require a reload.
+.PP
+The lease publisher asks Mycelium to renew the frontdoor leaf certificate when
+the set of web surfaces changes. Renewal reuses the local CA, so adding a Spore
+does not create a new trust decision. An older installation without
+\fIca-key.pem\fR cannot renew silently; loamd logs the one-time migration:
+\fBmycelium frontdoor install --write --trust-cert\fR.
+.SH SPORE CATALOG BRIDGE
+Web surfaces cannot import WIT, so the listener exposes the host catalog as JSON:
+\fBGET /api/spore/entries\fR, \fBGET /api/spore/running\fR,
+\fBPOST /api/spore/launch\fR and \fBPOST /api/spore/stop\fR. A launch with
+\fInative: true\fR opens a web surface in \fBloam-window\fR. The entries are
+the same installed-Spore view used to launch surfaces; they include plugins and
+commands as roles, not as a second package format. A web surface must declare
+`soil:spore` or `soil:spore.catalog` in its grants to reach the bridge.
+.SH FILES
+.TP
+.I ~/.config/loam/loam.conf.soil
+Host defaults.
+.TP
+.I ~/.local/state/loam/logs/
+Per-instance logs.
+.TP
+.I ~/.mycelium/application-services.json
+Mycelium service observations written by the lease publisher.
+.SH EXAMPLES
+.PP
+.nf
+loamd
+loamd start hello --name world --id hello-1
+loamd logs hello-1
+loamd stop hello-1
+.fi
+.PP
+Serve a package root on the local web listener:
+.PP
+.nf
+loamd serve --root ~/.mycelium/spores --web-listen 127.0.0.1:8799
+.fi
+.SH SEE ALSO
+.BR loam (1),
+.BR mycelium-frontdoor (1),
+.BR mycelium (1)

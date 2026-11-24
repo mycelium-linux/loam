@@ -4,10 +4,12 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#071119">
+  <meta name="mycelium-app" content="Desktop">
   <title>Mycelium — Desktop</title>
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
   <link rel="preload" as="image" href="/assets/wallpaper.webp" fetchpriority="high">
-  <link rel="stylesheet" href="/desktop.css">
+  <link rel="stylesheet" href="/desktop.css?v=4">
+  <link rel="stylesheet" href="/home.css?v=4">
 </head>
 <body>
   <div class="wallpaper" aria-hidden="true"></div>
@@ -19,8 +21,8 @@
         <span>Mycelium</span>
       </button>
       <span class="topbar-sep" aria-hidden="true"></span>
-      <button class="desktop-current" type="button" data-open="desk" aria-label="Open This Desk">
-        <span class="workspace-name">This Mac</span>
+      <button class="desktop-current" type="button" data-desktop-switcher aria-label="Switch desktop">
+        <span class="workspace-name" id="desktop-name">This Mac</span>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 10 4 4 4-4"/></svg>
       </button>
       <span class="plan-badge">Local</span>
@@ -32,7 +34,9 @@
         <kbd>⌘K</kbd>
       </button>
       <time class="clock" id="clock" datetime=""></time>
-      <span class="avatar" aria-hidden="true">M</span>
+      <button class="account-button" type="button" id="account-toggle" aria-label="Open settings" aria-expanded="false">
+        <span class="avatar" aria-hidden="true">M</span>
+      </button>
     </div>
   </header>
 
@@ -117,6 +121,169 @@
     <button class="dock-button" type="button" data-open="desk" data-label="This Desk" aria-label="This Desk"><span class="app-tile app-desk" aria-hidden="true">D</span></button>
   </nav>
 
+
+  <section class="account-menu" id="account-menu" aria-label="Settings" hidden>
+    <header class="account-head">
+      <span class="avatar" aria-hidden="true">M</span>
+      <span><strong id="account-name">This Mac</strong><small id="account-workspace">Local VFS</small></span>
+    </header>
+    <div class="account-items">
+      <a class="account-item" href="https://sso.fpl.dev/connections" target="_blank" rel="noopener">
+        <span class="account-item-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 8V6a3 3 0 0 1 6 0v2"/><rect x="5" y="8" width="14" height="11" rx="2"/><path d="M12 12v3"/></svg>
+        </span>
+        <span><strong>Accounts</strong><small>Managed by FPL Auth</small></span>
+      </a>
+      <button class="account-item" type="button" data-open="desk">
+        <span class="account-item-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="4" y="4.5" width="16" height="11.5" rx="1.5"/><path d="M9 20h6M12 16v4"/></svg>
+        </span>
+        <span><strong>This Desk</strong><small>Open the desk description</small></span>
+      </button>
+      <button class="account-item account-item--subtle" type="button" data-orientation>
+        <span class="account-item-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5z"/><path d="M18 16.5 18.5 18l1.5.5-1.5.5-.5 1.5-.5-1.5-1.5-.5 1.5-.5z"/></svg>
+        </span>
+        <span><strong>Re-run orientation</strong><small>A quiet tour of this desk</small></span>
+      </button>
+    </div>
+    <footer class="account-foot"><span class="account-dot" aria-hidden="true"></span>Local · Mycelium</footer>
+  </section>
+
+  <section class="profile-switcher" id="desktop-switcher" aria-label="Switch desktop" hidden>
+    <div class="profile-panel">
+      <p class="profile-kicker">Desktops</p>
+      <h1 class="profile-title">Which world?</h1>
+      <p class="profile-copy">Each desktop is its own VFS root. Apps can only see the desktop you are in.</p>
+      <div class="profile-grid" id="desktop-grid"></div>
+      <button class="profile-dismiss" type="button" data-desktop-close>Cancel</button>
+    </div>
+  </section>
+
+  <section class="onboarding" id="onboarding" data-step="1" aria-label="Welcome to Mycelium" hidden>
+    <div class="onboarding-panel">
+      <button class="wizard-skip" type="button" data-wizard-skip>Skip setup</button>
+      <div class="onboarding-progress"><span id="wizard-count">1 / 4</span></div>
+
+      <div class="wizard-step" data-wizard-step="1">
+        <p class="welcome-kicker">Your desk</p>
+        <h1>Welcome, Avery.</h1>
+        <p class="welcome-copy">Mycelium is the OS for your digital life.<br><br>We can create anything and everything. It's fully customizable to your liking.</p>
+        <div class="wizard-actions"><button class="btn-wizard" type="button" data-wizard-next>Continue</button></div>
+      </div>
+
+      <div class="wizard-step" data-wizard-step="2" hidden>
+        <p class="welcome-kicker">Who</p>
+        <h2>Who is this for?</h2>
+        <p class="welcome-copy">Pick one. You can add another desktop later.</p>
+        <div class="choice-grid" data-choice="where">
+          <button class="choice-card" type="button" data-where="myself" aria-pressed="false">
+            <span class="choice-mark" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="8" r="3.2"/><path d="M5.5 20c.6-4 3-6 6.5-6s5.9 2 6.5 6"/></svg>
+            </span>
+            <strong>Just me</strong>
+            <small>A private desk for your life and work.</small>
+          </button>
+          <button class="choice-card" type="button" data-where="business" aria-pressed="false">
+            <span class="choice-mark choice-mark--work" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V9l8-5 8 5v11"/><path d="M9 20v-6h6v6"/></svg>
+            </span>
+            <strong>My business</strong>
+            <small>A desk for a team, a company, or a client.</small>
+          </button>
+        </div>
+        <div class="wizard-actions"><button class="wizard-back" type="button" data-wizard-back>Back</button><button class="btn-wizard" type="button" data-wizard-next disabled>Continue</button></div>
+      </div>
+
+      <div class="wizard-step" data-wizard-step="3" hidden>
+        <p class="welcome-kicker">Name</p>
+        <h2>What should we call the business?</h2>
+        <p class="welcome-copy">Just names this desktop. You can change it later.</p>
+        <div class="name-fields">
+          <label class="name-field" id="business-field">
+            <span>Business name</span>
+            <input id="business-name" type="text" autocomplete="organization" placeholder="Business name">
+          </label>
+          <button class="unknown-business" type="button" data-unknown-business>I don't know yet</button>
+          <p class="name-hint">No name? We will call the desktop Work.</p>
+        </div>
+        <div class="wizard-actions"><button class="wizard-back" type="button" data-wizard-back>Back</button><button class="btn-wizard" type="button" data-wizard-next disabled>Continue</button></div>
+      </div>
+
+      <div class="wizard-step" data-wizard-step="4" hidden>
+        <p class="welcome-kicker">First thing</p>
+        <h2>What do you want to make first?</h2>
+        <p class="welcome-copy">One thing. Everything else can wait.</p>
+        <div class="build-grid" data-choice="what">
+          <button class="build-option" type="button" data-what="website" aria-pressed="false">
+            <span class="build-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4c2.2 2.4 3.3 5 3.3 8s-1.1 5.6-3.3 8c-2.2-2.4-3.3-5-3.3-8s1.1-5.6 3.3-8z"/></svg></span>
+            <strong>Website</strong><small>Pages, domains, and a public front door.</small>
+          </button>
+          <button class="build-option" type="button" data-what="document" aria-pressed="false">
+            <span class="build-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5h8l4 4v13H6z"/><path d="M14 3.5v4h4M9 12h6M9 15.5h6M9 19h4"/></svg></span>
+            <strong>Document</strong><small>A page, a memo, or something longer.</small>
+          </button>
+          <button class="build-option" type="button" data-what="agent" aria-pressed="false">
+            <span class="build-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="m18.8 16.4.6 1.8 1.8.6-1.8.6-.6 1.8-.6-1.8-1.8-.6 1.8-.6z"/></svg></span>
+            <strong>Agent</strong><small>A helper that can work inside your apps.</small>
+          </button>
+          <button class="build-option" type="button" data-what="automation" aria-pressed="false">
+            <span class="build-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4v4M17 4v4M4 8h16v11H4z"/><path d="M8 13h3l1.5-2 2 4L16 13h2"/></svg></span>
+            <strong>Automation</strong><small>Connect the tools that do the repetitive work.</small>
+          </button>
+          <button class="build-option" type="button" data-what="presentation" aria-pressed="false">
+            <span class="build-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M12 16v4M8 20h8"/></svg></span>
+            <strong>Presentation</strong><small>Ideas, slides, and a story worth showing.</small>
+          </button>
+        </div>
+        <div class="wizard-actions"><button class="wizard-back" type="button" data-wizard-back>Back</button><button class="btn-wizard" type="button" data-wizard-next disabled>Continue</button></div>
+      </div>
+
+      <div class="wizard-step" data-wizard-step="5" hidden>
+        <p class="welcome-kicker">AI</p>
+        <h2>Bring your AI, or use FPL.</h2>
+        <p class="welcome-copy">FPL is the shortest path. You can bring a provider you already pay for.</p>
+        <div class="choice-grid choice-grid--ai" data-choice="ai">
+          <button class="choice-card" type="button" data-ai="fpl" aria-pressed="false">
+            <span class="choice-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="m18.8 16.4.6 1.8 1.8.6-1.8.6-.6 1.8-.6-1.8-1.8-.6 1.8-.6z"/></svg></span>
+            <strong>Use FPL</strong>
+            <small>Included with your FPL account. One setup, one bill.</small>
+          </button>
+          <button class="choice-card" type="button" data-ai="byo" aria-pressed="false">
+            <span class="choice-mark choice-mark--work" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="12" r="3"/><path d="M11 12h9M17 12v3M20 12v2"/></svg></span>
+            <strong>Bring your own</strong>
+            <small>OpenAI, Anthropic, OpenRouter, or a local model.</small>
+          </button>
+          <button class="choice-card" type="button" data-ai="later" aria-pressed="false">
+            <span class="choice-mark choice-mark--quiet" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2"/></svg></span>
+            <strong>Decide later</strong>
+            <small>Start with the workspace. Add a model when you need it.</small>
+          </button>
+        </div>
+        <p class="name-hint">Account linking comes next. This choice is saved locally for now.</p>
+        <div class="wizard-actions"><button class="wizard-back" type="button" data-wizard-back>Back</button><button class="btn-wizard" type="button" data-wizard-start disabled>Start building</button></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="launcher" id="launcher" aria-label="Applications" hidden>
+    <div class="launcher-panel">
+      <header class="launcher-head">
+        <div>
+          <p class="launcher-kicker">This Mac</p>
+          <h1 class="launcher-title">Applications</h1>
+        </div>
+        <button class="launcher-close" type="button" data-launcher-close aria-label="Close launcher">esc</button>
+      </header>
+      <form class="launcher-search" id="launcher-search-form">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="10.7" cy="10.7" r="6.2"/><path d="m15.4 15.4 4.1 4.1"/></svg>
+        <input id="launcher-search" type="search" placeholder="Search installed Spores" autocomplete="off" spellcheck="false">
+      </form>
+      <div class="launcher-grid" id="launcher-grid"></div>
+      <footer class="launcher-foot"><span id="launcher-count">Loading catalog…</span><span><kbd>esc</kbd> closes</span></footer>
+    </div>
+  </section>
+
   <div class="command-scrim" data-command-scrim aria-hidden="true"></div>
   <section class="command" id="command" aria-label="Command" aria-hidden="true" inert>
     <form class="command-form" id="command-form">
@@ -131,6 +298,7 @@
     <footer class="command-footer"><span><kbd>↵</kbd> to open</span><span><kbd>esc</kbd> to close</span></footer>
   </section>
 
-  <script src="/desktop.js"></script>
+  <script src="/desktop.js?v=6"></script>
+  <script src="https://agent.myc/embed.js" defer></script>
 </body>
 </html>

@@ -16,8 +16,10 @@
   let selected = null;
   let dirty = false;
 
+  const desktop = new URLSearchParams(location.search).get('desktop') || 'personal';
+  const withDesktop = (path) => `${path}${path.includes('?') ? '&' : '?'}desktop=${encodeURIComponent(desktop)}`;
   const api = async (path, options = {}) => {
-    const response = await fetch(path, options);
+    const response = await fetch(withDesktop(path), options);
     const value = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(value.error || `${response.status} ${response.statusText}`);
     return value;
@@ -77,6 +79,8 @@
     for (const [key, input] of Object.entries(fields)) input.value = contact[key] || '';
     markDirty(false);
     setStatus('Open');
+    window.__MYCELIUM_AGENT_CONTEXT = { app: 'People', detail: contact.name || contact.email || id };
+    window.dispatchEvent(new CustomEvent('mycelium-agent-context', { detail: window.__MYCELIUM_AGENT_CONTEXT }));
     render();
   }
 

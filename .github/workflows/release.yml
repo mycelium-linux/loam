@@ -9,14 +9,13 @@ permissions:
 
 jobs:
   build:
+    # GitHub-hosted macOS runners are not always available. Do not lose the
+    # Linux artifacts (or the installer) just because one target is unavailable.
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
-            target: aarch64-apple-darwin
-          - os: macos-13
-            target: x86_64-apple-darwin
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
           - os: ubuntu-24.04-arm
@@ -28,6 +27,9 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
       - name: build
         run: |
           cargo build --release --target "${{ matrix.target }}" \
@@ -36,12 +38,13 @@ jobs:
         run: |
           set -euo pipefail
           name="loam-${GITHUB_REF_NAME}-${TARGET}"
-          mkdir -p "dist/$name/bin" "dist/$name/share/loam"
+          mkdir -p "dist/$name/bin" "dist/$name/share/loam" "dist/$name/share/man/man1"
           cp "target/${TARGET}/release/loam" "dist/$name/bin/"
           cp "target/${TARGET}/release/loamd" "dist/$name/bin/"
           cp "target/${TARGET}/release/loam-ble-host" "dist/$name/bin/"
           cp "target/${TARGET}/release/loam-mcp" "dist/$name/bin/"
           cp -R wit "dist/$name/share/loam/wit"
+          cp docs/man/loam.1 docs/man/loamd.1 "dist/$name/share/man/man1/"
           cp README.md LICENSE-APACHE LICENSE-MIT "dist/$name/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           if command -v sha256sum >/dev/null 2>&1; then
@@ -58,19 +61,24 @@ jobs:
           if-no-files-found: error
   publish:
     needs: build
+    if: ${{ always() && needs.build.result != 'cancelled' }}
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
-      - name: checksums
+      - name: checksums and installer
         run: |
           cd dist
           cat *.sha256 > SHA256SUMS
+          cp ../scripts/install.sh loam-installer.sh
+          chmod 755 loam-installer.sh
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/*.tar.gz
             dist/SHA256SUMS
+            dist/loam-installer.sh
           generate_release_notes: true

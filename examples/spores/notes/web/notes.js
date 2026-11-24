@@ -11,8 +11,10 @@
   let version = null;
   let dirty = false;
 
+  const desktop = new URLSearchParams(location.search).get('desktop') || 'personal';
+  const withDesktop = (path) => `${path}${path.includes('?') ? '&' : '?'}desktop=${encodeURIComponent(desktop)}`;
   const api = async (path, options = {}) => {
-    const response = await fetch(path, options);
+    const response = await fetch(withDesktop(path), options);
     const value = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(value.error || `${response.status} ${response.statusText}`);
     return value;
@@ -62,6 +64,8 @@
       const result = await api('/api/vfs/list?path=');
       render(result.entries);
       setStatus('Workspace ready');
+      const first = list.querySelector('.note-row');
+      if (!selected && first) await openNote(first.dataset.path);
     } catch (error) {
       setStatus(error.message, true);
     }
@@ -80,6 +84,8 @@
       meta.textContent = version == null ? '' : `v${version}`;
       markDirty(false);
       setStatus('Open');
+      window.__MYCELIUM_AGENT_CONTEXT = { app: 'Notes', detail: path };
+      window.dispatchEvent(new CustomEvent('mycelium-agent-context', { detail: window.__MYCELIUM_AGENT_CONTEXT }));
       for (const row of list.querySelectorAll('.note-row')) row.setAttribute('aria-current', String(row.dataset.path === path));
     } catch (error) {
       setStatus(error.message, true);
