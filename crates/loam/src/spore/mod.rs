@@ -1570,7 +1570,7 @@ impl Manifest {
         for capability in self.grants.keys() {
             if !grants(capability) {
                 return Err(Error::Invalid(format!(
-                    "grant {capability:?} is not a soil:/wasi:/fungos:/loam: capability"
+                    "grant {capability:?} is not a soil:/wasi:/fungos:/mycelium:/loam: capability"
                 )));
             }
         }
@@ -2010,7 +2010,7 @@ fn grants(value: &str) -> bool {
     let Some((package, interface)) = value.split_once(':') else {
         return false;
     };
-    matches!(package, "soil" | "wasi" | "fungos" | "loam" | "ajmwagar")
+    matches!(package, "soil" | "wasi" | "fungos" | "mycelium" | "loam" | "ajmwagar")
         && !interface.is_empty()
         && interface.chars().all(|c| {
             c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '.' | '_' | '/')
