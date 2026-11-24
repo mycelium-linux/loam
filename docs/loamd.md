@@ -22,7 +22,24 @@ loamd --socket /tmp/loamd.sock --root ~/.local/share/fungos/commands
 
 `loamd` scans command and Spore roots at startup. `loamd reload` rescans them
 without restarting the daemon, and `start` retries the scan once when a command
-appeared after the daemon started.
+appeared after the daemon started. `loam install` asks a running daemon to
+reload, so a finished install is visible without a second command.
+
+Manifest web surfaces are re-scanned every five seconds as well. When a new
+Spore adds a `.myc` name, `loamd` starts the listener if needed, publishes the
+new lease, and asks Mycelium to renew the frontdoor leaf certificate:
+
+```sh
+mycelium frontdoor renew --write
+```
+
+Renewal reuses the local CA, so adding a Spore never turns into a new trust
+decision. An install made before `ca-key.pem` was persisted has no way to sign
+a new leaf; on that host `loamd` logs the one-time migration command:
+
+```sh
+mycelium frontdoor install --write --trust-cert
+```
 
 ## Configuration
 
@@ -69,6 +86,31 @@ loamd \
   --book personal/avery/marbles \
   --collection ''
 ```
+
+## Spore catalog bridge
+
+A web surface cannot import WIT, so `loamd` exposes the installed catalog over
+the same listener. The responses come from the host-side catalog that backs
+`soil:spore/catalog`:
+
+```text
+GET  /api/spore/entries
+GET  /api/spore/running
+POST /api/spore/launch   {"id":"org.mycelium.notes","surface":"web","native":true}
+POST /api/spore/stop     {"id":"org.mycelium.notes"}
+```
+
+`entries` includes id, title, version, summary, surfaces, role
+(`app`/`plugin`/`package`), provided WIT interfaces and installed commands.
+A web surface launches with a URL target. `"native": true` asks the host to open
+it with `loam-window`, which is what the native launcher uses; a canvas surface
+is started through `loam surface`. Both appear in `running` until they exit or
+`stop` ends them.
+
+The bridge is not ambient: a web surface reaches it only when its manifest
+grants `soil:spore` or `soil:spore.catalog`. The launcher Spore
+(`examples/spores/home`) declares that grant and reads the catalog instead of
+hard-coding a dock, so an install appears on the next page load.
 
 ## Control
 

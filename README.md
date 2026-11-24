@@ -20,6 +20,78 @@ loam surface FILE [--size WxH]
 
 `loam` is not the compiler, the REPL, the formatter, the LSP, the package authoring tool, or the UI framework. Those live in the Soil repository.
 
+## Install
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/mycelium-linux/loam/releases/latest/download/loam-installer.sh | sh
+loam doctor
+```
+
+The installer puts `loam`, `loamd`, `loam-mcp`, `loam-ble-host`, the WIT
+contracts, and the man pages under `~/.local`. Use `--prefix DIR` or
+`LOAM_VERSION=v0.1.0` for a different location or release.
+
+Release tarballs are published for macOS arm64/x86_64 and Linux
+arm64/x86_64. See [`docs/install.md`](docs/install.md).
+
+## First run
+
+```sh
+loam status
+loam doctor
+man loam
+man loamd
+```
+
+`loam status` reads the default command and Spore roots. `loam doctor` prints
+the capabilities linked into this build. `loam help` lists the subcommands.
+
+## Soil 101
+
+A Soil form is data, and a Spore is a package around a component. The smallest
+useful program is a function:
+
+```soil
+(defun greet (name)
+  (str "Hello, " name "!"))
+```
+
+A package that should appear at `hello.myc` declares a web surface and an
+anycast claim:
+
+```toml
+[launch]
+default = "web"
+surfaces = ["web"]
+
+[[surfaces]]
+name = "hello"
+kind = "web"
+entry = "web/index.html"
+
+[anycast]
+name = "hello"
+kind = "web"
+alpns = ["soil/http/1"]
+ttl_secs = 240
+```
+
+The complete runnable example is
+[`examples/hello-soil`](examples/hello-soil). It is a static web Spore today;
+the manifest shape is the same one a compiled Soil component uses when the
+compiler can lower a real Spore.
+
+```sh
+cp -R examples/hello-soil ~/.mycelium/spores/
+loamd serve --root ~/.mycelium/spores --web-listen 127.0.0.1:8799
+# then, through the Mycelium frontdoor:
+curl -k https://hello.myc/
+```
+
+See [`docs/soil-101.md`](docs/soil-101.md) for the longer explanation and the
+404/TLS checklist.
+
 ## What belongs here
 
 First-party runtime capabilities:
@@ -95,6 +167,11 @@ loam status --json
 loam rollback acme:marbles
 ```
 
+When `loamd` is running, a successful install also reloads the daemon. A Spore
+that declares a web surface is served and leased under its `.myc` name without
+a daemon restart, and the frontdoor certificate is renewed for the new name
+using the existing local CA.
+
 See [`docs/installer.md`](docs/installer.md).
 
 `loamd` is the per-user supervisor for command instances:
@@ -120,6 +197,13 @@ Command packages live in the usual roots:
 ```
 
 `loam run` is the virtual PATH. It does not compile or interpret Soil source.
+
+Manual pages are installed with the release:
+
+```sh
+man loam
+man loamd
+```
 
 ## Editing
 
@@ -193,12 +277,8 @@ wit/                     canonical capability contracts
 
 ## Install
 
-```sh
-# release tarball, shell installer or Homebrew once published
-loam doctor
-```
-
-See [`docs/install.md`](docs/install.md).
+See [`docs/install.md`](docs/install.md) for the shell installer, tarball
+checksums, platform matrix, and source build.
 
 ## Build
 

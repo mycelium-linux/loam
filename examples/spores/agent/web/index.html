@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0f15">
+  <title>Agent — Mycelium</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/agent.css">
+</head>
+<body>
+  <div class="agent" id="agent">
+    <header class="agent-head">
+      <div class="agent-identity">
+        <span class="agent-mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="m18.8 16.4.6 1.8 1.8.6-1.8.6-.6 1.8-.6-1.8-1.8-.6 1.8-.6z"/></svg>
+        </span>
+        <span><strong>Agent</strong><small>Workspace</small></span>
+      </div>
+      <div class="agent-actions">
+        <button class="icon-button" id="expand" type="button" aria-label="Expand agent" aria-pressed="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H3v5M16 3h5v5M21 16v5h-5M3 16v5h5"/></svg>
+        </button>
+        <button class="icon-button" id="pin" type="button" aria-label="Pin agent" aria-pressed="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m9 4 6 0-1 5 3 3v2H7v-2l3-3z"/><path d="M12 14v6"/></svg>
+        </button>
+        <button class="icon-button" id="close" type="button" aria-label="Close agent">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="agent-context" id="context">
+      <span class="context-dot" aria-hidden="true"></span>
+      <span class="context-copy"><small>Looking at</small><strong id="context-app">This app</strong><span id="context-detail">/</span></span>
+      <button class="context-change" id="context-change" type="button" aria-label="Refresh context">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v5h-5"/></svg>
+      </button>
+    </div>
+
+    <main class="agent-thread" id="thread">
+      <div class="agent-empty" id="empty">
+        <span class="empty-spark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M18.5 16.5 19 18l1.5.5-1.5.5-.5 1.5-.5-1.5L16.5 19l1.5-.5z"/></svg>
+        </span>
+        <h1 id="empty-title">Work inside the app.</h1>
+        <p>The agent can read the current surface and edit it with you. The harness is not connected yet; this is the interaction surface.</p>
+      </div>
+    </main>
+
+    <div class="agent-quick" id="quick" aria-label="Quick actions">
+      <button type="button" data-prompt="Summarize what is open and suggest the next useful edit.">Summarize</button>
+      <button type="button" data-prompt="Rewrite the selected content so it is clearer and tighter.">Rewrite</button>
+      <button type="button" data-prompt="Organize this workspace and point out anything that needs attention.">Organize</button>
+      <button type="button" data-prompt="Draft a first version I can edit.">Draft</button>
+    </div>
+
+    <form class="agent-composer" id="composer">
+      <textarea id="prompt" rows="1" placeholder="Ask or tell the agent to change this app…" autocomplete="off"></textarea>
+      <div class="composer-row">
+        <div class="composer-left">
+          <button class="model-switch" id="model-switch" type="button" aria-haspopup="menu" aria-expanded="false">
+            <span class="model-logo" id="model-logo" aria-hidden="true">F</span>
+            <span id="model-name">FPL</span>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 10 4 4 4-4"/></svg>
+          </button>
+          <span class="composer-hint"><kbd>↵</kbd> send <span>·</span> <kbd>⇧↵</kbd> line</span>
+        </div>
+        <button class="send" id="send" type="submit" aria-label="Send" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13"/><path d="m13 6 6 6-6 6"/></svg>
+        </button>
+      </div>
+    </form>
+
+    <div class="model-menu" id="model-menu" role="menu" hidden>
+      <p class="model-menu-head">Model provider</p>
+      <button class="model-choice" type="button" data-model="fpl" role="menuitemradio" aria-checked="false">
+        <span class="model-logo model-logo--fpl" aria-hidden="true">F</span>
+        <span class="model-choice-copy"><strong>FPL</strong><small>Included with your FPL account</small></span>
+        <span class="model-check" aria-hidden="true"></span>
+      </button>
+      <button class="model-choice" type="button" data-model="openai" role="menuitemradio" aria-checked="false">
+        <span class="model-logo" aria-hidden="true"><img src="https://cdn.jsdelivr.net/npm/@lobehub/icons-static-svg@latest/icons/openai.svg" alt=""></span>
+        <span class="model-choice-copy"><strong>OpenAI</strong><small>Bring your own key</small></span>
+        <span class="model-check" aria-hidden="true"></span>
+      </button>
+      <button class="model-choice" type="button" data-model="anthropic" role="menuitemradio" aria-checked="false">
+        <span class="model-logo" aria-hidden="true"><img src="https://cdn.simpleicons.org/anthropic/e5e7eb" alt=""></span>
+        <span class="model-choice-copy"><strong>Anthropic</strong><small>Bring your own key</small></span>
+        <span class="model-check" aria-hidden="true"></span>
+      </button>
+      <button class="model-choice" type="button" data-model="openrouter" role="menuitemradio" aria-checked="false">
+        <span class="model-logo" aria-hidden="true"><img src="https://cdn.simpleicons.org/openrouter/e5e7eb" alt=""></span>
+        <span class="model-choice-copy"><strong>OpenRouter</strong><small>Route to any model</small></span>
+        <span class="model-check" aria-hidden="true"></span>
+      </button>
+      <p class="model-menu-foot">Saved locally. Harness connection comes next.</p>
+    </div>
+  </div>
+  <script src="/agent.js"></script>
+</body>
+</html>

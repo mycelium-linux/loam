@@ -11,7 +11,7 @@
 //! not a second package format.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::{BufRead, BufReader, Write},
     os::unix::{
@@ -21,7 +21,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
     sync::{
-        Arc, Mutex, RwLock,
+        Arc, Mutex, RwLock, Weak,
         atomic::{AtomicBool, Ordering},
     },
     thread,
@@ -40,6 +40,8 @@ use crate::{
         plugin::PluginRegistry,
     },
     log::LogStore,
+    spore::{Manifest, SurfaceKind},
+    web::{SporeApi, StaticSurface},
 };
 
 /// How many live instances one daemon may own.
@@ -205,12 +207,6 @@ pub fn serve(options: Options) -> Result<()> {
         "loamd",
         format!("{} loamd started roots={:?}\n", now_millis(), options.roots).as_bytes(),
     );
-    start_web_surfaces(
-        &options.roots,
-        options.web_listen.as_deref(),
-        options.mycelium_home.as_deref(),
-        options.publish_leases,
-    )?;
     let registry = Arc::new(CommandRegistry::scan_roots(&options.roots)?);
     let plugins = PluginRegistry::scan_roots(&options.roots)?;
     let daemon = Arc::new(Daemon {
@@ -222,12 +218,26 @@ pub fn serve(options: Options) -> Result<()> {
         max_instances: options.max_instances,
         image_runtime: options.image_runtime,
         window_runtime: options.window_runtime,
+        web: RwLock::new(None),
+        launches: Mutex::new(BTreeMap::new()),
         logs: logs.clone(),
         instances: Mutex::new(BTreeMap::new()),
         images: Mutex::new(BTreeMap::new()),
         windows: Mutex::new(BTreeMap::new()),
         shutdown: AtomicBool::new(false),
     });
+    let api: Arc<dyn SporeApi> = Arc::new(DaemonApi {
+        daemon: Arc::downgrade(&daemon),
+    });
+    let web = WebHost::start(
+        daemon.roots.clone(),
+        options.web_listen.clone(),
+        options.mycelium_home.clone(),
+        options.publish_leases,
+        api,
+        logs.clone(),
+    )?;
+    *daemon.web.write().expect("web host lock poisoned") = Some(web);
     let listener = bind_socket(&options.socket)?;
     listener.set_nonblocking(true)?;
 
@@ -256,48 +266,282 @@ pub fn serve(options: Options) -> Result<()> {
     Ok(())
 }
 
-fn start_web_surfaces(
-    roots: &[PathBuf],
-    listen: Option<&str>,
-    mycelium_home: Option<&Path>,
+/// Static web surfaces have two lives: the listener that answers requests and
+/// the leases that make those names routable. Both follow the package roots.
+/// Watching the roots here is what lets an install of a new web Spore add its
+/// name, publish its lease, and extend the frontdoor certificate without a
+/// daemon restart.
+struct WebHost {
+    roots: Vec<PathBuf>,
+    address: String,
+    mycelium_home: Option<PathBuf>,
     publish_leases: bool,
-) -> Result<()> {
-    let surfaces = crate::web::discover(roots)?;
-    if surfaces.is_empty() {
-        return Ok(());
-    }
-    let address = listen.unwrap_or("127.0.0.1:8799");
-    let listener = std::net::TcpListener::bind(address)
-        .with_context(|| format!("bind static web surface {address}"))?;
-    let endpoint = crate::web::loopback_endpoint(&listener)?;
-    if publish_leases {
-        let lease_surfaces = surfaces.clone();
-        let lease_endpoint = endpoint.clone();
-        let lease_home = mycelium_home.map(Path::to_path_buf);
-        let renew = surfaces
-            .iter()
-            .map(|surface| surface.ttl_secs)
-            .min()
-            .unwrap_or(240)
-            / 3;
-        publish_web_leases(&lease_surfaces, &lease_endpoint, lease_home.as_deref());
+    surfaces: Arc<RwLock<Vec<StaticSurface>>>,
+    serving: Mutex<Option<WebServing>>,
+    api: Arc<dyn SporeApi>,
+    logs: LogStore,
+}
+
+struct WebServing {
+    endpoint: String,
+}
+
+impl WebHost {
+    fn start(
+        roots: Vec<PathBuf>,
+        listen: Option<String>,
+        mycelium_home: Option<PathBuf>,
+        publish_leases: bool,
+        api: Arc<dyn SporeApi>,
+        logs: LogStore,
+    ) -> Result<Arc<Self>> {
+        let host = Arc::new(Self {
+            roots,
+            address: listen.unwrap_or_else(|| "127.0.0.1:8799".into()),
+            mycelium_home,
+            publish_leases,
+            surfaces: Arc::new(RwLock::new(Vec::new())),
+            serving: Mutex::new(None),
+            api,
+            logs,
+        });
+        host.refresh()?;
+
+        let leases = Arc::clone(&host);
         let _ = thread::Builder::new()
             .name("loamd-web-lease".into())
             .spawn(move || {
                 loop {
-                    thread::sleep(Duration::from_secs(renew.max(1)));
-                    publish_web_leases(&lease_surfaces, &lease_endpoint, lease_home.as_deref());
+                    thread::sleep(Duration::from_secs(leases.renew_secs()));
+                    leases.publish();
                 }
             });
+
+        let watcher = Arc::clone(&host);
+        let _ = thread::Builder::new()
+            .name("loamd-web-watch".into())
+            .spawn(move || {
+                loop {
+                    thread::sleep(Duration::from_secs(5));
+                    if let Err(error) = watcher.refresh() {
+                        eprintln!("loamd: static web surface refresh: {error:#}");
+                    }
+                }
+            });
+        Ok(host)
     }
-    let _ = thread::Builder::new()
-        .name("loamd-web".into())
-        .spawn(move || {
-            if let Err(error) = crate::web::serve(surfaces, listener) {
-                eprintln!("loamd: static web surface: {error:#}");
+
+    fn surfaces(&self) -> Vec<StaticSurface> {
+        self.surfaces
+            .read()
+            .expect("web surface lock poisoned")
+            .clone()
+    }
+
+    fn refresh(self: &Arc<Self>) -> Result<()> {
+        let surfaces = crate::web::discover(&self.roots)?;
+        if surface_stamp(&surfaces) == surface_stamp(&self.surfaces()) {
+            return Ok(());
+        }
+
+        let endpoint = {
+            let mut serving = self.serving.lock().expect("web serving lock poisoned");
+            if serving.is_none() && !surfaces.is_empty() {
+                let listener = std::net::TcpListener::bind(&self.address)
+                    .with_context(|| format!("bind static web surface {}", self.address))?;
+                let endpoint = crate::web::loopback_endpoint(&listener)?;
+                *serving = Some(WebServing {
+                    endpoint: endpoint.clone(),
+                });
+                let shared = Arc::clone(&self.surfaces);
+                let api = Arc::clone(&self.api);
+                let address = self.address.clone();
+                let _ = thread::Builder::new()
+                    .name("loamd-web".into())
+                    .spawn(move || {
+                        if let Err(error) = crate::web::serve(shared, api, listener) {
+                            eprintln!("loamd: static web surface {address}: {error:#}");
+                        }
+                    });
+                endpoint
+            } else {
+                serving
+                    .as_ref()
+                    .map(|serving| serving.endpoint.clone())
+                    .unwrap_or_default()
             }
-        });
-    Ok(())
+        };
+
+        *self.surfaces.write().expect("web surface lock poisoned") = surfaces.clone();
+        if self.publish_leases && !endpoint.is_empty() {
+            publish_web_leases(&surfaces, &endpoint, self.mycelium_home.as_deref());
+        }
+        if self.publish_leases {
+            self.ensure_certificate();
+        }
+        Ok(())
+    }
+
+    fn publish(&self) {
+        if !self.publish_leases {
+            return;
+        }
+        let endpoint = self
+            .serving
+            .lock()
+            .expect("web serving lock poisoned")
+            .as_ref()
+            .map(|serving| serving.endpoint.clone());
+        let Some(endpoint) = endpoint else {
+            return;
+        };
+        publish_web_leases(&self.surfaces(), &endpoint, self.mycelium_home.as_deref());
+    }
+
+    fn renew_secs(&self) -> u64 {
+        self.surfaces()
+            .iter()
+            .map(|surface| surface.ttl_secs)
+            .min()
+            .unwrap_or(240)
+            / 3
+    }
+
+    /// Ask Mycelium to renew its frontdoor leaf for the catalog we just wrote.
+    /// The CA is reused; this must not turn a routine install into a new trust
+    /// decision. A pre-#61 install with no `ca-key.pem` is told exactly which
+    /// one-time command migrates it.
+    fn ensure_certificate(&self) {
+        let home = self
+            .mycelium_home
+            .clone()
+            .or_else(|| std::env::var_os("MYCELIUM_HOME").map(PathBuf::from))
+            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".mycelium")));
+        let Some(home) = home else { return };
+        let Some(binary) = mycelium_binary(&home) else {
+            eprintln!(
+                "loamd: no mycelium binary found; a new .myc name will need `mycelium frontdoor install --write --trust-cert`"
+            );
+            return;
+        };
+        let output = match Command::new(&binary)
+            .args(["frontdoor", "renew", "--write", "--path"])
+            .arg(&home)
+            .output()
+        {
+            Ok(output) => output,
+            Err(error) => {
+                eprintln!("loamd: run {}: {error}", binary.display());
+                return;
+            }
+        };
+        if output.status.success() {
+            let message = String::from_utf8_lossy(&output.stdout);
+            if let Some(line) = message.lines().find(|line| !line.trim().is_empty()) {
+                let _ = self.logs.append(
+                    "loamd",
+                    format!("{} frontdoor certificate: {line}\n", now_millis()).as_bytes(),
+                );
+            }
+        } else {
+            let message = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            eprintln!("loamd: frontdoor certificate: {message}");
+            let _ = self.logs.append(
+                "loamd",
+                format!("{} frontdoor certificate failed: {message}\n", now_millis()).as_bytes(),
+            );
+        }
+    }
+}
+
+fn surface_stamp(surfaces: &[StaticSurface]) -> Vec<(String, String, String, String)> {
+    let mut stamp = surfaces
+        .iter()
+        .map(|surface| {
+            (
+                surface.package.display().to_string(),
+                surface.name.clone(),
+                surface.version.clone(),
+                surface.entry.display().to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+    stamp.sort();
+    stamp
+}
+
+fn loam_window_binary() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("LOAM_WINDOW_BIN").filter(|value| !value.is_empty()) {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    if let Ok(current) = std::env::current_exe() {
+        let sibling = current.with_file_name("loam-window");
+        if sibling.is_file() {
+            return Some(sibling);
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        for dir in [home.join(".local/bin"), home.join(".cargo/bin")] {
+            let candidate = dir.join("loam-window");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .map(|dir| dir.join("loam-window"))
+            .find(|candidate| candidate.is_file())
+    })
+}
+
+fn loam_binary() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("LOAM_BIN").filter(|value| !value.is_empty()) {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    if let Ok(current) = std::env::current_exe() {
+        let sibling = current.with_file_name("loam");
+        if sibling.is_file() {
+            return Some(sibling);
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        for dir in [home.join(".local/bin"), home.join(".cargo/bin")] {
+            let candidate = dir.join("loam");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .map(|dir| dir.join("loam"))
+            .find(|candidate| candidate.is_file())
+    })
+}
+
+fn mycelium_binary(home: &Path) -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("LOAM_MYCELIUM_BIN").filter(|value| !value.is_empty()) {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    let installed = home.join("bin/mycelium");
+    if installed.is_file() {
+        return Some(installed);
+    }
+    std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .map(|dir| dir.join("mycelium"))
+            .find(|candidate| candidate.is_file())
+    })
 }
 
 fn publish_web_leases(
@@ -497,11 +741,50 @@ struct Daemon {
     max_instances: usize,
     image_runtime: Option<PathBuf>,
     window_runtime: Option<PathBuf>,
+    web: RwLock<Option<Arc<WebHost>>>,
+    launches: Mutex<BTreeMap<String, SporeLaunch>>,
     logs: LogStore,
     instances: Mutex<BTreeMap<String, InstanceRecord>>,
     images: Mutex<BTreeMap<String, ImageRecord>>,
     windows: Mutex<BTreeMap<String, WindowRecord>>,
     shutdown: AtomicBool,
+}
+
+struct SporeLaunch {
+    surface: String,
+    target: String,
+    child: Option<Child>,
+    started_ms: u64,
+}
+
+struct DaemonApi {
+    daemon: Weak<Daemon>,
+}
+
+impl DaemonApi {
+    fn daemon(&self) -> std::result::Result<Arc<Daemon>, String> {
+        self.daemon
+            .upgrade()
+            .ok_or_else(|| "loamd is shutting down".into())
+    }
+}
+
+impl SporeApi for DaemonApi {
+    fn entries(&self) -> std::result::Result<Value, String> {
+        self.daemon()?.spore_entries()
+    }
+
+    fn launch(&self, id: &str, surface: &str, native: bool) -> std::result::Result<Value, String> {
+        self.daemon()?.spore_launch(id, surface, native)
+    }
+
+    fn running(&self) -> std::result::Result<Value, String> {
+        Ok(self.daemon()?.spore_running())
+    }
+
+    fn stop(&self, id: &str) -> std::result::Result<Value, String> {
+        self.daemon()?.spore_stop(id)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -1173,7 +1456,294 @@ impl Daemon {
         let plugins = PluginRegistry::scan_roots(&self.roots)?;
         *self.registry.write().expect("registry lock poisoned") = registry;
         *self.plugins.write().expect("plugin lock poisoned") = plugins;
+        if let Some(web) = self.web.read().expect("web host lock poisoned").clone() {
+            web.refresh()?;
+        }
         Ok(())
+    }
+
+    fn spore_entries(&self) -> std::result::Result<Value, String> {
+        let plugins = self.plugins.read().expect("plugin lock poisoned");
+        let commands = self.registry.read().expect("registry lock poisoned");
+        let mut entries = BTreeMap::new();
+        let mut refused = Vec::new();
+        for root in &self.roots {
+            let directory = match fs::read_dir(root) {
+                Ok(directory) => directory,
+                Err(_) => continue,
+            };
+            for entry in directory.flatten() {
+                let package = entry.path();
+                if !package.is_dir() || !package.join("spore.toml").is_file() {
+                    continue;
+                }
+                let manifest = match Manifest::load(&package) {
+                    Ok(manifest) => manifest,
+                    Err(error) => {
+                        refused.push(json!({
+                            "path": package.display().to_string(),
+                            "reason": format!("{error:#}"),
+                        }));
+                        continue;
+                    }
+                };
+                let id = manifest.spore.id.clone();
+                if entries.contains_key(&id) {
+                    continue;
+                }
+                let provides = plugins
+                    .entries()
+                    .filter(|plugin| plugin.package == package)
+                    .flat_map(|plugin| plugin.provides.clone())
+                    .collect::<BTreeSet<_>>();
+                let commands = commands
+                    .entries()
+                    .filter(|command| command.package == package)
+                    .map(|command| command.name.clone())
+                    .collect::<Vec<_>>();
+                let surfaces = manifest
+                    .surfaces
+                    .iter()
+                    .filter_map(|surface| {
+                        Some(json!({
+                            "name": surface.name,
+                            "kind": surface.kind.as_str(),
+                            "entry": surface.entry(manifest.ui.as_ref())?,
+                            "requires": surface.requires,
+                        }))
+                    })
+                    .collect::<Vec<_>>();
+                let role = if !provides.is_empty() {
+                    "plugin"
+                } else if !surfaces.is_empty() {
+                    "app"
+                } else {
+                    "package"
+                };
+                let mark = manifest
+                    .presentation
+                    .as_ref()
+                    .and_then(|presentation| presentation.mark.as_ref())
+                    .and_then(|path| fs::read_to_string(package.join(path)).ok());
+                entries.insert(
+                    id.clone(),
+                    json!({
+                        "id": id,
+                        "name": manifest.spore.name,
+                        "title": manifest.spore.title.clone().unwrap_or_else(|| manifest.spore.name.clone()),
+                        "version": manifest.spore.version,
+                        "summary": manifest.spore.summary,
+                        "default_surface": manifest.launch.default,
+                        "surfaces": surfaces,
+                        "mark": mark,
+                        "badge": manifest.presentation.as_ref().map(|presentation| presentation.badge.clone()),
+                        "color": manifest.presentation.as_ref().map(|presentation| presentation.color.clone()),
+                        "role": role,
+                        "provides": provides,
+                        "commands": commands,
+                        "anycast": manifest.anycast.as_ref().map(|anycast| json!({
+                            "name": anycast.name,
+                            "kind": anycast.kind,
+                        })),
+                    }),
+                );
+            }
+        }
+        let mut entries = entries.into_values().collect::<Vec<_>>();
+        entries.sort_by_key(|entry| {
+            entry["title"]
+                .as_str()
+                .unwrap_or_default()
+                .to_ascii_lowercase()
+        });
+        Ok(json!({
+            "entries": entries,
+            "refused": refused,
+            "running": self.spore_running()["ids"].clone(),
+        }))
+    }
+
+    fn find_spore(&self, id: &str) -> std::result::Result<(PathBuf, Manifest), String> {
+        for root in &self.roots {
+            let Ok(directory) = fs::read_dir(root) else {
+                continue;
+            };
+            for entry in directory.flatten() {
+                let package = entry.path();
+                if !package.is_dir() || !package.join("spore.toml").is_file() {
+                    continue;
+                }
+                let Ok(manifest) = Manifest::load(&package) else {
+                    continue;
+                };
+                if manifest.spore.id == id {
+                    return Ok((package, manifest));
+                }
+            }
+        }
+        Err(format!("no installed Spore {id:?}"))
+    }
+
+    fn spore_launch(
+        &self,
+        id: &str,
+        requested: &str,
+        native: bool,
+    ) -> std::result::Result<Value, String> {
+        let (package, manifest) = self.find_spore(id)?;
+        let surface_name = if requested.is_empty() {
+            manifest.launch.default.clone()
+        } else {
+            requested.to_owned()
+        };
+        let surface = manifest
+            .surfaces
+            .iter()
+            .find(|surface| surface.name == surface_name)
+            .or_else(|| {
+                SurfaceKind::parse(&surface_name).and_then(|kind| {
+                    manifest
+                        .surfaces
+                        .iter()
+                        .find(|surface| surface.kind == kind)
+                })
+            })
+            .ok_or_else(|| format!("{id} declares no surface {surface_name:?}"))?;
+        let entry = surface
+            .entry(manifest.ui.as_ref())
+            .ok_or_else(|| format!("{id} surface {surface_name:?} has no entry"))?;
+        let target = match surface.kind {
+            SurfaceKind::Web => {
+                let target = manifest
+                    .anycast
+                    .as_ref()
+                    .map(|anycast| format!("https://{}.myc/", anycast.name))
+                    .unwrap_or_else(|| format!("http://{}/", self.web_address()));
+                if native {
+                    let mut launches = self.launches.lock().expect("launch lock poisoned");
+                    let running = launches
+                        .get_mut(id)
+                        .and_then(|launch| launch.child.as_mut())
+                        .is_some_and(|child| matches!(child.try_wait(), Ok(None)));
+                    if !running {
+                        let binary = loam_window_binary()
+                            .ok_or_else(|| "loam-window not found".to_owned())?;
+                        let title = manifest
+                            .spore
+                            .title
+                            .clone()
+                            .unwrap_or_else(|| manifest.spore.name.clone());
+                        let child = Command::new(binary)
+                            .arg("--url")
+                            .arg(&target)
+                            .arg("--title")
+                            .arg(&title)
+                            .arg("--size")
+                            .arg("1280x900")
+                            .stdin(Stdio::null())
+                            .stdout(Stdio::null())
+                            .stderr(Stdio::inherit())
+                            .spawn()
+                            .map_err(|error| format!("launch {target}: {error}"))?;
+                        if let Some(mut previous) = launches.remove(id)
+                            && let Some(mut child) = previous.child.take()
+                        {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                        }
+                        launches.insert(
+                            id.to_owned(),
+                            SporeLaunch {
+                                surface: surface.name.clone(),
+                                target: target.clone(),
+                                child: Some(child),
+                                started_ms: now_millis(),
+                            },
+                        );
+                    }
+                }
+                target
+            }
+            SurfaceKind::Canvas => {
+                let module = package.join(entry);
+                let binary = loam_binary().ok_or_else(|| "loam binary not found".to_owned())?;
+                let child = Command::new(binary)
+                    .arg("surface")
+                    .arg(&module)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::inherit())
+                    .spawn()
+                    .map_err(|error| format!("launch {}: {error}", module.display()))?;
+                let mut launches = self.launches.lock().expect("launch lock poisoned");
+                if let Some(mut previous) = launches.remove(id)
+                    && let Some(mut child) = previous.child.take()
+                {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+                launches.insert(
+                    id.to_owned(),
+                    SporeLaunch {
+                        surface: surface.name.clone(),
+                        target: module.display().to_string(),
+                        child: Some(child),
+                        started_ms: now_millis(),
+                    },
+                );
+                module.display().to_string()
+            }
+        };
+        Ok(json!({
+            "id": id,
+            "surface": surface.name,
+            "kind": surface.kind.as_str(),
+            "target": target,
+        }))
+    }
+
+    fn spore_running(&self) -> Value {
+        let mut launches = self.launches.lock().expect("launch lock poisoned");
+        launches.retain(|_, launch| match launch.child.as_mut() {
+            Some(child) => !matches!(child.try_wait(), Ok(Some(_))),
+            None => true,
+        });
+        let mut ids = launches.keys().cloned().collect::<Vec<_>>();
+        ids.sort();
+        json!({
+            "ids": ids,
+            "launches": launches.iter().map(|(id, launch)| json!({
+                "id": id,
+                "surface": launch.surface,
+                "target": launch.target,
+                "started_ms": launch.started_ms,
+            })).collect::<Vec<_>>(),
+        })
+    }
+
+    fn spore_stop(&self, id: &str) -> std::result::Result<Value, String> {
+        let Some(mut launch) = self
+            .launches
+            .lock()
+            .expect("launch lock poisoned")
+            .remove(id)
+        else {
+            return Err(format!("{id:?} is not running"));
+        };
+        if let Some(mut child) = launch.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        Ok(json!({"id": id, "stopped": true}))
+    }
+
+    fn web_address(&self) -> String {
+        self.web
+            .read()
+            .expect("web host lock poisoned")
+            .as_ref()
+            .map(|web| web.address.clone())
+            .unwrap_or_else(|| "127.0.0.1:8799".into())
     }
 
     fn reload_request(&self) -> Value {
@@ -1184,6 +1754,11 @@ impl Daemon {
                 ok(json!({
                     "commands": registry.path(),
                     "providers": plugins.interfaces().count(),
+                    "surfaces": self.web.read().expect("web host lock poisoned").as_ref().map(|web| web.surfaces()).unwrap_or_default().iter().map(|surface| json!({
+                        "name": surface.name,
+                        "package": surface.package.display().to_string(),
+                        "entry": surface.entry.display().to_string(),
+                    })).collect::<Vec<_>>(),
                     "refused": plugins.refused().iter().map(|refusal| {
                         json!({"name": refusal.name, "reason": refusal.reason})
                     }).collect::<Vec<_>>(),
@@ -1304,6 +1879,147 @@ mod tests {
         );
         let shutdown = request(&socket, &Request::Shutdown).unwrap();
         assert_eq!(shutdown["ok"], true);
+        server.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn reload_picks_up_a_new_web_surface_and_renews_its_certificate() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("mycelium");
+        let bin = home.join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let renew = bin.join("mycelium");
+        fs::write(
+            &renew,
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$(dirname \"$0\")/../renew.args\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(&renew, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let socket = dir.path().join("loamd.sock");
+        let mut options = Options::new(&socket, vec![dir.path().to_path_buf()]);
+        options.log_root = Some(dir.path().join("logs"));
+        options.web_listen = Some("127.0.0.1:0".into());
+        options.mycelium_home = Some(home.clone());
+        let server = thread::spawn(move || serve(options));
+        for _ in 0..40 {
+            if socket.exists() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+
+        let package = dir.path().join("site");
+        fs::create_dir_all(&package).unwrap();
+        fs::write(
+            package.join("spore.soil"),
+            r#"(spore
+                 (id "org.mycelium.web")
+                 (version "0.1.0")
+                 (anycast (name "web") (kind "web") (alpns ("soil/http/1")))
+                 (surfaces (surface "web" (kind "web") (entry "index.html"))))"#,
+        )
+        .unwrap();
+        fs::write(package.join("index.html"), "<h1>site</h1>").unwrap();
+
+        let reload = request(&socket, &Request::Reload).unwrap();
+        assert_eq!(reload["ok"], true);
+        assert_eq!(reload["data"]["surfaces"][0]["name"], "web");
+        let args = fs::read_to_string(home.join("renew.args")).unwrap();
+        assert!(args.contains("frontdoor\nrenew\n--write\n--path"), "{args}");
+        assert!(args.contains(&home.display().to_string()), "{args}");
+
+        assert_eq!(request(&socket, &Request::Shutdown).unwrap()["ok"], true);
+        server.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn the_spore_bridge_lists_and_launches_installed_surfaces() {
+        use std::io::{Read as _, Write as _};
+
+        let dir = tempfile::tempdir().unwrap();
+        let package = dir.path().join("web");
+        fs::create_dir_all(package.join("web")).unwrap();
+        fs::write(package.join("module.wasm"), b"\0asm").unwrap();
+        fs::write(package.join("web/index.html"), "<h1>web</h1>").unwrap();
+        fs::write(
+            package.join("spore.toml"),
+            r#"schema = 1
+[spore]
+id = "test.web"
+name = "web"
+version = "0.1.0"
+license = "MIT"
+summary = "test web surface"
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+[module]
+path = "module.wasm"
+[launch]
+default = "web"
+surfaces = ["web"]
+[[surfaces]]
+name = "web"
+kind = "web"
+entry = "web/index.html"
+[grants]
+"soil:spore.catalog" = "launch from the test"
+[anycast]
+name = "web"
+kind = "web"
+"#,
+        )
+        .unwrap();
+
+        let probe = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let socket = dir.path().join("loamd.sock");
+        let mut options = Options::new(&socket, vec![dir.path().to_path_buf()]);
+        options.log_root = Some(dir.path().join("logs"));
+        options.web_listen = Some(format!("127.0.0.1:{port}"));
+        options.publish_leases = false;
+        let server = thread::spawn(move || serve(options));
+        for _ in 0..80 {
+            if socket.exists() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+
+        let get = |path: &str| {
+            let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+            write!(
+                stream,
+                "GET {path} HTTP/1.1\r\nHost: test.local\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+            let mut response = String::new();
+            stream.read_to_string(&mut response).unwrap();
+            let body = response.split("\r\n\r\n").nth(1).unwrap();
+            serde_json::from_str::<Value>(body).unwrap()
+        };
+        let entries = get("/api/spore/entries");
+        assert_eq!(entries["entries"][0]["id"], "test.web");
+        assert_eq!(entries["entries"][0]["role"], "app");
+
+        let body = json!({"id": "test.web", "surface": "web"}).to_string();
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(
+            stream,
+            "POST /api/spore/launch HTTP/1.1\r\nHost: test.local\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        let body = response.split("\r\n\r\n").nth(1).unwrap();
+        let launched: Value = serde_json::from_str(body).unwrap();
+        assert_eq!(launched["target"], "https://web.myc/");
+
+        assert_eq!(request(&socket, &Request::Shutdown).unwrap()["ok"], true);
         server.join().unwrap().unwrap();
     }
 
