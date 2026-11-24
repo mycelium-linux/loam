@@ -5,6 +5,7 @@
 //! stream; it never sees a provider route or credential.
 
 use std::io::Read;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use base64::Engine;
@@ -90,7 +91,14 @@ impl InferenceHost {
     ) -> Self {
         Self {
             table: ResourceTable::new(),
-            agent: ureq::AgentBuilder::new().build(),
+            agent: ureq::AgentBuilder::new()
+                .timeout(Duration::from_millis(
+                    std::env::var("SOIL_INFERENCE_TIMEOUT_MS")
+                        .ok()
+                        .and_then(|value| value.parse().ok())
+                        .unwrap_or(180_000),
+                ))
+                .build(),
             base_url: base_url.into(),
             voice_url: None,
             stt_url: None,
