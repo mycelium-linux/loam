@@ -161,7 +161,19 @@ pub fn serve(
     listener: TcpListener,
 ) -> Result<()> {
     loop {
-        let (mut stream, _) = listener.accept()?;
+        // A transient descriptor shortage must not kill the listener for good.
+        // The thread-per-request shape opens a socket and several files per
+        // request; one burst at the process limit used to return from `serve`
+        // and leave every later request as a frontdoor 502.
+        let (mut stream, _) = match listener.accept() {
+            Ok(accepted) => accepted,
+            Err(error) if accept_retryable(&error) => {
+                eprintln!("loamd: web listener: {error}; retrying");
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                continue;
+            }
+            Err(error) => return Err(error.into()),
+        };
         let sites = sites(&surfaces.read().expect("web surface lock poisoned"));
         let api = Arc::clone(&api);
         std::thread::spawn(move || {
@@ -178,6 +190,13 @@ pub fn serve(
             let _ = handle(stream, &sites, &api);
         });
     }
+}
+
+fn accept_retryable(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+    ) || matches!(error.raw_os_error(), Some(23) | Some(24))
 }
 
 fn has_spore_catalog(grants: &std::collections::BTreeMap<String, String>) -> bool {
