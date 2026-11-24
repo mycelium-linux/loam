@@ -248,6 +248,7 @@ pub fn serve(options: Options) -> Result<()> {
     });
     let api: Arc<dyn SporeApi> = Arc::new(DaemonApi {
         daemon: Arc::downgrade(&daemon),
+        mycelium_home: options.mycelium_home.clone(),
     });
     let web = WebHost::start(
         daemon.roots.clone(),
@@ -338,7 +339,8 @@ fn start_stream_transports(
                                 };
                                 let hub = hub.clone();
                                 tokio::spawn(async move {
-                                    if let Err(error) = crate::stream_ws::serve(hub, options).await {
+                                    if let Err(error) = crate::stream_ws::serve(hub, options).await
+                                    {
                                         eprintln!("loamd: stream ws: {error:#}");
                                     }
                                 });
@@ -369,7 +371,9 @@ fn start_stream_transports(
                                 };
                                 let hub = hub.clone();
                                 tokio::spawn(async move {
-                                    if let Err(error) = crate::stream_iroh::serve(hub, options).await {
+                                    if let Err(error) =
+                                        crate::stream_iroh::serve(hub, options).await
+                                    {
                                         eprintln!("loamd: stream iroh: {error:#}");
                                     }
                                 });
@@ -891,6 +895,7 @@ struct SporeLaunch {
 
 struct DaemonApi {
     daemon: Weak<Daemon>,
+    mycelium_home: Option<PathBuf>,
 }
 
 impl DaemonApi {
@@ -917,6 +922,88 @@ impl SporeApi for DaemonApi {
     fn stop(&self, id: &str) -> std::result::Result<Value, String> {
         self.daemon()?.spore_stop(id)
     }
+
+    fn mycelium_status(&self) -> std::result::Result<Value, String> {
+        let home = self
+            .mycelium_home
+            .clone()
+            .or_else(|| std::env::var_os("MYCELIUM_HOME").map(PathBuf::from))
+            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".mycelium")))
+            .ok_or_else(|| "no Mycelium home".to_owned())?;
+        let bin = mycelium_binary(&home).ok_or_else(|| "mycelium is not installed".to_owned())?;
+        let node = call_mycelium_json(&bin, &["node", "status", "--json"]);
+        let fleet = call_mycelium_json(&bin, &["fleet", "status", "--json"]);
+        let frontdoor = call_mycelium_json(&bin, &["frontdoor", "status", "--json"]);
+        let tunnel = call_mycelium_json(&bin, &["iroh-tun", "status", "--json"]);
+        Ok(json!({
+            "ok": true,
+            "generated_at_ms": now_millis(),
+            "node": wrapped(node),
+            "fleet": wrapped(fleet),
+            "frontdoor": wrapped(frontdoor),
+            "tunnel": wrapped(tunnel),
+        }))
+    }
+}
+
+fn wrapped(result: std::result::Result<Value, String>) -> Value {
+    match result {
+        Ok(value) => json!({"ok": true, "value": value}),
+        Err(error) => json!({"ok": false, "error": error}),
+    }
+}
+
+/// Run one stable `mycelium ... --json` read with a hard deadline.
+///
+/// The frontdoor dashboard uses the same CLI contract. Keeping the bridge here
+/// means a web Spore never learns a socket path or a daemon private key, and a
+/// wedged CLI becomes a status error rather than a stuck web request.
+fn call_mycelium_json(bin: &Path, args: &[&str]) -> std::result::Result<Value, String> {
+    const TIMEOUT: Duration = Duration::from_secs(8);
+    const MAX_OUTPUT: usize = 4 * 1024 * 1024;
+    let mut child = Command::new(bin)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("run {}: {error}", bin.display()))?;
+    let started = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if started.elapsed() < TIMEOUT => {
+                thread::sleep(Duration::from_millis(20));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("mycelium {} timed out", args.join(" ")));
+            }
+            Err(error) => return Err(format!("wait for mycelium: {error}")),
+        }
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("read mycelium output: {error}"))?;
+    if output.stdout.len() > MAX_OUTPUT {
+        return Err(format!(
+            "mycelium {} output exceeds {} bytes",
+            args.join(" "),
+            MAX_OUTPUT
+        ));
+    }
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let message = stderr.trim();
+        return Err(if message.is_empty() {
+            format!("mycelium {} exited {}", args.join(" "), output.status)
+        } else {
+            message.to_owned()
+        });
+    }
+    serde_json::from_slice(&output.stdout)
+        .map_err(|error| format!("parse mycelium {} output: {error}", args.join(" ")))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

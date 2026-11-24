@@ -49,6 +49,8 @@ pub struct StaticSurface {
     pub records_writable: bool,
     /// This surface may read the installed-Spore catalog and launch surfaces.
     pub spore_catalog: bool,
+    /// This surface may read Mycelium node and fleet status through the host.
+    pub mycelium_status: bool,
 }
 
 /// Find static web surfaces in a set of package roots.
@@ -81,6 +83,7 @@ pub fn discover(roots: &[PathBuf]) -> Result<Vec<StaticSurface>> {
             let records_writable = manifest.grants.contains_key("soil:records")
                 || manifest.grants.contains_key("soil:records.write");
             let spore_catalog = has_spore_catalog(&manifest.grants);
+            let mycelium_status = manifest.grants.contains_key("soil:mycelium.status");
             if let Some(surface) = static_surface(
                 &package,
                 manifest.spore.id,
@@ -93,6 +96,7 @@ pub fn discover(roots: &[PathBuf]) -> Result<Vec<StaticSurface>> {
                 records,
                 records_writable,
                 spore_catalog,
+                mycelium_status,
             ) {
                 found.push(surface);
             }
@@ -115,6 +119,7 @@ fn static_surface(
     records: Option<crate::spore::Records>,
     records_writable: bool,
     spore_catalog: bool,
+    mycelium_status: bool,
 ) -> Option<StaticSurface> {
     let surface = surfaces
         .iter()
@@ -137,6 +142,7 @@ fn static_surface(
         records,
         records_writable,
         spore_catalog,
+        mycelium_status,
     })
 }
 
@@ -150,6 +156,14 @@ pub trait SporeApi: Send + Sync {
     fn launch(&self, id: &str, surface: &str, native: bool) -> std::result::Result<Value, String>;
     fn running(&self) -> std::result::Result<Value, String>;
     fn stop(&self, id: &str) -> std::result::Result<Value, String>;
+    /// Node, fleet, frontdoor and tunnel status from the local Mycelium CLI.
+    ///
+    /// This is host-mediated like the catalog: a web surface cannot spawn a
+    /// process, and the CLI is the stable contract the frontdoor dashboard
+    /// already uses.
+    fn mycelium_status(&self) -> std::result::Result<Value, String> {
+        Err("mycelium status is not available in this host".into())
+    }
 }
 
 /// Serve one or more static surfaces. The first surface is the fallback when
@@ -247,6 +261,42 @@ fn handle(
             );
         }
         return spore_api(&request, path, api, origin, &mut stream);
+    }
+    if path == "/api/mycelium/status" {
+        if !site.mycelium_status {
+            return respond(
+                &mut stream,
+                403,
+                "application/json",
+                br#"{"error":"this surface has no soil:mycelium.status grant"}"#,
+                origin,
+            );
+        }
+        if request.method == "OPTIONS" {
+            return respond(&mut stream, 204, "text/plain", b"", origin);
+        }
+        if request.method != "GET" && request.method != "HEAD" {
+            return respond(
+                &mut stream,
+                405,
+                "text/plain",
+                b"method not allowed",
+                origin,
+            );
+        }
+        return match api.mycelium_status() {
+            Ok(value) => {
+                let body = serde_json::to_vec(&value)?;
+                respond(&mut stream, 200, "application/json", &body, origin)
+            }
+            Err(error) => respond(
+                &mut stream,
+                503,
+                "application/json",
+                &serde_json::to_vec(&json!({ "error": error }))?,
+                origin,
+            ),
+        };
     }
     if path == "/api/vfs" || path.starts_with("/api/vfs/") {
         return vfs_api(
@@ -1857,6 +1907,25 @@ mod tests {
             surface.writable,
             "the soil:vfs-mut grant must survive discovery"
         );
+    }
+
+    #[test]
+    fn a_mycelium_status_grant_is_reported_on_the_surface() {
+        let temp = tempfile::tempdir().expect("temp");
+        package(
+            temp.path(),
+            "spore.soil",
+            r#"(spore
+                 (id "org.mycelium.fleet-status")
+                 (version "0.1.0")
+                 (anycast (name "fleet") (kind "fleet") (alpns ("soil/http/1")))
+                 (surfaces (surface "web" (kind "web") (entry "index.html")))
+                 (grants
+                   ("soil:mycelium.status" "read the fleet")))"#,
+        );
+        let surfaces = discover(&[temp.path().to_path_buf()]).expect("discover");
+        assert!(surfaces[0].mycelium_status);
+        assert!(!surfaces[0].spore_catalog);
     }
 
     #[test]

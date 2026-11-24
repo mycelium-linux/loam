@@ -112,6 +112,20 @@ grants `soil:spore` or `soil:spore.catalog`. The launcher Spore
 (`examples/spores/home`) declares that grant and reads the catalog instead of
 hard-coding a dock, so an install appears on the next page load.
 
+A surface may also ask for Mycelium status:
+
+```text
+GET /api/mycelium/status
+```
+
+It is served only with the `soil:mycelium.status` grant and is read-only. The
+daemon runs the same stable CLI contract the frontdoor dashboard uses —
+`mycelium node status --json`, `fleet status --json`,
+`frontdoor status --json`, and `iroh-tun status --json` — with a bounded
+deadline and output cap. The Spore never sees a socket, a daemon key, or a
+process handle. The fleet-status example
+(`examples/spores/fleet-status`) is the reference client.
+
 ## Control
 
 The same binary is the local control client:
