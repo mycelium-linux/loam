@@ -5,6 +5,7 @@
   let desktops = [];
   let activeDesktop = localStorage.getItem('mycelium.desktop') || 'personal';
   let activeDesktopName = 'This Mac';
+  const launcherMode = new URLSearchParams(location.search).has('launcher');
 
   for (const el of document.querySelectorAll('[data-window]')) {
     windows.set(el.dataset.window, el);
@@ -71,8 +72,15 @@
     if (sporeButton) {
       event.preventDefault();
       void openSpore(sporeButton.dataset.spore);
+      closeLauncher();
       closeAccountMenu();
       closeCommand();
+      return;
+    }
+    const launcherClose = event.target.closest('[data-launcher-close]');
+    if (launcherClose) {
+      event.preventDefault();
+      closeLauncher();
       return;
     }
     const openButton = event.target.closest('[data-open]');
@@ -299,7 +307,10 @@
       event.preventDefault();
       openCommand();
     }
-    if (event.key === 'Escape') closeCommand();
+    if (event.key === 'Escape') {
+      closeCommand();
+      closeLauncher();
+    }
   });
 
   document.getElementById('command-form')?.addEventListener('submit', (event) => {
@@ -308,6 +319,15 @@
     const match = value.match(/notes|people|contacts|files/);
     if (match) {
       open(match[0] === 'people' ? 'contacts' : match[0]);
+      closeCommand();
+      return;
+    }
+    const entry = [...catalog.values()].find((entry) => {
+      const haystack = `${entry.title || ''} ${entry.name || ''} ${entry.id}`.toLowerCase();
+      return haystack.includes(value) && primarySurface(entry);
+    });
+    if (entry) {
+      void openSpore(entry.id);
       closeCommand();
     }
   });
@@ -554,7 +574,7 @@
     try { localStorage.setItem('mycelium.orientation.seen', '1'); } catch {}
   }
   try {
-    if (localStorage.getItem('mycelium.orientation.seen') !== '1') {
+    if (!launcherMode && localStorage.getItem('mycelium.orientation.seen') !== '1') {
       window.setTimeout(openOrientation, 700);
     }
   } catch {}
@@ -659,6 +679,121 @@
   // bridge is the JSON face of `soil:spore/catalog`, so a Spore installed by
   // loamd appears here on the next load with no package edit.
   const catalog = new Map();
+  let catalogEntries = [];
+  const launcher = document.getElementById('launcher');
+  const launcherGrid = document.getElementById('launcher-grid');
+  const launcherSearch = document.getElementById('launcher-search');
+  const launcherCount = document.getElementById('launcher-count');
+
+  function openLauncher() {
+    if (!launcher) return;
+    launcher.hidden = false;
+    closeCommand();
+    closeAccountMenu();
+    window.setTimeout(() => launcherSearch?.focus(), 30);
+  }
+
+  function closeLauncher() {
+    if (!launcher) return;
+    launcher.hidden = true;
+  }
+
+  function launcherMatches(entry, query) {
+    if (!query) return true;
+    return `${entry.title || ''} ${entry.name || ''} ${entry.id} ${entry.summary || ''}`
+      .toLowerCase()
+      .includes(query);
+  }
+
+  function launcherCard(entry) {
+    const surface = primarySurface(entry);
+    const card = document.createElement(surface ? 'button' : 'div');
+    card.className = surface ? 'launcher-app' : 'launcher-app is-static';
+    if (surface) {
+      card.type = 'button';
+      card.dataset.spore = entry.id;
+      card.setAttribute('aria-label', `Open ${entry.title || entry.name}`);
+    }
+    const tile = document.createElement('span');
+    tile.className = 'app-tile';
+    tile.style.setProperty('--app-bg', entry.color || '#8b9dff');
+    tile.style.setProperty('--app-bg-2', entry.color || '#8b9dff');
+    tile.style.setProperty('--app-ink', '#10141c');
+    tile.textContent = entry.badge || (entry.title || entry.name || '?').slice(0, 1).toUpperCase();
+    const copy = document.createElement('span');
+    copy.className = 'launcher-app-copy';
+    const name = document.createElement('span');
+    name.className = 'launcher-app-name';
+    name.textContent = entry.title || entry.name;
+    const summary = document.createElement('span');
+    summary.className = 'launcher-app-summary';
+    summary.textContent = entry.summary || entry.id;
+    const role = document.createElement('span');
+    role.className = 'launcher-app-role';
+    role.textContent = entry.role || 'spore';
+    copy.append(name, summary, role);
+    card.append(tile, copy);
+    return card;
+  }
+
+  function renderLauncher() {
+    if (!launcherGrid) return;
+    const query = (launcherSearch?.value || '').trim().toLowerCase();
+    const entries = catalogEntries.filter((entry) => launcherMatches(entry, query));
+    launcherGrid.replaceChildren(...entries.map(launcherCard));
+    if (!entries.length) {
+      const empty = document.createElement('p');
+      empty.className = 'launcher-empty';
+      empty.textContent = query ? `No Spore matches “${query}”.` : 'No Spores are installed.';
+      launcherGrid.append(empty);
+    }
+    const apps = catalogEntries.filter((entry) => primarySurface(entry)).length;
+    const plugins = catalogEntries.filter((entry) => entry.role === 'plugin').length;
+    const packages = catalogEntries.filter((entry) => entry.role === 'package').length;
+    if (launcherCount) {
+      launcherCount.textContent = `${apps} apps · ${plugins} plugins · ${packages} packages · ${catalogEntries.length} installed`;
+    }
+  }
+
+  function renderCommandCatalog() {
+    const results = document.querySelector('.command-results');
+    if (!results) return;
+    for (const old of results.querySelectorAll('[data-spore]')) old.remove();
+    for (const entry of catalogEntries) {
+      const surface = primarySurface(entry);
+      if (!surface) continue;
+      const button = document.createElement('button');
+      button.className = 'command-result';
+      button.type = 'button';
+      button.dataset.spore = entry.id;
+      const tile = document.createElement('span');
+      tile.className = 'app-tile';
+      tile.style.setProperty('--app-bg', entry.color || '#8b9dff');
+      tile.style.setProperty('--app-bg-2', entry.color || '#8b9dff');
+      tile.style.setProperty('--app-ink', '#10141c');
+      tile.textContent = entry.badge || (entry.title || entry.name || '?').slice(0, 1).toUpperCase();
+      const label = document.createElement('span');
+      label.className = 'command-result-label';
+      label.textContent = `Open ${entry.title || entry.name}`;
+      const key = document.createElement('kbd');
+      key.textContent = '↵';
+      button.append(tile, label, key);
+      results.append(button);
+    }
+  }
+
+  launcherSearch?.addEventListener('input', renderLauncher);
+  document.getElementById('launcher-search-form')?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const first = catalogEntries.find((entry) => primarySurface(entry) && launcherMatches(entry, (launcherSearch?.value || '').trim().toLowerCase()));
+    if (first) {
+      void openSpore(first.id);
+      closeLauncher();
+    }
+  });
+  for (const toggle of document.querySelectorAll('[data-launcher-toggle]')) {
+    toggle.addEventListener('click', openLauncher);
+  }
 
   function catalogKey(id) {
     return `spore-${id.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`;
@@ -736,29 +871,14 @@
       const response = await fetch('/api/spore/entries', { headers: { accept: 'application/json' } });
       if (!response.ok) return;
       const body = await response.json();
-      const entries = Array.isArray(body.entries) ? body.entries : [];
-      const host = document.querySelector('.desktop-icons');
-      if (!host) return;
-      for (const entry of entries) {
-        const surface = primarySurface(entry);
-        if (!surface || entry.id === 'org.mycelium.home') continue;
-        catalog.set(entry.id, entry);
-        if (document.querySelector(`[data-spore="${CSS.escape(entry.id)}"]`)) continue;
-        const button = document.createElement('button');
-        button.className = 'desktop-icon catalog-icon';
-        button.type = 'button';
-        button.dataset.spore = entry.id;
-        button.setAttribute('aria-label', `Open ${entry.title || entry.name}`);
-        const tile = document.createElement('span');
-        tile.className = 'app-tile';
-        tile.style.setProperty('--app-bg', entry.color || '#8b9dff');
-        tile.style.setProperty('--app-bg-2', entry.color || '#8b9dff');
-        tile.style.setProperty('--app-ink', '#10141c');
-        tile.textContent = entry.badge || (entry.title || entry.name || '?').slice(0, 1).toUpperCase();
-        const label = document.createElement('span');
-        label.textContent = entry.title || entry.name;
-        button.append(tile, label);
-        host.append(button);
+      catalogEntries = (Array.isArray(body.entries) ? body.entries : [])
+        .filter((entry) => entry.id !== 'org.mycelium.home');
+      for (const entry of catalogEntries) catalog.set(entry.id, entry);
+      renderLauncher();
+      renderCommandCatalog();
+      if (launcherMode) {
+        closeOrientation();
+        openLauncher();
       }
     } catch (error) {
       console.warn('launcher catalog unavailable', error);

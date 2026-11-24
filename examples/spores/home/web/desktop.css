@@ -1140,3 +1140,162 @@ html[data-command="open"] .command {
 @media (max-width: 760px) {
   .window-resize { display: none; }
 }
+
+/* Application launcher: a grid over the desktop, not a second dock. */
+.launcher {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: start center;
+  padding: clamp(24px, 7vh, 84px) 18px 24px;
+  background: color-mix(in srgb, var(--welcome-bg) 78%, #000 22%);
+  backdrop-filter: blur(30px) saturate(1.18);
+}
+.launcher[hidden] { display: none; }
+.launcher-panel {
+  width: min(1060px, 100%);
+  max-height: calc(100dvh - 48px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 20px;
+  background: var(--command-bg-fallback);
+  box-shadow: var(--command-shadow);
+}
+@supports (backdrop-filter: blur(20px)) {
+  .launcher-panel { background: var(--command-bg); backdrop-filter: blur(38px) saturate(1.35); }
+}
+.launcher-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 24px 26px 12px;
+}
+.launcher-kicker {
+  margin: 0 0 5px;
+  color: var(--color-ink-3);
+  font: 10px var(--font-mono);
+  letter-spacing: .16em;
+  text-transform: uppercase;
+}
+.launcher-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: clamp(28px, 4vw, 44px);
+  font-weight: 620;
+  line-height: 1;
+  letter-spacing: -.055em;
+}
+.launcher-close {
+  padding: 6px 9px;
+  border: 1px solid var(--hairline);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-ink-3);
+  font: 10px var(--font-mono);
+}
+.launcher-close:hover { background: var(--hairline); color: var(--color-ink); }
+.launcher-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 18px 12px;
+  padding: 10px 13px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: rgba(255,255,255,.035);
+}
+.launcher-search svg { width: 17px; height: 17px; flex: none; color: var(--color-ink-3); }
+.launcher-search input {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--color-ink);
+  font: 15px var(--font-body);
+}
+.launcher-search input::placeholder { color: var(--color-ink-4); }
+.launcher-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(188px, 1fr));
+  gap: 8px;
+  padding: 4px 18px 18px;
+  overflow: auto;
+}
+.launcher-app {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--color-ink);
+  text-align: left;
+}
+.launcher-app:not(.is-static):hover,
+.launcher-app:not(.is-static):focus-visible {
+  border-color: var(--hairline-strong);
+  background: var(--hairline);
+}
+.launcher-app.is-static { opacity: .74; }
+.launcher-app .app-tile { width: 42px; height: 42px; flex: none; border-radius: 11px; }
+.launcher-app-copy { min-width: 0; display: grid; gap: 3px; }
+.launcher-app-name {
+  overflow: hidden;
+  color: var(--color-ink);
+  font-size: 13px;
+  font-weight: 580;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.launcher-app-summary {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--color-ink-3);
+  font-size: 10.5px;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.launcher-app-role {
+  color: var(--color-accent-cool);
+  font: 9px var(--font-mono);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.launcher-empty {
+  grid-column: 1 / -1;
+  padding: 40px 12px;
+  color: var(--color-ink-3);
+  font-size: 13px;
+  text-align: center;
+}
+.launcher-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 20px 13px;
+  border-top: 1px solid var(--hairline);
+  color: var(--color-ink-3);
+  font: 9.5px var(--font-mono);
+}
+.launcher-foot kbd {
+  padding: 1px 4px;
+  border: 1px solid var(--hairline);
+  border-radius: 3px;
+  background: var(--hairline);
+  font: inherit;
+}
+@media (max-width: 640px) {
+  .launcher { padding: 10px; }
+  .launcher-panel { max-height: calc(100dvh - 20px); border-radius: 15px; }
+  .launcher-head { padding: 18px 18px 10px; }
+  .launcher-search { margin-inline: 12px; }
+  .launcher-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); padding-inline: 12px; }
+  .launcher-app .app-tile { width: 36px; height: 36px; }
+}
