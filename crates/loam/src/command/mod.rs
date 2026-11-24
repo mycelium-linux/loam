@@ -146,7 +146,8 @@ pub mod plugin_ipc;
 
 /// What the runner can link for a command. A package that requires anything
 /// else is refused by the registry instead of failing at instantiation.
-pub const RUNNER_CAPABILITIES: &[&str] = &["soil:records", "soil:time", "soil:unibus", "soil:mcp"];
+pub const RUNNER_CAPABILITIES: &[&str] =
+    &["soil:records", "soil:time", "soil:unibus", "soil:mcp", "soil:streams"];
 
 #[derive(Debug, Clone)]
 pub struct CommandRegistry {

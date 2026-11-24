@@ -1,0 +1,10 @@
+// End-to-end fixture for `soil:streams`: accept one session, echo its bytes.
+//
+// A loam command exports `wasi:cli/run`, so that is the surface. The proof that
+// the session crossed the host is the echoed reply, not the exit status.
+package test:stream-echo@0.1.0;
+
+world echo {
+  import soil:streams/duplex@0.1.0;
+  export wasi:cli/run@0.2.4;
+}
