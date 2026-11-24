@@ -156,7 +156,7 @@ fn static_surface(
 /// implementation, two transports.
 pub trait SporeApi: Send + Sync {
     fn entries(&self) -> std::result::Result<Value, String>;
-    fn launch(&self, id: &str, surface: &str) -> std::result::Result<Value, String>;
+    fn launch(&self, id: &str, surface: &str, native: bool) -> std::result::Result<Value, String>;
     fn running(&self) -> std::result::Result<Value, String>;
     fn stop(&self, id: &str) -> std::result::Result<Value, String>;
 }
@@ -307,6 +307,8 @@ struct LaunchRequest {
     id: String,
     #[serde(default)]
     surface: String,
+    #[serde(default)]
+    native: bool,
 }
 
 #[derive(Deserialize)]
@@ -326,7 +328,7 @@ fn spore_api(
         ("GET", "/api/spore/running") => api.running(),
         ("POST", "/api/spore/launch") => serde_json::from_slice::<LaunchRequest>(&request.body)
             .map_err(|error| format!("invalid launch request: {error}"))
-            .and_then(|launch| api.launch(&launch.id, &launch.surface)),
+            .and_then(|launch| api.launch(&launch.id, &launch.surface, launch.native)),
         ("POST", "/api/spore/stop") => serde_json::from_slice::<StopRequest>(&request.body)
             .map_err(|error| format!("invalid stop request: {error}"))
             .and_then(|stop| api.stop(&stop.id)),

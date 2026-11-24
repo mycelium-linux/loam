@@ -72,7 +72,6 @@
     if (sporeButton) {
       event.preventDefault();
       void openSpore(sporeButton.dataset.spore);
-      closeLauncher();
       closeAccountMenu();
       closeCommand();
       return;
@@ -747,11 +746,8 @@
       empty.textContent = query ? `No Spore matches “${query}”.` : 'No Spores are installed.';
       launcherGrid.append(empty);
     }
-    const apps = catalogEntries.filter((entry) => primarySurface(entry)).length;
-    const plugins = catalogEntries.filter((entry) => entry.role === 'plugin').length;
-    const packages = catalogEntries.filter((entry) => entry.role === 'package').length;
     if (launcherCount) {
-      launcherCount.textContent = `${apps} apps · ${plugins} plugins · ${packages} packages · ${catalogEntries.length} installed`;
+      launcherCount.textContent = `${catalogEntries.length} app${catalogEntries.length === 1 ? '' : 's'} · plugins and packages live in the store`;
     }
   }
 
@@ -846,21 +842,16 @@
       const response = await fetch('/api/spore/launch', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ id, surface: surface.name }),
+        body: JSON.stringify({ id, surface: surface.name, native: true }),
       });
       const launched = await response.json();
       if (!response.ok || launched.error) {
         console.warn('spore launch failed', launched.error);
         return;
       }
-      if (launched.kind === 'web') {
-        const el = catalogWindow(entry);
-        const frame = el.querySelector('iframe');
-        if (frame && frame.getAttribute('src') !== launched.target) frame.src = launched.target;
-        el.hidden = false;
-        el.classList.add('is-open');
-        focusWindow(el);
-      }
+      // The host opens web surfaces as native windows. The launcher must not
+      // nest another desktop inside itself.
+      closeLauncher();
     } catch (error) {
       console.warn('spore launch failed', error);
     }
@@ -871,8 +862,11 @@
       const response = await fetch('/api/spore/entries', { headers: { accept: 'application/json' } });
       if (!response.ok) return;
       const body = await response.json();
+      // The launcher is for things a person can open. Plugins and packages
+      // are inventory, and belong in the store, not beside the apps.
       catalogEntries = (Array.isArray(body.entries) ? body.entries : [])
-        .filter((entry) => entry.id !== 'org.mycelium.home');
+        .filter((entry) => entry.id !== 'org.mycelium.home')
+        .filter((entry) => Boolean(primarySurface(entry)));
       for (const entry of catalogEntries) catalog.set(entry.id, entry);
       renderLauncher();
       renderCommandCatalog();
