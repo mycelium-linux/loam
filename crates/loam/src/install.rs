@@ -103,7 +103,7 @@ pub fn install(options: InstallOptions) -> Result<InstallReport> {
     fs::create_dir_all(&options.root)
         .with_context(|| format!("create install root {}", options.root.display()))?;
 
-    let is_spore = source.join("spore.toml").is_file();
+    let is_spore = source.join("spore.toml").is_file() || source.join("spore.soil").is_file();
     let is_command = source.join("command.toml").is_file();
     if !is_spore && !is_command {
         bail!(
@@ -117,7 +117,7 @@ pub fn install(options: InstallOptions) -> Result<InstallReport> {
     }
     let entries = command::package_commands(&source)?;
     let manifest = if is_spore {
-        Some(Manifest::load(&source)?)
+        Some(crate::spore::load_source(&source)?)
     } else {
         None
     };

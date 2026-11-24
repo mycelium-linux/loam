@@ -3,7 +3,7 @@
 A minimal web Spore for the Soil 101 walkthrough.
 
 ```sh
-cp -R examples/hello-soil ~/.mycelium/spores/
+loam install examples/hello-soil --root ~/.mycelium/spores --allow-unsigned-dev
 loamd serve --root ~/.mycelium/spores --web-listen 127.0.0.1:8799
 curl -H 'Host: hello.myc' http://127.0.0.1:8799/
 ```

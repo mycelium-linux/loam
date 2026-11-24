@@ -958,9 +958,104 @@ impl fmt::Display for LaunchError {
     }
 }
 
+/// Load the manifest a directory declares: `spore.soil` is the source form
+/// and wins; `spore.toml` remains the installed-package fallback. Both
+/// consumers (web discovery and install) use this so there is one answer.
+pub fn load_source(root: &Path) -> Result<Manifest> {
+    let soil_path = root.join("spore.soil");
+    if soil_path.is_file() {
+        let source = fs::read_to_string(&soil_path)
+            .map_err(|error| Error::Io(format!("{}: {error}", soil_path.display())))?;
+        let manifest = Manifest::from_soil(soil::SoilManifest::parse(&source)?)?;
+        manifest.validate()?;
+        return Ok(manifest);
+    }
+    Manifest::load(root)
+}
+
 impl std::error::Error for LaunchError {}
 
 impl Manifest {
+    /// Normalize a `spore.soil` source manifest into the installed-package
+    /// model. The source manifest carries the fields an author edits; the
+    /// rest use the same defaults a `spore.toml` would get from serde.
+    pub fn from_soil(soil: soil::SoilManifest) -> Result<Self> {
+        let name = soil.name.clone();
+        let summary = soil
+            .summary
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("{name} Spore"));
+        let launch_default = soil
+            .surfaces
+            .first()
+            .map(|surface| surface.name.clone())
+            .unwrap_or_else(|| "web".to_owned());
+        let launch_surfaces = if soil.surfaces.is_empty() {
+            vec!["web".to_owned()]
+        } else {
+            soil.surfaces
+                .iter()
+                .map(|surface| surface.kind.as_str().to_owned())
+                .collect()
+        };
+        Ok(Self {
+            schema: SCHEMA,
+            spore: SporeMeta {
+                id: soil.id,
+                name,
+                title: None,
+                version: soil.version,
+                license: soil
+                    .license
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| "UNLICENSED".to_owned()),
+                summary,
+                description: soil.description,
+                homepage: soil.homepage,
+            },
+            engine: Engine {
+                soil: ">=0.1".to_owned(),
+                target: "wasm32-wasip2".to_owned(),
+                abi: BTreeMap::new(),
+            },
+            module: soil.module.map(|path| Module { path, sha256: None }),
+            ui: None,
+            launch: Launch {
+                default: launch_default,
+                surfaces: launch_surfaces,
+                canvas_module: None,
+                native: None,
+            },
+            deps: BTreeMap::new(),
+            grants: soil.grants,
+            records: None,
+            env: EnvPolicy::default(),
+            assets: BTreeMap::new(),
+            denied: BTreeMap::new(),
+            handles: Vec::new(),
+            system: None,
+            anycast: soil.anycast,
+            http: None,
+            chrome: None,
+            presentation: None,
+            placement: None,
+            docs: None,
+            catalog: None,
+            actions: Vec::new(),
+            skills: Vec::new(),
+            surfaces: soil.surfaces,
+            web: soil.web,
+            commands: soil.commands,
+            plugin: None,
+        })
+    }
+
     pub fn parse(source: &str) -> Result<Self> {
         let manifest: Self =
             toml::from_str(source).map_err(|error| Error::Toml(error.to_string()))?;
@@ -1205,13 +1300,14 @@ impl Manifest {
             // web-only Spore is a program the host presents in a browser view.
             None if self.ui.is_none()
                 && self.chrome.is_none()
+                && self.commands.is_empty()
                 && !self
                     .surfaces
                     .iter()
                     .any(|surface| surface.entry(self.ui.as_ref()).is_some()) =>
             {
                 return Err(Error::Invalid(
-                    "a Spore needs an entrypoint: a module, a Lua UI, a chrome region, or a declared surface".into(),
+                    "a Spore needs an entrypoint: a module, a Lua UI, a chrome region, a declared surface, or a command".into(),
                 ));
             }
             None => {}
@@ -2082,7 +2178,14 @@ impl Lock {
                 .split_once(' ')
                 .ok_or_else(|| Error::Lock(format!("malformed line {line:?}")))?;
             match key {
-                "spore" => id = Some(rest.to_owned()),
+                "kind" => {
+                    if rest != "spore" {
+                        return Err(Error::Lock(format!("unknown kind {rest:?}")));
+                    }
+                }
+                // `spore <id>` is the pre-`kind` spelling; keep reading it so
+                // an old lock is a migration, not a mystery.
+                "spore" | "id" => id = Some(rest.to_owned()),
                 "version" => version = Some(rest.to_owned()),
                 "digest" => digest = Some(rest.to_owned()),
                 "file" => {
@@ -2130,7 +2233,8 @@ fn body(id: &str, version: &str, files: &[FileEntry]) -> String {
     let mut out = String::new();
     out.push_str(LOCK_HEADER);
     out.push('\n');
-    out.push_str(&format!("spore {id}\n"));
+    out.push_str("kind spore\n");
+    out.push_str(&format!("id {id}\n"));
     out.push_str(&format!("version {version}\n"));
     for file in files {
         out.push_str(&format!(
@@ -2287,7 +2391,11 @@ fn walk(root: &Path, dir: &Path, out: &mut BTreeMap<String, Vec<u8>>) -> Result<
             walk(root, &path, out)?;
             continue;
         }
-        if !metadata.is_file() || name == LOCK_NAME {
+        if !metadata.is_file()
+            || name == LOCK_NAME
+            || name == "spore.lock.tmp"
+            || name.ends_with(".spore")
+        {
             continue;
         }
         if metadata.len() > MAX_FILE_BYTES {
@@ -2304,7 +2412,10 @@ fn walk(root: &Path, dir: &Path, out: &mut BTreeMap<String, Vec<u8>>) -> Result<
 
 /// Compute the lock for a directory's current contents.
 pub fn compute_lock(root: &Path, manifest: &Manifest) -> Result<Lock> {
-    let files = collect_package(root, manifest)?;
+    // Whole package: the lock is the reproducibility receipt for every file
+    // that ships, not just the paths a manifest happens to name. This is the
+    // same set `scripts/spore-pack.sh lock` writes.
+    let files = collect(root)?;
     Ok(lock_of(&manifest.spore.id, &manifest.spore.version, &files))
 }
 
@@ -2516,7 +2627,7 @@ fn check_package_imports(manifest: &Manifest, files: &BTreeMap<String, Vec<u8>>)
 }
 
 pub fn check(root: &Path) -> Result<Lock> {
-    let manifest = Manifest::load(root)?;
+    let manifest = load_source(root)?;
     for path in manifest.declared_paths() {
         let full = root.join(&path);
         if !full.is_file() {
@@ -2650,7 +2761,7 @@ pub fn pack(root: &Path) -> Result<Vec<u8>> {
 /// refresh it. A stale lock means the tree is not what was published, and the
 /// answer is `soil-spore lock`, not a digest nobody looked at.
 pub fn pack_locked(root: &Path) -> Result<Vec<u8>> {
-    let manifest = Manifest::load(root)?;
+    let manifest = load_source(root)?;
     let lock = check(root)?;
     tarball(root, &manifest, &lock)
 }
@@ -2660,7 +2771,7 @@ fn tarball(root: &Path, manifest: &Manifest, lock: &Lock) -> Result<Vec<u8>> {
         return Err(Error::Lock("lock does not match the manifest".into()));
     }
 
-    let mut files = collect_package(root, manifest)?;
+    let mut files = collect(root)?;
     files.push((LOCK_NAME.to_owned(), lock.render().into_bytes()));
 
     let total: u64 = files.iter().map(|(_, bytes)| bytes.len() as u64).sum();

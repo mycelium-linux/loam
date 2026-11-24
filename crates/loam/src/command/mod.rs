@@ -222,7 +222,7 @@ impl CommandRegistry {
     fn collect(&mut self, package: &Path) {
         let entries = if package.join("command.toml").is_file() {
             standalone_command(package).map(|entry| vec![entry])
-        } else if package.join("spore.toml").is_file() {
+        } else if package.join("spore.toml").is_file() || package.join("spore.soil").is_file() {
             // A Spore installs commands too. The package owns both faces - a
             // canvas and a terminal program - and the shell should not care
             // which kind of manifest declared them.
@@ -617,7 +617,7 @@ fn installed_runtime(package: &Path) -> (Option<PathBuf>, Option<String>) {
 pub fn package_commands(package: &Path) -> Result<Vec<CommandEntry>> {
     if package.join("command.toml").is_file() {
         standalone_command(package).map(|entry| vec![entry])
-    } else if package.join("spore.toml").is_file() {
+    } else if package.join("spore.toml").is_file() || package.join("spore.soil").is_file() {
         spore_commands(package)
     } else {
         bail!(
@@ -709,10 +709,10 @@ fn standalone_command(package: &Path) -> Result<CommandEntry> {
 /// Limits are the command defaults: a Spore declares what it runs, not how much
 /// memory the host may give it.
 fn spore_commands(package: &Path) -> Result<Vec<CommandEntry>> {
-    if !package.join("spore.toml").is_file() {
+    if !package.join("spore.toml").is_file() && !package.join("spore.soil").is_file() {
         return Ok(Vec::new());
     }
-    let manifest = crate::spore::Manifest::load(package)
+    let manifest = crate::spore::load_source(package)
         .map_err(|error| anyhow::anyhow!("{}: {error}", package.display()))?;
     let limits = Limits::default();
     let mut entries = Vec::new();
@@ -1300,6 +1300,31 @@ mod tests {
             ),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn a_spore_soil_package_installs_its_commands() {
+        // The source form of the manifest is what an author writes, so the
+        // registry has to read it: a `.soil` package was invisible before.
+        let package = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(package.path().join("bin")).unwrap();
+        std::fs::write(package.path().join("bin/say.wasm"), b"\0asm").unwrap();
+        std::fs::write(
+            package.path().join("spore.soil"),
+            r#"
+            (spore
+              (id "org.mycelium.say")
+              (version "0.1.0")
+              (grants ("soil:time" "stamps its line"))
+              (commands
+                (command (name "say") (summary "print one line") (module "bin/say.wasm"))))
+            "#,
+        )
+        .unwrap();
+        let entries = package_commands(package.path()).expect("commands from spore.soil");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "say");
+        assert_eq!(entries[0].requires, vec!["soil:time".to_owned()]);
     }
 
     #[test]

@@ -23,7 +23,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::spore::{Anycast, Manifest, Surface, SurfaceKind, Ui, Web, soil::SoilManifest};
+use crate::spore::{Anycast, Surface, SurfaceKind, Ui, Web};
 
 #[cfg(feature = "vfs")]
 use fungos_vfs::{Expect, NodeRole, Vfs, normalize_path};
@@ -61,52 +61,27 @@ pub fn discover(roots: &[PathBuf]) -> Result<Vec<StaticSurface>> {
             if !package.is_dir() {
                 continue;
             }
-            let soil = package.join("spore.soil");
-            let toml = package.join("spore.toml");
-            let surface = if soil.is_file() {
-                fs::read_to_string(&soil)
-                    .ok()
-                    .and_then(|source| SoilManifest::parse(&source).ok())
-                    .and_then(|manifest| {
-                        let anycast = manifest.anycast.clone()?;
-                        let writable = manifest.grants.contains_key("soil:vfs-mut");
-                        let spore_catalog = has_spore_catalog(&manifest.grants);
-                        static_surface(
-                            &package,
-                            manifest.id,
-                            manifest.version,
-                            anycast,
-                            &manifest.surfaces,
-                            None,
-                            manifest.web,
-                            writable,
-                            spore_catalog,
-                        )
-                    })
-            } else if toml.is_file() {
-                fs::read_to_string(&toml)
-                    .ok()
-                    .and_then(|source| Manifest::parse(&source).ok())
-                    .and_then(|manifest| {
-                        let anycast = manifest.anycast.clone()?;
-                        let writable = manifest.grants.contains_key("soil:vfs-mut");
-                        let spore_catalog = has_spore_catalog(&manifest.grants);
-                        static_surface(
-                            &package,
-                            manifest.spore.id,
-                            manifest.spore.version,
-                            anycast,
-                            &manifest.surfaces,
-                            manifest.ui.as_ref(),
-                            manifest.web.clone(),
-                            writable,
-                            spore_catalog,
-                        )
-                    })
-            } else {
-                None
+            // One loader for source and installed packages. A surface is a
+            // routing fact; it does not need a second manifest dialect.
+            let Ok(manifest) = crate::spore::load_source(&package) else {
+                continue;
             };
-            if let Some(surface) = surface {
+            let Some(anycast) = manifest.anycast.clone() else {
+                continue;
+            };
+            let writable = manifest.grants.contains_key("soil:vfs-mut");
+            let spore_catalog = has_spore_catalog(&manifest.grants);
+            if let Some(surface) = static_surface(
+                &package,
+                manifest.spore.id,
+                manifest.spore.version,
+                anycast,
+                &manifest.surfaces,
+                manifest.ui.as_ref(),
+                manifest.web,
+                writable,
+                spore_catalog,
+            ) {
                 found.push(surface);
             }
         }
@@ -928,6 +903,22 @@ mod tests {
         fs::create_dir_all(&package).expect("package");
         fs::write(package.join(manifest_name), manifest).expect("manifest");
         fs::write(package.join("index.html"), "<h1>site</h1>").expect("page");
+    }
+
+    #[test]
+    #[ignore]
+    fn debug_phonebook_discovery() {
+        let surfaces = discover(&[PathBuf::from("/Users/ajmwagar/.mycelium/spores")]).unwrap();
+        for surface in &surfaces {
+            eprintln!(
+                "surface name={} id={} kind={} entry={}",
+                surface.name,
+                surface.spore_id,
+                surface.kind,
+                surface.entry.display()
+            );
+        }
+        assert!(surfaces.iter().any(|surface| surface.name == "phonebook"));
     }
 
     #[test]

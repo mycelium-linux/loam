@@ -1591,10 +1591,13 @@ impl Daemon {
             };
             for entry in directory.flatten() {
                 let package = entry.path();
-                if !package.is_dir() || !package.join("spore.toml").is_file() {
+                if !package.is_dir()
+                    || (!package.join("spore.toml").is_file()
+                        && !package.join("spore.soil").is_file())
+                {
                     continue;
                 }
-                let manifest = match Manifest::load(&package) {
+                let manifest = match crate::spore::load_source(&package) {
                     Ok(manifest) => manifest,
                     Err(error) => {
                         refused.push(json!({
@@ -1687,10 +1690,13 @@ impl Daemon {
             };
             for entry in directory.flatten() {
                 let package = entry.path();
-                if !package.is_dir() || !package.join("spore.toml").is_file() {
+                if !package.is_dir()
+                    || (!package.join("spore.toml").is_file()
+                        && !package.join("spore.soil").is_file())
+                {
                     continue;
                 }
-                let Ok(manifest) = Manifest::load(&package) else {
+                let Ok(manifest) = crate::spore::load_source(&package) else {
                     continue;
                 };
                 if manifest.spore.id == id {

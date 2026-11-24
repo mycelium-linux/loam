@@ -83,7 +83,7 @@ the manifest shape is the same one a compiled Soil component uses when the
 compiler can lower a real Spore.
 
 ```sh
-cp -R examples/hello-soil ~/.mycelium/spores/
+loam install examples/hello-soil --root ~/.mycelium/spores --allow-unsigned-dev
 loamd serve --root ~/.mycelium/spores --web-listen 127.0.0.1:8799
 # then, through the Mycelium frontdoor:
 curl -k https://hello.myc/

@@ -87,20 +87,21 @@ scripts/test-stream-e2e.sh
 ```
 
 That is the real test: a **Spore**, not a handshake. The script builds
-`crates/loam/fixtures/stream-echo` (a command that exports `wasi:cli/run` and
-imports `soil:streams/duplex`), installs it with `requires = ["soil:streams"]`,
+`crates/loam/fixtures/stream-echo` (a Spore whose `spore.soil` declares a
+`soil:streams` grant and one command), installs it as a package,
 starts `loamd` with a ws listener, dials it, and expects the Spore's echo back
 through the session.
 
 It also covers the two things that were previously unproven:
 
-- `soil:streams` is in `RUNNER_CAPABILITIES`, so a command may declare it.
+- `soil:streams` is in `RUNNER_CAPABILITIES`, so a Spore may grant it.
 - the command `Host` implements `duplex::*` over the daemon's hub, so the
   session really reaches Spore code.
 
-Worth knowing when writing such a fixture: a loam command must export
-`wasi:cli/run`, and the hub's `accept` is a **poll** — a fixture without a clock
-has to spin, so the test dials immediately after `loamd start`.
+Worth knowing when writing such a fixture: the runner calls `wasi:cli/run`, so a
+command component must export it, and the hub's `accept` is a **poll** — a
+fixture without a clock has to spin, so the test dials immediately after
+`loamd start`.
 
 ## Earlier handshake check
 
