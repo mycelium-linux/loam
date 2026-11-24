@@ -1,0 +1,10 @@
+#!/bin/sh
+# Composio MCP over Streamable HTTP, with the bearer token leased by Geode.
+# The token never appears in the manifest, argv, or logs.
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+GEODE=${GEODE_BIN:-"$HOME/.local/bin/geode"}
+exec "$GEODE" exec --profile composio -- \
+  "$ROOT/bin/loam-mcp" \
+  --http composio=https://connect.composio.dev/mcp \
+  --auth-env composio=COMPOSIO_MCP_TOKEN

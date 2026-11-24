@@ -1,0 +1,6 @@
+spore-lock 1
+spore dev.fungos.composio
+version 0.1.0
+file 14c3d0716f11315adc9fbd8a015fc054bcc88eb4d54720574b36ec512bdacbc3 142744 module.wasm
+file 60e26ace14cf5cf6e642bda9aed994e1a069d1ffbf19abe59f1b784577586546 573 spore.toml
+digest 3feda23c5c8e789c1a181bf768893433372cefa5e135fb0f5302f0a5ce0d5746
