@@ -81,8 +81,31 @@ cannot serve is logged, not fatal.
 ## Verified end to end
 
 ```sh
-# config above, ws listen on a free port
-loamd serve --config /tmp/st3/conf.soil --socket … --root …
+scripts/test-stream-e2e.sh
+# reply: echo:hello
+# stream e2e ok
+```
+
+That is the real test: a **Spore**, not a handshake. The script builds
+`crates/loam/fixtures/stream-echo` (a command that exports `wasi:cli/run` and
+imports `soil:streams/duplex`), installs it with `requires = ["soil:streams"]`,
+starts `loamd` with a ws listener, dials it, and expects the Spore's echo back
+through the session.
+
+It also covers the two things that were previously unproven:
+
+- `soil:streams` is in `RUNNER_CAPABILITIES`, so a command may declare it.
+- the command `Host` implements `duplex::*` over the daemon's hub, so the
+  session really reaches Spore code.
+
+Worth knowing when writing such a fixture: a loam command must export
+`wasi:cli/run`, and the hub's `accept` is a **poll** — a fixture without a clock
+has to spin, so the test dials immediately after `loamd start`.
+
+## Earlier handshake check
+
+```sh
+loamd serve --config …   # ws listen on a free port
 # GET / with Upgrade + Sec-WebSocket-Protocol: capture
 # → HTTP/1.1 101 Switching Protocols, sec-websocket-protocol: capture
 lsof -nP -iUDP | grep loamd   # iroh bound its UDP sockets
