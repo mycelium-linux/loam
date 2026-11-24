@@ -22,12 +22,14 @@
 //!     (ttl_secs 240))
 //!   (surfaces
 //!     (surface "web" (kind "web") (entry "index.html")))
-//!   (http-client
-//!     (origin "http://127.0.0.1:8791")
-//!     (credential "default")))
+//!   ;; A command is an entrypoint too: the runner calls wasi:cli/run on it.
+//!   (commands
+//!     (command (name "say") (summary "print one line") (module "bin/say.wasm"))))
 //! ```
 
-use super::{Anycast, Error, MAX_LEASE_SECS, Result, Surface, SurfaceKind, default_lease_secs};
+use super::{
+    Anycast, Error, MAX_LEASE_SECS, Result, SporeCommand, Surface, SurfaceKind, default_lease_secs,
+};
 
 /// The subset of a `spore.soil` manifest a daemon needs to route a surface.
 #[derive(Debug, Clone)]
@@ -35,6 +37,13 @@ pub struct SoilManifest {
     pub id: String,
     pub name: String,
     pub version: String,
+    /// Listing facts carried by the source manifest. Optional because the
+    /// reader existed before these fields did; `Manifest::from_soil` fills
+    /// honest defaults when they are absent.
+    pub license: Option<String>,
+    pub summary: Option<String>,
+    pub homepage: Option<String>,
+    pub description: Option<String>,
     pub module: Option<String>,
     pub anycast: Option<Anycast>,
     pub surfaces: Vec<Surface>,
@@ -44,6 +53,8 @@ pub struct SoilManifest {
     pub web: Option<crate::spore::Web>,
     /// Outbound HTTP the Spore asks the host to permit.
     pub http_client: Option<HttpClient>,
+    /// Commands this Spore installs into a shell's virtual PATH.
+    pub commands: Vec<SporeCommand>,
 }
 
 /// The request half of `soil:http`: origins and opaque credential handles.
@@ -75,12 +86,17 @@ impl SoilManifest {
         let mut id = None;
         let mut name = None;
         let mut version = None;
+        let mut license = None;
+        let mut summary = None;
+        let mut homepage = None;
+        let mut description = None;
         let mut module = None;
         let mut anycast = None;
         let mut surfaces = Vec::new();
         let mut grants = std::collections::BTreeMap::new();
         let mut web = None;
         let mut http_client = None;
+        let mut commands = Vec::new();
         for field in spore.iter().skip(1) {
             let Sexp::List(items) = field else {
                 continue;
@@ -92,9 +108,15 @@ impl SoilManifest {
                 "id" => id = string(items.get(1)),
                 "name" => name = string(items.get(1)),
                 "version" => version = string(items.get(1)),
+                "license" => license = string(items.get(1)),
+                "summary" => summary = string(items.get(1)),
+                "homepage" => homepage = string(items.get(1)),
+                "description" => description = string(items.get(1)),
                 "module" => module = string(items.get(1)),
                 "anycast" => anycast = parse_anycast(items)?,
                 "surfaces" => surfaces = parse_surfaces(items)?,
+                // (commands (command (name "say") (summary "…") (module "bin/say.wasm")) ...)
+                "commands" => commands = parse_commands(items)?,
                 // (grants ("soil:vfs" "why it is needed") ...)
                 "grants" => {
                     for grant in items.iter().skip(1) {
@@ -112,10 +134,9 @@ impl SoilManifest {
                         let Sexp::List(pair) = field else { continue };
                         if let (Some(Sexp::Atom(key)), Some(value)) =
                             (pair.first(), string(pair.get(1)))
+                            && key == "vfs-root"
                         {
-                            if key == "vfs-root" {
-                                web = Some(crate::spore::Web { vfs_root: value });
-                            }
+                            web = Some(crate::spore::Web { vfs_root: value });
                         }
                     }
                 }
@@ -130,12 +151,17 @@ impl SoilManifest {
             id,
             name,
             version,
+            license,
+            summary,
+            homepage,
+            description,
             module,
             anycast,
             surfaces,
             grants,
             web,
             http_client,
+            commands,
         })
     }
 }
@@ -267,11 +293,6 @@ fn parse_surfaces(items: &[Sexp]) -> Result<Vec<Surface>> {
                     let value = string(pair.get(1))
                         .ok_or_else(|| Error::Invalid("surface kind needs a value".into()))?;
                     kind = SurfaceKind::parse(&value);
-                    if kind.is_none() {
-                        return Err(Error::Invalid(format!(
-                            "surface {name:?} has unknown kind {value:?}"
-                        )));
-                    }
                 }
                 "entry" => entry = string(pair.get(1)),
                 "assets" => {
@@ -287,11 +308,13 @@ fn parse_surfaces(items: &[Sexp]) -> Result<Vec<Surface>> {
                 _ => {}
             }
         }
-        let kind = kind.or_else(|| SurfaceKind::parse(&name)).ok_or_else(|| {
-            Error::Invalid(format!(
-                "surface {name:?} declares no kind and its name is not one"
-            ))
-        })?;
+        let Some(kind) = kind.or_else(|| SurfaceKind::parse(&name)) else {
+            // This reader answers one question: what does a router serve? A
+            // `cli` or build-only surface is real in the source manifest but
+            // has no presentation route here, so skip it rather than dropping
+            // the whole manifest (and the web surface beside it).
+            continue;
+        };
         surfaces.push(Surface {
             name,
             kind,
@@ -300,6 +323,57 @@ fn parse_surfaces(items: &[Sexp]) -> Result<Vec<Surface>> {
         });
     }
     Ok(surfaces)
+}
+
+/// One `(command …)` per command: the name a shell resolves, one line of help,
+/// and the component the runner calls `wasi:cli/run` on.
+///
+/// There is deliberately no per-command grant list. Consent is the Spore's
+/// `grants` section: a command is a face of the package, not a second policy.
+fn parse_commands(items: &[Sexp]) -> Result<Vec<SporeCommand>> {
+    let mut commands = Vec::new();
+    for item in items.iter().skip(1) {
+        let Sexp::List(command) = item else {
+            continue;
+        };
+        let Some(Sexp::Atom(head)) = command.first() else {
+            continue;
+        };
+        if head != "command" {
+            continue;
+        }
+        let (mut name, mut summary, mut module) = (None, None, None);
+        for field in command.iter().skip(1) {
+            let Sexp::List(pair) = field else {
+                continue;
+            };
+            let Some(Sexp::Atom(key)) = pair.first() else {
+                continue;
+            };
+            match key.as_str() {
+                "name" => name = string(pair.get(1)),
+                "summary" => summary = string(pair.get(1)),
+                "module" => module = string(pair.get(1)),
+                _ => {}
+            }
+        }
+        let name = name.ok_or_else(|| Error::Invalid("command needs a name".into()))?;
+        let summary =
+            summary.ok_or_else(|| Error::Invalid(format!("command {name:?} needs a summary")))?;
+        let module =
+            module.ok_or_else(|| Error::Invalid(format!("command {name:?} needs a module")))?;
+        if !module.ends_with(".wasm") {
+            return Err(Error::Invalid(format!(
+                "command {name:?} module must end in .wasm"
+            )));
+        }
+        commands.push(SporeCommand {
+            name,
+            summary,
+            module,
+        });
+    }
+    Ok(commands)
 }
 
 pub(crate) fn string(value: Option<&Sexp>) -> Option<String> {
@@ -395,6 +469,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reads_commands_from_the_soil_manifest() {
+        let manifest = SoilManifest::parse(
+            r#"
+            (spore
+              (id "org.mycelium.say")
+              (version "0.1.0")
+              (grants
+                ("soil:time" "stamps its line"))
+              (commands
+                (command (name "say") (summary "print one line") (module "bin/say.wasm"))))
+            "#,
+        )
+        .expect("a soil manifest");
+        assert!(manifest.module.is_none(), "a command-only Spore has no module");
+        assert_eq!(manifest.commands.len(), 1, "{:?}", manifest.commands);
+        assert_eq!(manifest.commands[0].name, "say");
+        assert_eq!(manifest.commands[0].summary, "print one line");
+        assert_eq!(manifest.commands[0].module, "bin/say.wasm");
+        assert_eq!(
+            manifest.grants.get("soil:time").map(String::as_str),
+            Some("stamps its line")
+        );
+    }
+
+    #[test]
+    fn a_command_module_must_be_a_wasm_component() {
+        let error = SoilManifest::parse(
+            r#"
+            (spore
+              (id "org.mycelium.say")
+              (version "0.1.0")
+              (commands (command (name "say") (summary "s") (module "say.lua"))))
+            "#,
+        )
+        .expect_err("a .lua command is not a component");
+        assert!(format!("{error}").contains(".wasm"), "{error}");
+    }
+
+    #[test]
     fn reads_identity_anycast_and_web_surface() {
         let manifest = SoilManifest::parse(
             r#"
@@ -424,6 +537,28 @@ mod tests {
         assert_eq!(manifest.surfaces.len(), 1);
         assert_eq!(manifest.surfaces[0].kind, SurfaceKind::Web);
         assert_eq!(manifest.surfaces[0].entry.as_deref(), Some("index.html"));
+    }
+
+    #[test]
+    fn reads_the_web_root_and_grants_from_the_source_manifest() {
+        let manifest = SoilManifest::parse(
+            r#"(spore
+                 (id "fpl.fabrication-studio")
+                 (version "0.1.0")
+                 (surfaces
+                   (surface "web" (kind "web") (entry "web/index.html"))
+                   (surface "cli" (kind "cli") (world "wasi:cli/command@0.2.0")))
+                 (web (vfs-root "studio"))
+                 (grants
+                   ("soil:vfs" "read pipeline documents")
+                   ("soil:vfs-mut" "save pipeline documents")))"#,
+        )
+        .expect("a soil manifest");
+        assert_eq!(manifest.web.expect("web root").vfs_root, "studio");
+        assert_eq!(manifest.surfaces.len(), 1);
+        assert_eq!(manifest.surfaces[0].kind, SurfaceKind::Web);
+        assert!(manifest.grants.contains_key("soil:vfs"));
+        assert!(manifest.grants.contains_key("soil:vfs-mut"));
     }
 
     #[test]

@@ -110,6 +110,7 @@ fn parse_options(args: &[String]) -> Result<Options> {
     let mut publish_leases = config.publish_leases.unwrap_or(true);
     let http_origins = config.http_origins.clone();
     let http_credentials = soil::command::http_credentials(&config.http_credentials)?;
+    let stream = config.stream.clone();
     let mut roots_from_cli = false;
 
     let mut i = 0;
@@ -262,6 +263,7 @@ fn parse_options(args: &[String]) -> Result<Options> {
         log_keep,
         mycelium_home,
         publish_leases,
+        stream,
     })
 }
 

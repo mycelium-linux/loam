@@ -71,6 +71,14 @@ fn run(args: Args) -> Result<()> {
     if args.devtools {
         builder = builder.with_devtools(true);
     }
+    builder = builder.with_navigation_handler(|url| {
+        // A launcher asks its host window to go away after it has handed the
+        // app to a new window. No other scheme is intercepted.
+        if url == "loam://close" || url == "mycelium://close" {
+            std::process::exit(0);
+        }
+        true
+    });
     let webview = builder.build(&window).context("create webview")?;
     let _ = &webview;
     event_loop.run(move |event, _, control_flow| {

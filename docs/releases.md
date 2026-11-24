@@ -33,17 +33,22 @@ Each archive contains:
 
 ```text
 bin/loam
+bin/loamd
+bin/loam-mcp
 bin/loam-ble-host
 share/loam/wit/
+share/man/man1/loam.1
+share/man/man1/loamd.1
 LICENSE-APACHE
 LICENSE-MIT
 README.md
 ```
 
-Plus:
+The release also publishes:
 
 ```text
 SHA256SUMS
+loam-installer.sh
 ```
 
 Signing and notarization are a follow-up. Do not describe an unsigned artifact

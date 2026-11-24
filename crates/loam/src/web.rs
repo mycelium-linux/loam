@@ -16,13 +16,15 @@ use std::{
     io::{BufRead, Read, Write},
     net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
+    sync::{Arc, RwLock},
     time::Duration,
 };
 
 use anyhow::{Context, Result};
-use serde_json::json;
+use serde::Deserialize;
+use serde_json::{Value, json};
 
-use crate::spore::{Anycast, Manifest, Surface, SurfaceKind, Ui, Web, soil::SoilManifest};
+use crate::spore::{Anycast, Surface, SurfaceKind, Ui, Web};
 
 #[cfg(feature = "records")]
 use crate::records_host::{RecordsBookHost, records};
@@ -45,6 +47,8 @@ pub struct StaticSurface {
     pub writable: bool,
     pub records: Option<crate::spore::Records>,
     pub records_writable: bool,
+    /// This surface may read the installed-Spore catalog and launch surfaces.
+    pub spore_catalog: bool,
 }
 
 /// Find static web surfaces in a set of package roots.
@@ -64,73 +68,33 @@ pub fn discover(roots: &[PathBuf]) -> Result<Vec<StaticSurface>> {
             if !package.is_dir() {
                 continue;
             }
-            let soil = package.join("spore.soil");
-            let toml = package.join("spore.toml");
-            // A package that looks like a web surface but produces none is the
-            // hardest failure to see: discovery simply returns nothing and the
-            // name resolves to the frontdoor's default route, which answers 200
-            // with the wrong app. Say why, per package, instead of dropping it.
-            let outcome: Result<Option<StaticSurface>, String> = (|| {
-                if soil.is_file() {
-                    let source = fs::read_to_string(&soil)
-                        .map_err(|error| format!("read spore.soil: {error}"))?;
-                    let manifest = SoilManifest::parse(&source)
-                        .map_err(|error| format!("spore.soil: {error}"))?;
-                    let Some(anycast) = manifest.anycast.clone() else {
-                        return Ok(None);
-                    };
-                    // The soil manifest carries the same two facts the toml
-                    // does, and they were being dropped on the floor here:
-                    // `web` (the bounded VFS root) and the `soil:vfs-mut`
-                    // grant. Passing `false` made every soil-declared web
-                    // surface read-only, which is what broke saving.
-                    let writable = manifest.grants.contains_key("soil:vfs-mut");
-                    return Ok(static_surface(
-                        &package,
-                        manifest.id,
-                        manifest.version,
-                        anycast,
-                        &manifest.surfaces,
-                        None,
-                        manifest.web.clone(),
-                        writable,
-                        None,
-                        false,
-                    ));
-                }
-                if toml.is_file() {
-                    let source = fs::read_to_string(&toml)
-                        .map_err(|error| format!("read spore.toml: {error}"))?;
-                    let manifest =
-                        Manifest::parse(&source).map_err(|error| format!("spore.toml: {error}"))?;
-                    let Some(anycast) = manifest.anycast.clone() else {
-                        return Ok(None);
-                    };
-                    let writable = manifest.grants.contains_key("soil:vfs-mut");
-                    let records_writable = manifest.grants.contains_key("soil:records")
-                        || manifest.grants.contains_key("soil:records.write");
-                    return Ok(static_surface(
-                        &package,
-                        manifest.spore.id,
-                        manifest.spore.version,
-                        anycast,
-                        &manifest.surfaces,
-                        manifest.ui.as_ref(),
-                        manifest.web.clone(),
-                        writable,
-                        manifest.records.clone(),
-                        records_writable,
-                    ));
-                }
-                Ok(None)
-            })();
-            match outcome {
-                Ok(Some(surface)) => found.push(surface),
-                Ok(None) => {}
-                Err(reason) => eprintln!(
-                    "loamd: web surface skipped in {}: {reason}",
-                    package.display()
-                ),
+            // One loader for source and installed packages. A surface is a
+            // routing fact; it does not need a second manifest dialect.
+            let Ok(manifest) = crate::spore::load_source(&package) else {
+                continue;
+            };
+            let Some(anycast) = manifest.anycast.clone() else {
+                continue;
+            };
+            let writable = manifest.grants.contains_key("soil:vfs-mut");
+            let records = manifest.records.clone();
+            let records_writable = manifest.grants.contains_key("soil:records")
+                || manifest.grants.contains_key("soil:records.write");
+            let spore_catalog = has_spore_catalog(&manifest.grants);
+            if let Some(surface) = static_surface(
+                &package,
+                manifest.spore.id,
+                manifest.spore.version,
+                anycast,
+                &manifest.surfaces,
+                manifest.ui.as_ref(),
+                manifest.web,
+                writable,
+                records,
+                records_writable,
+                spore_catalog,
+            ) {
+                found.push(surface);
             }
         }
     }
@@ -150,6 +114,7 @@ fn static_surface(
     writable: bool,
     records: Option<crate::spore::Records>,
     records_writable: bool,
+    spore_catalog: bool,
 ) -> Option<StaticSurface> {
     let surface = surfaces
         .iter()
@@ -171,36 +136,75 @@ fn static_surface(
         writable,
         records,
         records_writable,
+        spore_catalog,
     })
+}
+
+/// Host operations a browser surface may call without importing WIT.
+///
+/// The launcher is HTML/CSS/JS, so it cannot call `soil:spore/catalog` itself.
+/// This is the same catalog and launch policy over JSON: one host
+/// implementation, two transports.
+pub trait SporeApi: Send + Sync {
+    fn entries(&self) -> std::result::Result<Value, String>;
+    fn launch(&self, id: &str, surface: &str, native: bool) -> std::result::Result<Value, String>;
+    fn running(&self) -> std::result::Result<Value, String>;
+    fn stop(&self, id: &str) -> std::result::Result<Value, String>;
 }
 
 /// Serve one or more static surfaces. The first surface is the fallback when
 /// the request Host does not name a package.
-pub fn serve(surfaces: Vec<StaticSurface>, listener: TcpListener) -> Result<()> {
-    let sites = surfaces
-        .into_iter()
+///
+/// The surface list is shared rather than captured so an install can add a
+/// Spore without restarting the listener.
+pub fn serve(
+    surfaces: Arc<RwLock<Vec<StaticSurface>>>,
+    api: Arc<dyn SporeApi>,
+    listener: TcpListener,
+) -> Result<()> {
+    loop {
+        let (mut stream, _) = listener.accept()?;
+        let sites = sites(&surfaces.read().expect("web surface lock poisoned"));
+        let api = Arc::clone(&api);
+        std::thread::spawn(move || {
+            if sites.is_empty() {
+                let _ = respond(
+                    &mut stream,
+                    503,
+                    "text/plain",
+                    b"no web surfaces are installed\n",
+                    None,
+                );
+                return;
+            }
+            let _ = handle(stream, &sites, &api);
+        });
+    }
+}
+
+fn has_spore_catalog(grants: &std::collections::BTreeMap<String, String>) -> bool {
+    grants.contains_key("soil:spore") || grants.contains_key("soil:spore.catalog")
+}
+
+fn sites(surfaces: &[StaticSurface]) -> Vec<(StaticSurface, PathBuf)> {
+    surfaces
+        .iter()
         .map(|surface| {
             let root = surface
                 .entry
                 .parent()
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| surface.package.clone());
-            (surface, root)
+            (surface.clone(), root)
         })
-        .collect::<Vec<_>>();
-    if sites.is_empty() {
-        return Ok(());
-    }
-    loop {
-        let (stream, _) = listener.accept()?;
-        let sites = sites.clone();
-        std::thread::spawn(move || {
-            let _ = handle(stream, &sites);
-        });
-    }
+        .collect()
 }
 
-fn handle(mut stream: TcpStream, sites: &[(StaticSurface, PathBuf)]) -> Result<()> {
+fn handle(
+    mut stream: TcpStream,
+    sites: &[(StaticSurface, PathBuf)],
+    api: &Arc<dyn SporeApi>,
+) -> Result<()> {
     let Some(request) = read_request(&mut stream)? else {
         return Ok(());
     };
@@ -231,6 +235,18 @@ fn handle(mut stream: TcpStream, sites: &[(StaticSurface, PathBuf)]) -> Result<(
     }
     if path == "/api/agent" {
         return agent_api(&request, origin, &mut stream);
+    }
+    if path == "/api/spore" || path.starts_with("/api/spore/") {
+        if !site.spore_catalog {
+            return respond(
+                &mut stream,
+                403,
+                "application/json",
+                br#"{"error":"this surface has no soil:spore.catalog grant"}"#,
+                origin,
+            );
+        }
+        return spore_api(&request, path, api, origin, &mut stream);
     }
     if path == "/api/vfs" || path.starts_with("/api/vfs/") {
         return vfs_api(
@@ -718,6 +734,46 @@ fn records_api(
         br#"{"error":"records feature is not built"}"#,
         origin,
     )
+}
+
+#[derive(Deserialize)]
+struct LaunchRequest {
+    id: String,
+    #[serde(default)]
+    surface: String,
+    #[serde(default)]
+    native: bool,
+}
+
+#[derive(Deserialize)]
+struct StopRequest {
+    id: String,
+}
+
+fn spore_api(
+    request: &Request,
+    path: &str,
+    api: &Arc<dyn SporeApi>,
+    origin: Option<&str>,
+    stream: &mut TcpStream,
+) -> Result<()> {
+    let result = match (request.method.as_str(), path) {
+        ("GET", "/api/spore/entries") => api.entries(),
+        ("GET", "/api/spore/running") => api.running(),
+        ("POST", "/api/spore/launch") => serde_json::from_slice::<LaunchRequest>(&request.body)
+            .map_err(|error| format!("invalid launch request: {error}"))
+            .and_then(|launch| api.launch(&launch.id, &launch.surface, launch.native)),
+        ("POST", "/api/spore/stop") => serde_json::from_slice::<StopRequest>(&request.body)
+            .map_err(|error| format!("invalid stop request: {error}"))
+            .and_then(|stop| api.stop(&stop.id)),
+        _ => return respond(stream, 404, "text/plain", b"unknown spore route", origin),
+    };
+    let (status, value) = match result {
+        Ok(value) => (200, value),
+        Err(error) => (400, json!({ "error": error })),
+    };
+    let body = serde_json::to_vec(&value)?;
+    respond(stream, status, "application/json", &body, origin)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1737,6 +1793,22 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
+    fn debug_phonebook_discovery() {
+        let surfaces = discover(&[PathBuf::from("/Users/ajmwagar/.mycelium/spores")]).unwrap();
+        for surface in &surfaces {
+            eprintln!(
+                "surface name={} id={} kind={} entry={}",
+                surface.name,
+                surface.spore_id,
+                surface.kind,
+                surface.entry.display()
+            );
+        }
+        assert!(surfaces.iter().any(|surface| surface.name == "phonebook"));
+    }
+
+    #[test]
     fn discovers_a_web_surface_from_spore_soil() {
         let temp = tempfile::tempdir().expect("temp");
         package(
@@ -1757,6 +1829,34 @@ mod tests {
         assert_eq!(surface.kind, "web");
         assert_eq!(surface.anycast.alpns, vec!["soil/http/1"]);
         assert_eq!(surface.entry, temp.path().join("site/index.html"));
+    }
+
+    #[test]
+    fn a_soil_manifest_keeps_its_web_root_and_write_grant() {
+        let temp = tempfile::tempdir().expect("temp");
+        package(
+            temp.path(),
+            "spore.soil",
+            r#"(spore
+                 (id "fpl.fabrication-studio")
+                 (version "0.1.0")
+                 (anycast (name "studio") (kind "web") (alpns ("soil/http/1")))
+                 (surfaces (surface "web" (kind "web") (entry "index.html")))
+                 (web (vfs-root "studio"))
+                 (grants
+                   ("soil:vfs" "read pipeline documents")
+                   ("soil:vfs-mut" "save pipeline documents")))"#,
+        );
+        let surfaces = discover(&[temp.path().to_path_buf()]).expect("discover");
+        let surface = &surfaces[0];
+        assert_eq!(
+            surface.web.as_ref().map(|web| web.vfs_root.as_str()),
+            Some("studio")
+        );
+        assert!(
+            surface.writable,
+            "the soil:vfs-mut grant must survive discovery"
+        );
     }
 
     #[test]

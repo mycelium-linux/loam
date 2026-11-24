@@ -9,7 +9,7 @@ Three manifest-declared web surfaces used by `loamd` and the local frontdoor:
 | `contacts` | `contacts.myc` | `soil:records` book `personal/avery/contacts` |
 | `agent` | `agent.myc` | right-edge agent sidebar; embed it in any Spore |
 
-Install a package by copying its directory under `~/.mycelium/spores/` and run:
+Install a package with `loam install <package-dir> --root ~/.mycelium/spores --allow-unsigned-dev`, then run:
 
 ```sh
 loamd serve --socket ~/.mycelium/loamd.sock \

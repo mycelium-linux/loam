@@ -16,7 +16,6 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     command::plugin::{PluginEntry, PluginRegistry},
-    spore::Manifest,
 };
 
 /// One provider selected for an image import.
@@ -68,7 +67,7 @@ impl ImageHostPlan {
     /// granted candidate without a provider is refused. Nothing is linked by
     /// name alone.
     pub fn build(package: &Path, providers: &PluginRegistry) -> Result<Self> {
-        let manifest = Manifest::load(package)?;
+        let manifest = crate::spore::load_source(package)?;
         let mut candidates = std::collections::BTreeSet::new();
         let mut module_imports = false;
         if let Some(module) = &manifest.module {
@@ -206,7 +205,7 @@ mod tests {
         fs::create_dir_all(package.join("signatures")).unwrap();
         fs::write(package.join("module.wasm"), wat::parse_str(wat).unwrap()).unwrap();
         fs::write(package.join("spore.toml"), spore).unwrap();
-        let manifest = Manifest::load(&package).unwrap();
+        let manifest = crate::spore::load_source(&package).unwrap();
         let lock = crate::spore::compute_lock(&package, &manifest).unwrap();
         fs::write(package.join("spore.lock"), lock.render()).unwrap();
         fs::write(package.join("signatures/test.asc"), b"test").unwrap();

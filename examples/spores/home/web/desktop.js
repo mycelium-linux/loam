@@ -5,6 +5,7 @@
   let desktops = [];
   let activeDesktop = localStorage.getItem('mycelium.desktop') || 'personal';
   let activeDesktopName = 'This Mac';
+  const launcherMode = new URLSearchParams(location.search).has('launcher');
 
   for (const el of document.querySelectorAll('[data-window]')) {
     windows.set(el.dataset.window, el);
@@ -67,6 +68,20 @@
   }
 
   document.addEventListener('click', (event) => {
+    const sporeButton = event.target.closest('[data-spore]');
+    if (sporeButton) {
+      event.preventDefault();
+      void openSpore(sporeButton.dataset.spore);
+      closeAccountMenu();
+      closeCommand();
+      return;
+    }
+    const launcherClose = event.target.closest('[data-launcher-close]');
+    if (launcherClose) {
+      event.preventDefault();
+      closeLauncher();
+      return;
+    }
     const openButton = event.target.closest('[data-open]');
     if (openButton) {
       event.preventDefault();
@@ -291,7 +306,10 @@
       event.preventDefault();
       openCommand();
     }
-    if (event.key === 'Escape') closeCommand();
+    if (event.key === 'Escape') {
+      closeCommand();
+      closeLauncher();
+    }
   });
 
   document.getElementById('command-form')?.addEventListener('submit', (event) => {
@@ -300,6 +318,15 @@
     const match = value.match(/notes|people|contacts|files/);
     if (match) {
       open(match[0] === 'people' ? 'contacts' : match[0]);
+      closeCommand();
+      return;
+    }
+    const entry = [...catalog.values()].find((entry) => {
+      const haystack = `${entry.title || ''} ${entry.name || ''} ${entry.id}`.toLowerCase();
+      return haystack.includes(value) && primarySurface(entry);
+    });
+    if (entry) {
+      void openSpore(entry.id);
       closeCommand();
     }
   });
@@ -546,7 +573,7 @@
     try { localStorage.setItem('mycelium.orientation.seen', '1'); } catch {}
   }
   try {
-    if (localStorage.getItem('mycelium.orientation.seen') !== '1') {
+    if (!launcherMode && localStorage.getItem('mycelium.orientation.seen') !== '1') {
       window.setTimeout(openOrientation, 700);
     }
   } catch {}
@@ -647,8 +674,215 @@
     refreshWizardControls();
   });
 
+  // The launcher reads the host catalog instead of hard-coding a dock. The
+  // bridge is the JSON face of `soil:spore/catalog`, so a Spore installed by
+  // loamd appears here on the next load with no package edit.
+  const catalog = new Map();
+  let catalogEntries = [];
+  const launcher = document.getElementById('launcher');
+  const launcherGrid = document.getElementById('launcher-grid');
+  const launcherSearch = document.getElementById('launcher-search');
+  const launcherCount = document.getElementById('launcher-count');
+
+  function openLauncher() {
+    if (!launcher) return;
+    launcher.hidden = false;
+    closeCommand();
+    closeAccountMenu();
+    window.setTimeout(() => launcherSearch?.focus(), 30);
+  }
+
+  function closeLauncher() {
+    if (!launcher) return;
+    launcher.hidden = true;
+  }
+
+  function launcherMatches(entry, query) {
+    if (!query) return true;
+    return `${entry.title || ''} ${entry.name || ''} ${entry.id} ${entry.summary || ''}`
+      .toLowerCase()
+      .includes(query);
+  }
+
+  function launcherCard(entry) {
+    const surface = primarySurface(entry);
+    const card = document.createElement(surface ? 'button' : 'div');
+    card.className = surface ? 'launcher-app' : 'launcher-app is-static';
+    if (surface) {
+      card.type = 'button';
+      card.dataset.spore = entry.id;
+      card.setAttribute('aria-label', `Open ${entry.title || entry.name}`);
+    }
+    const tile = document.createElement('span');
+    tile.className = 'app-tile';
+    tile.style.setProperty('--app-bg', entry.color || '#8b9dff');
+    tile.style.setProperty('--app-bg-2', entry.color || '#8b9dff');
+    tile.style.setProperty('--app-ink', '#10141c');
+    if (typeof entry.mark === 'string' && entry.mark.includes('<svg')) {
+      tile.classList.add('has-mark');
+      tile.innerHTML = entry.mark;
+    } else {
+      tile.textContent = entry.badge || (entry.title || entry.name || '?').slice(0, 1).toUpperCase();
+    }
+    const copy = document.createElement('span');
+    copy.className = 'launcher-app-copy';
+    const name = document.createElement('span');
+    name.className = 'launcher-app-name';
+    name.textContent = entry.title || entry.name;
+    copy.append(name);
+    card.append(tile, copy);
+    return card;
+  }
+
+  function renderLauncher() {
+    if (!launcherGrid) return;
+    const query = (launcherSearch?.value || '').trim().toLowerCase();
+    const entries = catalogEntries.filter((entry) => launcherMatches(entry, query));
+    launcherGrid.replaceChildren(...entries.map(launcherCard));
+    if (!entries.length) {
+      const empty = document.createElement('p');
+      empty.className = 'launcher-empty';
+      empty.textContent = query ? `No Spore matches “${query}”.` : 'No Spores are installed.';
+      launcherGrid.append(empty);
+    }
+    if (launcherCount) {
+      launcherCount.textContent = `${catalogEntries.length} app${catalogEntries.length === 1 ? '' : 's'}`;
+    }
+  }
+
+  function renderCommandCatalog() {
+    const results = document.querySelector('.command-results');
+    if (!results) return;
+    for (const old of results.querySelectorAll('[data-spore]')) old.remove();
+    for (const entry of catalogEntries) {
+      const surface = primarySurface(entry);
+      if (!surface) continue;
+      const button = document.createElement('button');
+      button.className = 'command-result';
+      button.type = 'button';
+      button.dataset.spore = entry.id;
+      const tile = document.createElement('span');
+      tile.className = 'app-tile';
+      tile.style.setProperty('--app-bg', entry.color || '#8b9dff');
+      tile.style.setProperty('--app-bg-2', entry.color || '#8b9dff');
+      tile.style.setProperty('--app-ink', '#10141c');
+      tile.textContent = entry.badge || (entry.title || entry.name || '?').slice(0, 1).toUpperCase();
+      const label = document.createElement('span');
+      label.className = 'command-result-label';
+      label.textContent = `Open ${entry.title || entry.name}`;
+      const key = document.createElement('kbd');
+      key.textContent = '↵';
+      button.append(tile, label, key);
+      results.append(button);
+    }
+  }
+
+  launcherSearch?.addEventListener('input', renderLauncher);
+  document.getElementById('launcher-search-form')?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const first = catalogEntries.find((entry) => primarySurface(entry) && launcherMatches(entry, (launcherSearch?.value || '').trim().toLowerCase()));
+    if (first) {
+      void openSpore(first.id);
+      closeLauncher();
+    }
+  });
+  for (const toggle of document.querySelectorAll('[data-launcher-toggle]')) {
+    toggle.addEventListener('click', openLauncher);
+  }
+
+  function catalogKey(id) {
+    return `spore-${id.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}`;
+  }
+
+  function primarySurface(entry) {
+    return entry.surfaces?.find((surface) => surface.name === entry.default_surface)
+      || entry.surfaces?.find((surface) => surface.kind === 'web')
+      || entry.surfaces?.[0]
+      || null;
+  }
+
+  function catalogWindow(entry) {
+    const key = catalogKey(entry.id);
+    let el = windows.get(key);
+    if (el) return el;
+    el = document.createElement('section');
+    el.className = 'window window--catalog';
+    el.dataset.window = key;
+    el.hidden = true;
+    const offset = windows.size % 5;
+    el.style.left = `calc(12vw + ${offset * 26}px)`;
+    el.style.top = `calc(14vh + ${offset * 24}px)`;
+    el.style.width = 'min(760px, 74vw)';
+    el.style.height = 'min(560px, 68vh)';
+    el.innerHTML = `
+      <header class="window-bar">
+        <div class="traffic">
+          <button class="close" type="button" data-close="${key}" aria-label="Close"><span aria-hidden="true">×</span></button>
+          <button class="minimize" type="button" data-minimize="${key}" aria-label="Minimize"><span aria-hidden="true">−</span></button>
+          <button class="zoom" type="button" data-zoom="${key}" aria-label="Zoom"><span aria-hidden="true">+</span></button>
+        </div>
+        <h2 class="window-title"></h2>
+        <span class="window-bar-spacer" aria-hidden="true"></span>
+      </header>
+      <iframe title="" loading="lazy"></iframe>
+      <span class="window-resize" data-resize="${key}" aria-hidden="true"></span>`;
+    el.querySelector('.window-title').textContent = entry.title || entry.name;
+    el.querySelector('iframe').title = entry.title || entry.name;
+    document.querySelector('main.desktop')?.append(el);
+    windows.set(key, el);
+    return el;
+  }
+
+  async function openSpore(id) {
+    const entry = catalog.get(id);
+    const surface = entry && primarySurface(entry);
+    if (!surface) return;
+    try {
+      const response = await fetch('/api/spore/launch', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id, surface: surface.name, native: true }),
+      });
+      const launched = await response.json();
+      if (!response.ok || launched.error) {
+        console.warn('spore launch failed', launched.error);
+        return;
+      }
+      // The host opens web surfaces as native windows, then the launcher gets
+      // out of the way. Hiding first keeps the transition from flashing the
+      // desktop underneath.
+      closeLauncher();
+      window.location.href = 'loam://close';
+    } catch (error) {
+      console.warn('spore launch failed', error);
+    }
+  }
+
+  async function loadCatalog() {
+    try {
+      const response = await fetch('/api/spore/entries', { headers: { accept: 'application/json' } });
+      if (!response.ok) return;
+      const body = await response.json();
+      // The launcher is for things a person can open. Plugins and packages
+      // are inventory, and belong in the store, not beside the apps.
+      catalogEntries = (Array.isArray(body.entries) ? body.entries : [])
+        .filter((entry) => entry.id !== 'org.mycelium.home')
+        .filter((entry) => Boolean(primarySurface(entry)));
+      for (const entry of catalogEntries) catalog.set(entry.id, entry);
+      renderLauncher();
+      renderCommandCatalog();
+      if (launcherMode) {
+        closeOrientation();
+        openLauncher();
+      }
+    } catch (error) {
+      console.warn('launcher catalog unavailable', error);
+    }
+  }
+
   setAgentContext('desk');
   void loadDesktops();
+  void loadCatalog();
 
   const clock = document.getElementById('clock');
   function tick() {

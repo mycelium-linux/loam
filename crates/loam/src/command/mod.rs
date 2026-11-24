@@ -157,6 +157,7 @@ pub const RUNNER_CAPABILITIES: &[&str] = &[
     "soil:vfs",
     "soil:vfs-mut",
     "soil:index",
+    "soil:streams",
 ];
 
 #[derive(Debug, Clone)]
@@ -232,7 +233,7 @@ impl CommandRegistry {
     fn collect(&mut self, package: &Path) {
         let entries = if package.join("command.toml").is_file() {
             standalone_command(package).map(|entry| vec![entry])
-        } else if package.join("spore.toml").is_file() {
+        } else if package.join("spore.toml").is_file() || package.join("spore.soil").is_file() {
             // A Spore installs commands too. The package owns both faces - a
             // canvas and a terminal program - and the shell should not care
             // which kind of manifest declared them.
@@ -627,7 +628,7 @@ fn installed_runtime(package: &Path) -> (Option<PathBuf>, Option<String>) {
 pub fn package_commands(package: &Path) -> Result<Vec<CommandEntry>> {
     if package.join("command.toml").is_file() {
         standalone_command(package).map(|entry| vec![entry])
-    } else if package.join("spore.soil").is_file() || package.join("spore.toml").is_file() {
+    } else if package.join("spore.toml").is_file() || package.join("spore.soil").is_file() {
         spore_commands(package)
     } else {
         bail!(
@@ -719,13 +720,10 @@ fn standalone_command(package: &Path) -> Result<CommandEntry> {
 /// Limits are the command defaults: a Spore declares what it runs, not how much
 /// memory the host may give it.
 fn spore_commands(package: &Path) -> Result<Vec<CommandEntry>> {
-    // A Spore declared in Soil has no commands yet: `spore.soil` carries them in
-    // its own `(commands ...)` form, which is not read here. It is still a Spore
-    // package, so it must not be refused for lacking a toml.
-    if !(package.join("spore.soil").is_file() || package.join("spore.toml").is_file()) {
+    if !package.join("spore.toml").is_file() && !package.join("spore.soil").is_file() {
         return Ok(Vec::new());
     }
-    let manifest = crate::spore::Manifest::load(package)
+    let manifest = crate::spore::load_source(package)
         .map_err(|error| anyhow::anyhow!("{}: {error}", package.display()))?;
     let limits = Limits::default();
     let mut entries = Vec::new();
@@ -790,6 +788,10 @@ pub struct CommandRunner {
     /// bus) for a command that declares `soil:unibus`, so a missing hub costs
     /// a publish, not the command run.
     bus: Option<Arc<dyn crate::Bus>>,
+    /// One queue shared with the daemon's stream transports. Linked only when
+    /// the command declares `soil:streams`; a command without it cannot accept
+    /// a session even if the host runs listeners.
+    streams: Option<Arc<crate::stream::StreamHub>>,
     components: Mutex<BTreeMap<PathBuf, Arc<wasmtime::component::Component>>>,
 }
 
@@ -806,8 +808,15 @@ impl CommandRunner {
             http_origins: Vec::new(),
             http_credentials: None,
             bus,
+            streams: None,
             components: Mutex::new(BTreeMap::new()),
         })
+    }
+
+    /// Link `soil:streams` to the host's accepted-session queue.
+    pub fn with_streams(mut self, hub: crate::stream::StreamHub) -> Self {
+        self.streams = Some(Arc::new(hub));
+        self
     }
 
     /// Use a scanned plugin registry when resolving a command's imports.
@@ -940,6 +949,12 @@ impl CommandRunner {
             } else {
                 None
             };
+        let streams = if entry.requires.iter().any(|cap| cap.starts_with("soil:streams")) {
+            crate::stream::add_to_linker::<Host>(&mut linker)?;
+            self.streams.clone()
+        } else {
+            None
+        };
 
         let stdout = MemoryOutputPipe::new(limits.max_stdout_bytes);
         let stderr = MemoryOutputPipe::new(limits.max_stderr_bytes);
@@ -971,6 +986,7 @@ impl CommandRunner {
         let mut store = Store::new(
             &self.engine,
             Host {
+                streams,
                 wasi: wasi.build(),
                 table: wasmtime::component::ResourceTable::new(),
                 limits: store_limits,
@@ -1083,6 +1099,10 @@ struct Host {
     bus: Option<crate::unibus::BusHost>,
     /// `soil:http`, when the command declared it. The policy is the grant.
     http: Option<crate::http_host::HttpHost>,
+    /// `soil:streams` queue, when the command declared it and the host runs
+    /// listeners. Sessions arrive from WebSocket or Iroh; the command sees only
+    /// the protocol name.
+    streams: Option<Arc<crate::stream::StreamHub>>,
     /// `loam:plugin/ipc` backend, when a plugin provider named a sidecar.
     ipc: Option<Box<dyn crate::command::plugin_ipc::Backend>>,
 }
@@ -1576,6 +1596,91 @@ fn slug(value: &str) -> bool {
             .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
 }
 
+impl crate::stream::duplex::Host for Host {
+    fn accept(
+        &mut self,
+        protocol: String,
+    ) -> std::result::Result<
+        Option<wasmtime::component::Resource<crate::stream::StreamSession>>,
+        crate::stream::duplex::Error,
+    > {
+        let Some(hub) = &self.streams else {
+            return Err(crate::stream::duplex::Error::Denied);
+        };
+        let Some(session) = hub.accept(&protocol) else {
+            return Ok(None);
+        };
+        self.table
+            .push(session)
+            .map(Some)
+            .map_err(|_| crate::stream::duplex::Error::OverBudget)
+    }
+}
+
+impl crate::stream::duplex::HostSession for Host {
+    fn info(
+        &mut self,
+        session: wasmtime::component::Resource<crate::stream::StreamSession>,
+    ) -> crate::stream::duplex::Info {
+        let info = self
+            .table
+            .get(&session)
+            .map(|session| session.info.clone())
+            .unwrap_or_else(|_| crate::stream::StreamInfo {
+                protocol: String::new(),
+                peer: None,
+                principal: None,
+                media_type: None,
+            });
+        crate::stream::duplex::Info {
+            protocol: info.protocol,
+            peer: info.peer,
+            principal: info.principal,
+            media_type: info.media_type,
+        }
+    }
+
+    fn read(
+        &mut self,
+        session: wasmtime::component::Resource<crate::stream::StreamSession>,
+        max: u32,
+    ) -> std::result::Result<Option<Vec<u8>>, crate::stream::duplex::Error> {
+        self.table
+            .get_mut(&session)
+            .map_err(|_| crate::stream::duplex::Error::Invalid)?
+            .read(max)
+    }
+
+    fn write(
+        &mut self,
+        session: wasmtime::component::Resource<crate::stream::StreamSession>,
+        data: Vec<u8>,
+    ) -> std::result::Result<u64, crate::stream::duplex::Error> {
+        self.table
+            .get_mut(&session)
+            .map_err(|_| crate::stream::duplex::Error::Invalid)?
+            .write(&data)
+    }
+
+    fn close(
+        &mut self,
+        session: wasmtime::component::Resource<crate::stream::StreamSession>,
+    ) -> std::result::Result<(), crate::stream::duplex::Error> {
+        self.table
+            .get_mut(&session)
+            .map_err(|_| crate::stream::duplex::Error::Invalid)?
+            .close()
+    }
+
+    fn drop(
+        &mut self,
+        session: wasmtime::component::Resource<crate::stream::StreamSession>,
+    ) -> std::result::Result<(), wasmtime::Error> {
+        let _ = self.table.delete(session);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1591,6 +1696,31 @@ mod tests {
             ),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn a_spore_soil_package_installs_its_commands() {
+        // The source form of the manifest is what an author writes, so the
+        // registry has to read it: a `.soil` package was invisible before.
+        let package = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(package.path().join("bin")).unwrap();
+        std::fs::write(package.path().join("bin/say.wasm"), b"\0asm").unwrap();
+        std::fs::write(
+            package.path().join("spore.soil"),
+            r#"
+            (spore
+              (id "org.mycelium.say")
+              (version "0.1.0")
+              (grants ("soil:time" "stamps its line"))
+              (commands
+                (command (name "say") (summary "print one line") (module "bin/say.wasm"))))
+            "#,
+        )
+        .unwrap();
+        let entries = package_commands(package.path()).expect("commands from spore.soil");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "say");
+        assert_eq!(entries[0].requires, vec!["soil:time".to_owned()]);
     }
 
     #[test]

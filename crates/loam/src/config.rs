@@ -64,6 +64,9 @@ pub struct Config {
     pub agent_workspace: Option<String>,
     /// The model the sidebar asks the harness to select.
     pub agent_model: Option<String>,
+    /// `soil:streams` listeners. Each transport is optional and independently
+    /// configured; a host that names neither is not a stream host.
+    pub stream: Option<StreamConfig>,
 }
 
 /// One outbound credential the host is willing to resolve for a guest.
@@ -74,6 +77,32 @@ pub struct HttpCredential {
     pub purpose: String,
     /// `Some(header)` injects a header; `None` substitutes a path segment.
     pub header: Option<String>,
+}
+
+/// Stream listeners this host runs.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StreamConfig {
+    pub ws: Option<WsStream>,
+    pub iroh: Option<IrohStream>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WsStream {
+    pub listen: String,
+    /// Subprotocols a Spore session may be named. Empty accepts anything.
+    pub protocols: Vec<String>,
+    /// TLS is the host's; both or neither.
+    pub cert: Option<PathBuf>,
+    pub key: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IrohStream {
+    pub bind: String,
+    pub alpns: Vec<String>,
+    pub key: Option<PathBuf>,
+    /// Endpoint ids allowed to dial. Empty accepts any peer that knows this one.
+    pub allow: Vec<String>,
 }
 
 impl Config {
@@ -167,6 +196,7 @@ impl Config {
                 }
                 "log" => self.parse_log(pair)?,
                 "web" => self.parse_web(pair)?,
+                "stream" => self.parse_stream(pair)?,
                 other => bail!("loam.conf.soil: unknown daemon option {other:?}"),
             }
         }
@@ -254,6 +284,62 @@ impl Config {
                 other => bail!("loam.conf.soil: unknown http option {other:?}"),
             }
         }
+        Ok(())
+    }
+
+    fn parse_stream(&mut self, items: &[Sexp]) -> Result<()> {
+        let mut stream = self.stream.clone().unwrap_or_default();
+        for field in items.iter().skip(1) {
+            let Sexp::List(pair) = field else { continue };
+            let Some(Sexp::Atom(key)) = pair.first() else { continue };
+            match key.as_str() {
+                "ws" => {
+                    let mut ws = WsStream {
+                        listen: "127.0.0.1:8791".into(),
+                        protocols: Vec::new(),
+                        cert: None,
+                        key: None,
+                    };
+                    for option in pair.iter().skip(1) {
+                        let Sexp::List(option) = option else { continue };
+                        let Some(Sexp::Atom(name)) = option.first() else { continue };
+                        match name.as_str() {
+                            "listen" => ws.listen = string(option.get(1)).ok_or_else(|| anyhow::anyhow!("stream ws listen is missing"))?,
+                            "protocol" => ws.protocols.extend(strings(option.get(1))),
+                            "cert" => ws.cert = Some(path(option.get(1), "stream ws cert")?),
+                            "key" => ws.key = Some(path(option.get(1), "stream ws key")?),
+                            other => bail!("loam.conf.soil: unknown stream ws option {other:?}"),
+                        }
+                    }
+                    if ws.cert.is_some() != ws.key.is_some() {
+                        bail!("loam.conf.soil: stream ws needs both cert and key, or neither");
+                    }
+                    stream.ws = Some(ws);
+                }
+                "iroh" => {
+                    let mut iroh = IrohStream {
+                        bind: "0.0.0.0:0".into(),
+                        alpns: vec!["soil/streams/1".into()],
+                        key: None,
+                        allow: Vec::new(),
+                    };
+                    for option in pair.iter().skip(1) {
+                        let Sexp::List(option) = option else { continue };
+                        let Some(Sexp::Atom(name)) = option.first() else { continue };
+                        match name.as_str() {
+                            "bind" => iroh.bind = string(option.get(1)).ok_or_else(|| anyhow::anyhow!("stream iroh bind is missing"))?,
+                            "alpn" => iroh.alpns = strings(option.get(1)),
+                            "key" => iroh.key = Some(path(option.get(1), "stream iroh key")?),
+                            "allow" => iroh.allow = strings(option.get(1)),
+                            other => bail!("loam.conf.soil: unknown stream iroh option {other:?}"),
+                        }
+                    }
+                    stream.iroh = Some(iroh);
+                }
+                other => bail!("loam.conf.soil: unknown stream transport {other:?}"),
+            }
+        }
+        self.stream = Some(stream);
         Ok(())
     }
 
@@ -411,6 +497,39 @@ mod tests {
         assert!(Config::parse("(loam (version 2))").is_err());
         assert!(Config::parse("(loam (version 1) (daemon (wibble #t)))").is_err());
         assert!(Config::parse("(loam (version 1) (mycelium (publish-leases maybe)))").is_err());
+    }
+
+    #[test]
+    fn parses_stream_listeners() {
+        let config = Config::parse(
+            r#"(loam (version 1)
+                 (daemon
+                   (stream
+                     (ws (listen "127.0.0.1:8801") (protocol "capture") (protocol "audio"))
+                     (iroh (alpn "soil/streams/1") (bind "0.0.0.0:0")
+                           (key "~/stream.key") (allow "abc")))))"#,
+        )
+        .unwrap();
+        let stream = config.stream.expect("stream section");
+        let ws = stream.ws.expect("ws");
+        assert_eq!(ws.listen, "127.0.0.1:8801");
+        assert_eq!(ws.protocols, vec!["capture", "audio"]);
+        assert!(ws.cert.is_none() && ws.key.is_none());
+        let iroh = stream.iroh.expect("iroh");
+        assert_eq!(iroh.alpns, vec!["soil/streams/1"]);
+        assert_eq!(iroh.allow, vec!["abc"]);
+        assert!(iroh.key.is_some());
+    }
+
+    #[test]
+    fn a_stream_tls_half_pair_is_refused() {
+        assert!(
+            Config::parse(
+                r#"(loam (version 1) (daemon (stream (ws (listen "127.0.0.1:8801")
+                        (cert "/tmp/cert.pem")))))"#
+            )
+            .is_err()
+        );
     }
 
     #[test]
