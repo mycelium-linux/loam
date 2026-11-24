@@ -470,6 +470,34 @@ fn surface_stamp(surfaces: &[StaticSurface]) -> Vec<(String, String, String, Str
     stamp
 }
 
+fn loam_window_binary() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("LOAM_WINDOW_BIN").filter(|value| !value.is_empty()) {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    if let Ok(current) = std::env::current_exe() {
+        let sibling = current.with_file_name("loam-window");
+        if sibling.is_file() {
+            return Some(sibling);
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        for dir in [home.join(".local/bin"), home.join(".cargo/bin")] {
+            let candidate = dir.join("loam-window");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .map(|dir| dir.join("loam-window"))
+            .find(|candidate| candidate.is_file())
+    })
+}
+
 fn loam_binary() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("LOAM_BIN").filter(|value| !value.is_empty()) {
         let path = PathBuf::from(path);
@@ -481,6 +509,14 @@ fn loam_binary() -> Option<PathBuf> {
         let sibling = current.with_file_name("loam");
         if sibling.is_file() {
             return Some(sibling);
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        for dir in [home.join(".local/bin"), home.join(".cargo/bin")] {
+            let candidate = dir.join("loam");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
         }
     }
     std::env::var_os("PATH").and_then(|path| {
@@ -738,8 +774,8 @@ impl SporeApi for DaemonApi {
         self.daemon()?.spore_entries()
     }
 
-    fn launch(&self, id: &str, surface: &str) -> std::result::Result<Value, String> {
-        self.daemon()?.spore_launch(id, surface)
+    fn launch(&self, id: &str, surface: &str, native: bool) -> std::result::Result<Value, String> {
+        self.daemon()?.spore_launch(id, surface, native)
     }
 
     fn running(&self) -> std::result::Result<Value, String> {
@@ -1548,7 +1584,12 @@ impl Daemon {
         Err(format!("no installed Spore {id:?}"))
     }
 
-    fn spore_launch(&self, id: &str, requested: &str) -> std::result::Result<Value, String> {
+    fn spore_launch(
+        &self,
+        id: &str,
+        requested: &str,
+        native: bool,
+    ) -> std::result::Result<Value, String> {
         let (package, manifest) = self.find_spore(id)?;
         let surface_name = if requested.is_empty() {
             manifest.launch.default.clone()
@@ -1572,11 +1613,57 @@ impl Daemon {
             .entry(manifest.ui.as_ref())
             .ok_or_else(|| format!("{id} surface {surface_name:?} has no entry"))?;
         let target = match surface.kind {
-            SurfaceKind::Web => manifest
-                .anycast
-                .as_ref()
-                .map(|anycast| format!("https://{}.myc/", anycast.name))
-                .unwrap_or_else(|| format!("http://{}/", self.web_address())),
+            SurfaceKind::Web => {
+                let target = manifest
+                    .anycast
+                    .as_ref()
+                    .map(|anycast| format!("https://{}.myc/", anycast.name))
+                    .unwrap_or_else(|| format!("http://{}/", self.web_address()));
+                if native {
+                    let mut launches = self.launches.lock().expect("launch lock poisoned");
+                    let running = launches
+                        .get_mut(id)
+                        .and_then(|launch| launch.child.as_mut())
+                        .is_some_and(|child| matches!(child.try_wait(), Ok(None)));
+                    if !running {
+                        let binary = loam_window_binary()
+                            .ok_or_else(|| "loam-window not found".to_owned())?;
+                        let title = manifest
+                            .spore
+                            .title
+                            .clone()
+                            .unwrap_or_else(|| manifest.spore.name.clone());
+                        let child = Command::new(binary)
+                            .arg("--url")
+                            .arg(&target)
+                            .arg("--title")
+                            .arg(&title)
+                            .arg("--size")
+                            .arg("1280x900")
+                            .stdin(Stdio::null())
+                            .stdout(Stdio::null())
+                            .stderr(Stdio::inherit())
+                            .spawn()
+                            .map_err(|error| format!("launch {target}: {error}"))?;
+                        if let Some(mut previous) = launches.remove(id)
+                            && let Some(mut child) = previous.child.take()
+                        {
+                            let _ = child.kill();
+                            let _ = child.wait();
+                        }
+                        launches.insert(
+                            id.to_owned(),
+                            SporeLaunch {
+                                surface: surface.name.clone(),
+                                target: target.clone(),
+                                child: Some(child),
+                                started_ms: now_millis(),
+                            },
+                        );
+                    }
+                }
+                target
+            }
             SurfaceKind::Canvas => {
                 let module = package.join(entry);
                 let binary = loam_binary().ok_or_else(|| "loam binary not found".to_owned())?;

@@ -96,14 +96,16 @@ the same listener. The responses come from the host-side catalog that backs
 ```text
 GET  /api/spore/entries
 GET  /api/spore/running
-POST /api/spore/launch   {"id":"org.mycelium.notes","surface":"web"}
+POST /api/spore/launch   {"id":"org.mycelium.notes","surface":"web","native":true}
 POST /api/spore/stop     {"id":"org.mycelium.notes"}
 ```
 
 `entries` includes id, title, version, summary, surfaces, role
 (`app`/`plugin`/`package`), provided WIT interfaces and installed commands.
-A web surface launches with a URL target; a canvas surface is started through
-`loam surface` and appears in `running` until it exits or `stop` ends it.
+A web surface launches with a URL target. `"native": true` asks the host to open
+it with `loam-window`, which is what the native launcher uses; a canvas surface
+is started through `loam surface`. Both appear in `running` until they exit or
+`stop` ends them.
 
 The bridge is not ambient: a web surface reaches it only when its manifest
 grants `soil:spore` or `soil:spore.catalog`. The launcher Spore
