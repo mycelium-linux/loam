@@ -276,8 +276,21 @@ fn start_web_surfaces(
 ) -> Result<()> {
     let surfaces = crate::web::discover(roots)?;
     if surfaces.is_empty() {
+        // Silence here cost an hour once already: no surface means every web
+        // name falls through to the frontdoor's default route, which answers
+        // 200 with the wrong app.
+        eprintln!(
+            "loamd: no static web surfaces found in {} root(s): {}",
+            roots.len(),
+            roots.iter().map(|r| r.display().to_string()).collect::<Vec<_>>().join(", ")
+        );
         return Ok(());
     }
+    eprintln!(
+        "loamd: {} static web surface(s) from {} root(s)",
+        surfaces.len(),
+        roots.len()
+    );
     let address = listen.unwrap_or("127.0.0.1:8799");
     let listener = std::net::TcpListener::bind(address)
         .with_context(|| format!("bind static web surface {address}"))?;
