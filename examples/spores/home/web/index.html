@@ -267,20 +267,17 @@
   </section>
 
   <section class="launcher" id="launcher" aria-label="Applications" hidden>
-    <div class="launcher-panel">
+    <div class="launcher-surface">
       <header class="launcher-head">
-        <div>
-          <p class="launcher-kicker">This Mac</p>
-          <h1 class="launcher-title">Applications</h1>
-        </div>
-        <button class="launcher-close" type="button" data-launcher-close aria-label="Close launcher">esc</button>
+        <h1 class="launcher-title">Applications</h1>
+        <form class="launcher-search" id="launcher-search-form">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="10.7" cy="10.7" r="6.2"/><path d="m15.4 15.4 4.1 4.1"/></svg>
+          <input id="launcher-search" type="search" placeholder="Search" autocomplete="off" spellcheck="false">
+        </form>
+        <button class="launcher-close" type="button" data-launcher-close aria-label="Close launcher">×</button>
       </header>
-      <form class="launcher-search" id="launcher-search-form">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="10.7" cy="10.7" r="6.2"/><path d="m15.4 15.4 4.1 4.1"/></svg>
-        <input id="launcher-search" type="search" placeholder="Search installed Spores" autocomplete="off" spellcheck="false">
-      </form>
       <div class="launcher-grid" id="launcher-grid"></div>
-      <footer class="launcher-foot"><span id="launcher-count">Loading catalog…</span><span><kbd>esc</kbd> closes</span></footer>
+      <p class="launcher-count" id="launcher-count">Loading…</p>
     </div>
   </section>
 
@@ -298,7 +295,7 @@
     <footer class="command-footer"><span><kbd>↵</kbd> to open</span><span><kbd>esc</kbd> to close</span></footer>
   </section>
 
-  <script src="/desktop.js?v=6"></script>
+  <script src="/desktop.js?v=9"></script>
   <script src="https://agent.myc/embed.js" defer></script>
 </body>
 </html>

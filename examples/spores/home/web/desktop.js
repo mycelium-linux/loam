@@ -718,19 +718,18 @@
     tile.style.setProperty('--app-bg', entry.color || '#8b9dff');
     tile.style.setProperty('--app-bg-2', entry.color || '#8b9dff');
     tile.style.setProperty('--app-ink', '#10141c');
-    tile.textContent = entry.badge || (entry.title || entry.name || '?').slice(0, 1).toUpperCase();
+    if (typeof entry.mark === 'string' && entry.mark.includes('<svg')) {
+      tile.classList.add('has-mark');
+      tile.innerHTML = entry.mark;
+    } else {
+      tile.textContent = entry.badge || (entry.title || entry.name || '?').slice(0, 1).toUpperCase();
+    }
     const copy = document.createElement('span');
     copy.className = 'launcher-app-copy';
     const name = document.createElement('span');
     name.className = 'launcher-app-name';
     name.textContent = entry.title || entry.name;
-    const summary = document.createElement('span');
-    summary.className = 'launcher-app-summary';
-    summary.textContent = entry.summary || entry.id;
-    const role = document.createElement('span');
-    role.className = 'launcher-app-role';
-    role.textContent = entry.role || 'spore';
-    copy.append(name, summary, role);
+    copy.append(name);
     card.append(tile, copy);
     return card;
   }
@@ -747,7 +746,7 @@
       launcherGrid.append(empty);
     }
     if (launcherCount) {
-      launcherCount.textContent = `${catalogEntries.length} app${catalogEntries.length === 1 ? '' : 's'} · plugins and packages live in the store`;
+      launcherCount.textContent = `${catalogEntries.length} app${catalogEntries.length === 1 ? '' : 's'}`;
     }
   }
 
@@ -849,9 +848,11 @@
         console.warn('spore launch failed', launched.error);
         return;
       }
-      // The host opens web surfaces as native windows. The launcher must not
-      // nest another desktop inside itself.
+      // The host opens web surfaces as native windows, then the launcher gets
+      // out of the way. Hiding first keeps the transition from flashing the
+      // desktop underneath.
       closeLauncher();
+      window.location.href = 'loam://close';
     } catch (error) {
       console.warn('spore launch failed', error);
     }
