@@ -674,6 +674,14 @@ impl VfsHost {
         self.refresh_index().map_err(|_| vfs_mut_api::Error::Io)?;
         Ok(())
     }
+
+    fn refresh_file(&self, path: &str) -> Result<(), vfs_mut_api::Error> {
+        let mut vfs = self.vfs.lock().expect("vfs poisoned");
+        let mut index = self.index.lock().expect("index poisoned");
+        index
+            .upsert_file(&mut vfs, path)
+            .map_err(|_| vfs_mut_api::Error::Io)
+    }
 }
 
 impl vfs_mut_api::Host for VfsHost {
@@ -711,7 +719,7 @@ impl vfs_mut_api::Host for VfsHost {
             }
             .map_err(mutation_error)?
         };
-        self.refresh_after_mutation()?;
+        self.refresh_file(&path)?;
         Ok(write_result(entry))
     }
 
@@ -727,7 +735,7 @@ impl vfs_mut_api::Host for VfsHost {
                 .set_mode(&path, mode)
                 .map_err(mutation_error)?
         };
-        self.refresh_after_mutation()?;
+        self.refresh_file(&path)?;
         Ok(write_result(entry))
     }
 

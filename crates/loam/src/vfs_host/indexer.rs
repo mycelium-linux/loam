@@ -24,6 +24,8 @@ const MAX_FULL_TEXT_ROWS: usize = 4096;
 /// a dedicated ANN store can replace it without changing `soil:index`.
 pub(crate) trait IndexBackend: Send {
     fn refresh(&mut self, vfs: &mut Vfs) -> anyhow::Result<()>;
+    /// Update one file without rebuilding the namespace.
+    fn upsert_file(&mut self, vfs: &mut Vfs, path: &str) -> anyhow::Result<()>;
     fn state(&self) -> index::IndexState;
     fn browse(
         &self,
@@ -286,6 +288,84 @@ impl SqliteIndex {
         hits.sort_by(|a, b| b.1.total_cmp(&a.1));
         hits.truncate(limit);
         Ok(hits)
+    }
+
+    fn upsert_file(&mut self, vfs: &mut Vfs, path: &str) -> anyhow::Result<()> {
+        let Some(entry) = vfs.file(path)? else {
+            anyhow::bail!("{path} is not a file");
+        };
+        let node = build_file_node(vfs, &entry);
+        if path.is_empty() {
+            anyhow::bail!("empty path");
+        }
+        if let Some((parent, _)) = path.rsplit_once('/') {
+            if !self.nodes.contains_key(parent) {
+                // A new parent is a namespace shape change; the next explicit
+                // refresh will rebuild the small set of missing ancestors.
+                return self.refresh(vfs);
+            }
+        }
+        let generation = self.generation.saturating_add(1);
+        let rebuilt_at_ms = now_ms();
+        let transaction = self.db.transaction()?;
+        transaction.execute("DELETE FROM chunks_fts WHERE path=?1", params![path])?;
+        transaction.execute("DELETE FROM chunks WHERE path=?1", params![path])?;
+        transaction.execute("DELETE FROM entries WHERE path=?1", params![path])?;
+        transaction.execute(
+            "INSERT INTO entries(
+               path,content_id,size,media_type,version,hydration,pinned,updated_at_ms,kind,child_count,text
+             ) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            params![
+                node.entry.path,
+                node.entry.content_id.to_string(),
+                node.entry.size as i64,
+                node.entry.media_type,
+                node.entry.version as i64,
+                if node.entry.hydration == Hydration::Placeholder {
+                    "placeholder"
+                } else {
+                    "present"
+                },
+                node.entry.pinned as i64,
+                node.entry.updated_at_ms,
+                "file",
+                0i64,
+                node.text,
+            ],
+        )?;
+        if !node.text.is_empty() {
+            let content_id = node.entry.content_id.to_string();
+            for (ordinal, (start, end)) in chunk_ranges(&node.text).into_iter().enumerate() {
+                let chunk_id = format!("{content_id}:{ordinal}");
+                let text = &node.text[start..end];
+                transaction.execute(
+                    "INSERT OR REPLACE INTO chunks(chunk_id,path,content_id,ordinal,text)
+                     VALUES(?1,?2,?3,?4,?5)",
+                    params![chunk_id, path, content_id, ordinal as i64, text],
+                )?;
+                transaction.execute(
+                    "INSERT INTO chunks_fts(chunk_id,path,text) VALUES(?1,?2,?3)",
+                    params![chunk_id, path, text],
+                )?;
+            }
+        }
+        transaction.commit()?;
+        let existed = self.nodes.insert(path.to_string(), node).is_some();
+        if !existed {
+            if let Some((parent, _)) = path.rsplit_once('/') {
+                if let Some(parent) = self.nodes.get_mut(parent) {
+                    parent.child_count += 1;
+                }
+            }
+        }
+        self.children = build_children(&self.nodes);
+        self.generation = generation;
+        self.rebuilt_at_ms = rebuilt_at_ms;
+        self.ready = true;
+        self.set_meta("generation", &generation.to_string())?;
+        self.set_meta("rebuilt_at_ms", &rebuilt_at_ms.to_string())?;
+        self.set_meta("ready", "1")?;
+        Ok(())
     }
 
     fn rebuild(
@@ -577,6 +657,10 @@ impl SqliteIndex {
 }
 
 impl IndexBackend for SqliteIndex {
+    fn upsert_file(&mut self, vfs: &mut Vfs, path: &str) -> anyhow::Result<()> {
+        SqliteIndex::upsert_file(self, vfs, path)
+    }
+
     fn refresh(&mut self, vfs: &mut Vfs) -> anyhow::Result<()> {
         let entries = vfs.list("")?;
         let directories = vfs.directories("")?;
@@ -730,6 +814,26 @@ impl IndexBackend for SqliteIndex {
     }
 }
 
+fn build_file_node(vfs: &mut Vfs, entry: &FileEntry) -> Node {
+    let text = if is_indexable_text(entry)
+        && entry.hydration == Hydration::Present
+        && entry.size <= MAX_INDEX_TEXT as u64
+    {
+        vfs.get(&entry.path)
+            .ok()
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    Node {
+        entry: entry.clone(),
+        kind: NodeKind::File,
+        child_count: 0,
+        text,
+    }
+}
+
 fn build_nodes(
     vfs: &mut Vfs,
     entries: &[FileEntry],
@@ -759,26 +863,7 @@ fn build_nodes(
     for entry in entries {
         let path = entry.path.clone();
         add_ancestors(&mut nodes, &path);
-        let text = if is_indexable_text(entry)
-            && entry.hydration == Hydration::Present
-            && entry.size <= MAX_INDEX_TEXT as u64
-        {
-            vfs.get(&path)
-                .ok()
-                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-                .unwrap_or_default()
-        } else {
-            String::new()
-        };
-        nodes.insert(
-            path.clone(),
-            Node {
-                entry: entry.clone(),
-                kind: NodeKind::File,
-                child_count: 0,
-                text,
-            },
-        );
+        nodes.insert(path.clone(), build_file_node(vfs, entry));
     }
 
     for path in directories {
