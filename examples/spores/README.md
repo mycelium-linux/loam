@@ -99,6 +99,15 @@ line:
 Hovering the right edge opens a panel in an iframe. Apps may publish context by
 setting `window.__MYCELIUM_AGENT_CONTEXT = { app, detail }` and dispatching a
 `mycelium-agent-context` event. The panel pins open, closes with Escape, and
-toggles with `Cmd/Ctrl+.`. It is UI only: the harness is deliberately not
-connected, so a submitted prompt is recorded in the thread without claiming an
-edit happened.
+toggles with `Cmd/Ctrl+.`. Prompts go to the host at `POST /api/agent`, which
+speaks ACP to the endpoint and model named in `loam.conf.soil`:
+
+```soil
+(agent
+  (endpoint "http://127.0.0.1:8792/")
+  (workspace "/path/to/trusted/checkout")
+  (model "gpt-5.6-luna"))
+```
+
+`operator serve` speaks this ACP-over-HTTP surface. The sidebar keeps the
+session id in local storage, so a second prompt continues the same session.
