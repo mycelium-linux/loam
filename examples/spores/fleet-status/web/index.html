@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0b0815">
+<title>Fleet · Mycelium</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1024 1024'%3E%3Crect width='1024' height='1024' rx='224' fill='%23171029'/%3E%3Cpath d='M300 716 L358 358 Q366 322 398 350 L512 560 L626 350 Q658 322 666 358 L724 716' fill='none' stroke='%23c9b3ff' stroke-width='60' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="masthead">
+  <a class="brand" href="#overview" data-goto="overview" aria-label="Mycelium fleet status">
+    <svg viewBox="0 0 1024 1024" aria-hidden="true"><rect width="1024" height="1024" rx="224"/><path d="M300 716 L358 358 Q366 322 398 350 L512 560 L626 350 Q658 322 666 358 L724 716"/></svg>
+    <span><b>Mycelium</b><small id="identity">reading fleet…</small></span>
+  </a>
+  <div class="spacer"></div>
+  <span class="pill"><i class="dot" id="live-dot"></i><span id="live-label">connecting</span></span>
+  <button class="btn small" id="refresh" type="button">Refresh</button>
+</header>
+
+<div class="shell">
+  <nav aria-label="Status sections">
+    <p class="navlabel">Machine</p>
+    <button class="navitem active" data-goto="overview"><span>Overview</span><span class="count" id="fleet-count">—</span></button>
+    <button class="navitem" data-goto="fleet"><span>Fleet</span><span class="count" id="fleet-nav-count">—</span></button>
+    <p class="navlabel">Runtime</p>
+    <button class="navitem" data-goto="loam"><span>Loam</span><span class="count" id="loam-count">—</span></button>
+    <button class="navitem" data-goto="door"><span>Frontdoor</span></button>
+    <p class="navlabel">Links</p>
+    <a class="navlink" href="https://home.myc/">home.myc</a>
+    <a class="navlink" href="https://fleet.myc/">fleet.myc</a>
+    <p class="foot">Read-only. The host runs the Mycelium CLI; this page never sees a socket or a key.</p>
+  </nav>
+
+  <main>
+    <div class="banner" id="banner" hidden></div>
+
+    <section id="view-overview" class="view active">
+      <div class="head">
+        <div><h1>What is on.</h1><p class="lede">This machine, the peers it can see, and the services Loam and Mycelium are keeping alive.</p></div>
+        <span class="stamp" id="generated">—</span>
+      </div>
+      <div class="tiles" id="overview-cards"></div>
+      <div class="split">
+        <article class="panel">
+          <div class="panel-head"><h2>Peers</h2><a href="#fleet" data-goto="fleet">All peers →</a></div>
+          <div id="peer-preview" class="rows"></div>
+        </article>
+        <article class="panel">
+          <div class="panel-head"><h2>Running in Loam</h2><a href="#loam" data-goto="loam">Catalog →</a></div>
+          <div id="running-list" class="rows"></div>
+        </article>
+      </div>
+    </section>
+
+    <section id="view-fleet" class="view">
+      <div class="head">
+        <div><h1>Fleet.</h1><p class="lede">Peers publishing a heartbeat. A stale row is shown, not hidden; silence is a fact.</p></div>
+      </div>
+      <div class="toolbar">
+        <input id="fleet-search" type="search" placeholder="Filter host, site or node id…" autocomplete="off" aria-label="Filter fleet">
+        <select id="fleet-sort" aria-label="Sort fleet">
+          <option value="name">Sort by name</option>
+          <option value="site">Sort by site</option>
+          <option value="load">Sort by load</option>
+          <option value="seen">Sort by last seen</option>
+        </select>
+        <span class="hint" id="fleet-meta"></span>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th scope="col">Host</th><th scope="col">Site</th><th scope="col">Platform</th><th scope="col">Version</th><th scope="col">Load</th><th scope="col">Last seen</th></tr></thead>
+          <tbody id="fleet-body"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="view-loam" class="view">
+      <div class="head">
+        <div><h1>Loam.</h1><p class="lede">The installed catalog, what each Spore presents, and what is running now.</p></div>
+      </div>
+      <div class="toolbar">
+        <input id="loam-search" type="search" placeholder="Filter Spore, id or surface…" autocomplete="off" aria-label="Filter Spore catalog">
+        <span class="hint" id="loam-meta"></span>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th scope="col">Spore</th><th scope="col">Role</th><th scope="col">Surfaces</th><th scope="col">Version</th><th scope="col">State</th></tr></thead>
+          <tbody id="loam-body"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="view-door" class="view">
+      <div class="head">
+        <div><h1>Frontdoor.</h1><p class="lede">The local HTTPS edge: certificate trust, listeners, routes and the health it reports.</p></div>
+      </div>
+      <div class="split">
+        <article class="panel" id="door-summary"></article>
+        <article class="panel" id="tunnel-summary"></article>
+      </div>
+      <article class="panel" id="door-health"></article>
+    </section>
+  </main>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
