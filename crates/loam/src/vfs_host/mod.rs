@@ -349,7 +349,12 @@ impl VfsHost {
         self.index.lock().expect("index poisoned")
     }
 
-    fn read_path(&self, path: &str, offset: u64, length: u32) -> Result<(Vec<u8>, u64), vfs::Error> {
+    fn read_path(
+        &self,
+        path: &str,
+        offset: u64,
+        length: u32,
+    ) -> Result<(Vec<u8>, u64), vfs::Error> {
         if length == 0 || length > MAX_RANGE {
             return Err(vfs::Error::OverBudget);
         }
