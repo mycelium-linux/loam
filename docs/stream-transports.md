@@ -1,6 +1,6 @@
 # `soil:streams` transports
 
-Status: **WebSocket and Iroh transports landed; daemon wiring next**, 2026-11-23.
+Status: **landed and wired**, 2026-11-23.
 
 The interface and host implementation were already here — `wit/stream/stream.wit`,
 `src/stream.rs`, linked from `service.rs` and `command_service.rs`. What was
@@ -47,26 +47,46 @@ Both assert the same three things: the session is queued under the protocol the
 caller named, bytes round-trip in both directions through `StreamSession`, and
 the peer is recorded.
 
-## Still to wire
+## Wiring
 
-The transports are listeners, not services. To make them reachable:
+Three pieces, all in this change:
 
 1. **Config** — a `stream` section in `loam.conf.soil`:
    ```soil
    (daemon
      (stream
-       (ws (listen "127.0.0.1:8791") (protocol "capture"))
-       (iroh (alpn "soil/streams/1") (key "~/.mycelium/stream.key"))))
+       (ws (listen "127.0.0.1:8791") (protocol "capture")
+           (cert "/path/fullchain.pem") (key "/path/privkey.pem"))
+       (iroh (alpn "soil/streams/1") (bind "0.0.0.0:0")
+             (key "~/.mycelium/stream.key") (allow "<endpoint-id>"))))
    ```
-2. **Hub injection** — `WasiHostBuilder::stream_hub(hub)` exists but has no
-   caller. The instance build site must pass one shared `StreamHub` so every
-   Spore `accept`s from the same queue.
-3. **Daemon startup** — spawn one tokio runtime thread per configured transport,
-   sharing that hub. `loamd` is std-thread based today, so this is a small
-   `tokio::runtime::Runtime::new()?.block_on(...)` in its own thread.
+   `cert` and `key` go together; a half pair is a config error. Every other
+   option has a default (`ws` port 8791, `iroh` bind `0.0.0.0:0`, ALPN
+   `soil/streams/1`, empty allow list).
 
-Until 2 lands, both transports are correct but inert — the same state the
-interface was in before, with a producer instead of none.
+2. **One hub, shared** — `loamd` creates a single `StreamHub` and passes it to
+   every `CommandRunner` (`with_streams`). A Spore `accept`s by protocol, so it
+   does not know or care which transport carried the session. The interface is
+   linked only when the command's `requires` names `soil:streams*`: a command
+   without it cannot accept even when the host runs listeners.
+
+3. **One runtime thread** — `loamd` is std-thread based, so the listeners run on
+   a dedicated `loamd-streams` thread with its own tokio runtime. Transports
+   fail independently: a bad listen address for one logs and skips, leaving the
+   other running.
+
+A build without the transport features still starts; a configured listener it
+cannot serve is logged, not fatal.
+
+## Verified end to end
+
+```sh
+# config above, ws listen on a free port
+loamd serve --config /tmp/st3/conf.soil --socket … --root …
+# GET / with Upgrade + Sec-WebSocket-Protocol: capture
+# → HTTP/1.1 101 Switching Protocols, sec-websocket-protocol: capture
+lsof -nP -iUDP | grep loamd   # iroh bound its UDP sockets
+```
 
 ## WIT follow-ups (before more transports)
 

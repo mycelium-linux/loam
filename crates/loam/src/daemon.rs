@@ -139,6 +139,10 @@ pub struct Options {
     pub mycelium_home: Option<PathBuf>,
     /// Whether manifest web surfaces publish a Mycelium service lease.
     pub publish_leases: bool,
+    /// `soil:streams` listeners. Built without a transport feature they are
+    /// reported and skipped, not fatal: a host may be configured for a stream
+    /// it was not compiled to serve.
+    pub stream: Option<crate::config::StreamConfig>,
 }
 
 impl Options {
@@ -157,6 +161,7 @@ impl Options {
             log_keep: crate::log::DEFAULT_KEEP,
             mycelium_home: None,
             publish_leases: true,
+            stream: None,
         }
     }
 }
@@ -207,6 +212,8 @@ pub fn serve(options: Options) -> Result<()> {
         "loamd",
         format!("{} loamd started roots={:?}\n", now_millis(), options.roots).as_bytes(),
     );
+    let streams = crate::stream::StreamHub::new();
+    start_stream_transports(options.stream.clone(), streams.clone())?;
     let registry = Arc::new(CommandRegistry::scan_roots(&options.roots)?);
     let plugins = PluginRegistry::scan_roots(&options.roots)?;
     let daemon = Arc::new(Daemon {
@@ -216,6 +223,7 @@ pub fn serve(options: Options) -> Result<()> {
         records: options.records,
         bus: options.bus,
         max_instances: options.max_instances,
+        streams,
         image_runtime: options.image_runtime,
         window_runtime: options.window_runtime,
         web: RwLock::new(None),
@@ -264,6 +272,112 @@ pub fn serve(options: Options) -> Result<()> {
     );
     let _ = fs::remove_file(&options.socket);
     Ok(())
+}
+
+/// Run the configured `soil:streams` listeners on their own runtime thread.
+///
+/// The daemon is std-thread based; the transports are async. One thread runs a
+/// tokio runtime that owns every listener, sharing the single StreamHub with the
+/// instance runner. A configured transport that this build lacks is logged and
+/// skipped rather than failing the daemon.
+fn start_stream_transports(
+    config: Option<crate::config::StreamConfig>,
+    hub: crate::stream::StreamHub,
+) -> Result<()> {
+    let Some(config) = config else { return Ok(()) };
+    #[cfg(not(any(feature = "stream-ws", feature = "stream-iroh")))]
+    {
+        let _ = &hub;
+        eprintln!(
+            "loamd: stream listeners configured but this build has no transport feature \
+             (stream-ws, stream-iroh); nothing accepted"
+        );
+        return Ok(());
+    }
+    #[cfg(any(feature = "stream-ws", feature = "stream-iroh"))]
+    {
+        std::thread::Builder::new()
+            .name("loamd-streams".into())
+            .spawn(move || {
+                let runtime = match tokio::runtime::Runtime::new() {
+                    Ok(runtime) => runtime,
+                    Err(error) => {
+                        eprintln!("loamd: stream runtime: {error}");
+                        return;
+                    }
+                };
+                runtime.block_on(async move {
+                    // Each transport is independent: a bad address for one must
+                    // not disable the other, so every failure is logged and
+                    // skipped rather than returning from the block.
+                    #[cfg(feature = "stream-ws")]
+                    if let Some(ws) = config.ws.clone() {
+                        match ws.listen.parse::<std::net::SocketAddr>() {
+                            Ok(listen) => {
+                                let options = crate::stream_ws::WsOptions {
+                                    listen,
+                                    tls: match (ws.cert.clone(), ws.key.clone()) {
+                                        (Some(cert), Some(key)) => {
+                                            Some(crate::stream_ws::Tls { cert, key })
+                                        }
+                                        _ => None,
+                                    },
+                                    protocols: ws.protocols.clone(),
+                                };
+                                let hub = hub.clone();
+                                tokio::spawn(async move {
+                                    if let Err(error) = crate::stream_ws::serve(hub, options).await {
+                                        eprintln!("loamd: stream ws: {error:#}");
+                                    }
+                                });
+                            }
+                            Err(error) => {
+                                eprintln!("loamd: stream ws listen {:?}: {error}", ws.listen)
+                            }
+                        }
+                    }
+                    #[cfg(not(feature = "stream-ws"))]
+                    if config.ws.is_some() {
+                        eprintln!("loamd: stream ws configured but built without stream-ws");
+                    }
+                    #[cfg(feature = "stream-iroh")]
+                    if let Some(iroh) = config.iroh.clone() {
+                        let allow = iroh
+                            .allow
+                            .iter()
+                            .map(|id| id.parse::<iroh::EndpointId>())
+                            .collect::<std::result::Result<Vec<_>, _>>();
+                        match (iroh.bind.parse::<std::net::SocketAddr>(), allow) {
+                            (Ok(bind), Ok(allow)) => {
+                                let options = crate::stream_iroh::IrohOptions {
+                                    bind,
+                                    alpns: iroh.alpns.clone(),
+                                    key: iroh.key.clone(),
+                                    allow,
+                                };
+                                let hub = hub.clone();
+                                tokio::spawn(async move {
+                                    if let Err(error) = crate::stream_iroh::serve(hub, options).await {
+                                        eprintln!("loamd: stream iroh: {error:#}");
+                                    }
+                                });
+                            }
+                            (Err(error), _) => {
+                                eprintln!("loamd: stream iroh bind {:?}: {error}", iroh.bind)
+                            }
+                            (_, Err(error)) => eprintln!("loamd: stream iroh allow: {error}"),
+                        }
+                    }
+                    #[cfg(not(feature = "stream-iroh"))]
+                    if config.iroh.is_some() {
+                        eprintln!("loamd: stream iroh configured but built without stream-iroh");
+                    }
+                    std::future::pending::<()>().await;
+                });
+            })
+            .context("spawn stream runtime thread")?;
+        Ok(())
+    }
 }
 
 /// Static web surfaces have two lives: the listener that answers requests and
@@ -744,6 +858,9 @@ struct Daemon {
     web: RwLock<Option<Arc<WebHost>>>,
     launches: Mutex<BTreeMap<String, SporeLaunch>>,
     logs: LogStore,
+    /// One queue for every Spore session this host accepts, from every
+    /// transport. A Spore `accept`s by protocol, not by transport.
+    streams: crate::stream::StreamHub,
     instances: Mutex<BTreeMap<String, InstanceRecord>>,
     images: Mutex<BTreeMap<String, ImageRecord>>,
     windows: Mutex<BTreeMap<String, WindowRecord>>,
@@ -1151,7 +1268,7 @@ impl Daemon {
 
         let plugins = self.plugins.read().expect("plugin lock poisoned").clone();
         let runner = match CommandRunner::new(self.records.clone(), self.bus.clone()) {
-            Ok(runner) => runner.with_plugins(plugins),
+            Ok(runner) => runner.with_plugins(plugins).with_streams(self.streams.clone()),
             Err(failure) => return error(format!("{failure:#}")),
         };
         let cancel = runner.engine().clone();
