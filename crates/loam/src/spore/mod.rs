@@ -1023,6 +1023,7 @@ impl Manifest {
             anycast: soil.anycast,
             grants: soil.grants,
             web: soil.web,
+            plugin: soil.plugin,
             ..Self::default()
         })
     }
@@ -1570,7 +1571,7 @@ impl Manifest {
         for capability in self.grants.keys() {
             if !grants(capability) {
                 return Err(Error::Invalid(format!(
-                    "grant {capability:?} is not a soil:/wasi:/fungos:/mycelium:/loam: capability"
+                    "grant {capability:?} is not a <namespace>:<interface> capability"
                 )));
             }
         }
@@ -1846,6 +1847,21 @@ impl Manifest {
         paths.push(PathBuf::from(
             self.manifest_file.as_deref().unwrap_or("spore.soil"),
         ));
+        // A sidecar is a file the package ships, so the lock has to cover it.
+        // It was not: the package installed, the manifest named a sidecar, and
+        // the generation did not contain it, so every call answered
+        // `unavailable` with nothing anywhere saying why.
+        if let Some(plugin) = &self.plugin
+            && let Some(sidecar) = &plugin.sidecar
+        {
+            let relative = Path::new(sidecar);
+            if !sidecar.trim().is_empty()
+                && relative.components().count() > 1
+                && relative.is_relative()
+            {
+                paths.push(relative.to_path_buf());
+            }
+        }
         paths.sort();
         paths.dedup();
         paths
@@ -2006,11 +2022,26 @@ fn lease_label(value: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"-_.:/".contains(&b))
 }
 
+/// A grant names a package and the rest of the interface within it.
+///
+/// The namespace is checked for *shape*, not against a list. A list cannot
+/// work: a Spore that imports a provider necessarily names that provider's
+/// namespace, and any new provider would be uninstallable until loam learned
+/// its name. That is the same mistake as hardcoding one vendor, just spelled
+/// as an allow-list. A grant with no matching import is inert anyway -- the
+/// import check is what makes it meaningful.
 fn grants(value: &str) -> bool {
     let Some((package, interface)) = value.split_once(':') else {
         return false;
     };
-    matches!(package, "soil" | "wasi" | "fungos" | "mycelium" | "loam" | "ajmwagar")
+    let mut chars = package.chars();
+    let package_ok = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && chars.all(|c| {
+            c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '_' | '.')
+        });
+    package_ok
         && !interface.is_empty()
         && interface.chars().all(|c| {
             c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '.' | '_' | '/')

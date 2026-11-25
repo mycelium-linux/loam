@@ -149,6 +149,11 @@ pub mod plugin_ipc;
 /// What the runner can link for a command. A package that requires anything
 /// else is refused by the registry instead of failing at instantiation.
 pub const RUNNER_CAPABILITIES: &[&str] = &[
+    // Host-provided IPC for sidecar-backed adapters. The runner builds the
+    // backend itself (see the `sidecar` branch in `run`), so a package that
+    // imports it needs no provider at install time -- and demanding one made
+    // every sidecar-backed command uninstallable.
+    "loam:plugin",
     "soil:records",
     "soil:time",
     "soil:unibus",
@@ -958,6 +963,19 @@ impl CommandRunner {
         let store_limits = StoreLimitsBuilder::new()
             .memory_size(limits.max_memory_bytes)
             .build();
+        if std::env::var_os("LOAM_DEBUG_IPC").is_some() {
+            let imports: Vec<String> = component
+                .component_type()
+                .imports(&self.engine)
+                .map(|(n, _)| n.to_string())
+                .collect();
+            eprintln!("loam: ipc debug: plugins={} imports={imports:?}",
+                if self.plugins.is_some() { "registry" } else { "none" });
+            if let Some(plugins) = &self.plugins {
+                let hit = plugins.native_for(&self.engine, &component);
+                eprintln!("loam: ipc debug: native_for={hit:?}");
+            }
+        }
         let ipc = self
             .plugins
             .as_ref()

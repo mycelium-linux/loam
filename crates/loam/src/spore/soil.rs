@@ -44,6 +44,13 @@ pub struct SoilManifest {
     pub web: Option<crate::spore::Web>,
     /// Outbound HTTP the Spore asks the host to permit.
     pub http_client: Option<HttpClient>,
+    /// A native sidecar behind this package's wasm adapter.
+    ///
+    /// Absent from this dialect until now, which meant a package declared in
+    /// Soil lost its sidecar entirely: the lock did not cover it, the provider
+    /// registered without `native`, and every call answered `unavailable` with
+    /// nothing anywhere saying why.
+    pub plugin: Option<crate::spore::Plugin>,
 }
 
 /// The request half of `soil:http`: origins and opaque credential handles.
@@ -81,6 +88,7 @@ impl SoilManifest {
         let mut grants = std::collections::BTreeMap::new();
         let mut web = None;
         let mut http_client = None;
+        let mut plugin = None;
         for field in spore.iter().skip(1) {
             let Sexp::List(items) = field else {
                 continue;
@@ -105,6 +113,16 @@ impl SoilManifest {
                 }
                 "anycast" => anycast = parse_anycast(items)?,
                 "surfaces" => surfaces = parse_surfaces(items)?,
+                // (plugin (sidecar "sidecar/name"))
+                "plugin" => {
+                    if let Some(Sexp::List(inner)) = items.get(1) {
+                        if string(inner.first()).as_deref() == Some("sidecar") {
+                            plugin = Some(crate::spore::Plugin {
+                                sidecar: string(inner.get(1)),
+                            });
+                        }
+                    }
+                }
                 // (grants ("soil:vfs" "why it is needed") ...)
                 "grants" => {
                     for grant in items.iter().skip(1) {
@@ -146,6 +164,7 @@ impl SoilManifest {
             grants,
             web,
             http_client,
+            plugin,
         })
     }
 }
