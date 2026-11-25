@@ -144,6 +144,7 @@ pub struct Refusal {
 
 pub mod cli;
 pub mod plugin;
+pub mod provider_host;
 pub mod plugin_ipc;
 
 /// What the runner can link for a command. A package that requires anything
@@ -678,6 +679,23 @@ fn verify_runtime(package: &Path) -> Result<(), String> {
         .unwrap_or_default();
     if lock != recorded_lock {
         return Err("spore.lock changed since composition".into());
+    }
+    // Providers are part of the identity: a composed runtime implements their
+    // exports inline, so a provider rebuilt underneath it is a different
+    // program. Checking only the source would have missed exactly this.
+    if let Some(providers) = identity.get("providers").and_then(|value| value.as_array()) {
+        for provider in providers {
+            let Some(path) = provider.get("module_path").and_then(|value| value.as_str()) else {
+                continue; // host-provided import: nothing composed in
+            };
+            let recorded = provider.get("module").and_then(|value| value.as_str()).unwrap_or_default();
+            let actual = digest(std::path::Path::new(path))
+                .map_err(|_| format!("provider module missing: {path}"))?;
+            if actual != recorded {
+                let id = provider.get("id").and_then(|value| value.as_str()).unwrap_or("provider");
+                return Err(format!("provider {id} module changed since composition"));
+            }
+        }
     }
     Ok(())
 }
