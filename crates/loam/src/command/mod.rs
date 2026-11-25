@@ -1105,6 +1105,18 @@ impl CommandRunner {
         let result = match command.wasi_cli_run().call_run(&mut store) {
             Ok(result) => result,
             Err(error) => {
+                // `wasi:cli/exit` arrives as a trap-like error, but it is not a trap: it is the
+                // guest's requested exit status. Treating it as a trap prints a wasm backtrace for
+                // an ordinary `mb: issue not found` and hides the exit code from the caller. Pass
+                // the code through with whatever the guest wrote; only a real trap carries a
+                // backtrace and a panic.
+                if let Some(code) = guest_exit_code(&error) {
+                    return Ok(RunOutput {
+                        code,
+                        stdout: stdout.contents().to_vec(),
+                        stderr: stderr.contents().to_vec(),
+                    });
+                }
                 let said = String::from_utf8_lossy(&stderr.contents())
                     .trim()
                     .to_string();
@@ -1120,6 +1132,20 @@ impl CommandRunner {
             stderr: stderr.contents().to_vec(),
         })
     }
+}
+
+/// The exit status a guest asked for through `wasi:cli/exit`, if this error is that exit rather
+/// than a trap. wasmtime-wasi may wrap it in a bindgen `TrappableError`, so check the chain too.
+fn guest_exit_code(error: &wasmtime::Error) -> Option<i32> {
+    if let Some(exit) = error.downcast_ref::<wasmtime_wasi::I32Exit>() {
+        return Some(exit.0);
+    }
+    for cause in error.chain().skip(1) {
+        if let Some(exit) = cause.downcast_ref::<wasmtime_wasi::I32Exit>() {
+            return Some(exit.0);
+        }
+    }
+    None
 }
 
 /// Build the host-owned credential resolver described by `loam.conf.soil`.
@@ -1932,6 +1958,12 @@ mod tests {
 #[cfg(test)]
 mod spore_command_tests {
     use super::*;
+
+    #[test]
+    fn a_guest_exit_is_a_status_not_a_trap() {
+        let error: wasmtime::Error = wasmtime_wasi::I32Exit(7).into();
+        assert_eq!(guest_exit_code(&error), Some(7));
+    }
 
     fn scratch() -> PathBuf {
         // Parallel tests share a process, and a clock alone is not enough to keep
