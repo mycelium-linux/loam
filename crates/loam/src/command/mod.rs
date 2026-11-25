@@ -612,6 +612,18 @@ fn package_name(package: &Path) -> String {
     )
 }
 
+/// The composed runtime, but only if it still describes this package.
+///
+/// An unverifiable or mismatched runtime is refused and the plain module is
+/// used instead: a stale composition must never be selected just because it is
+/// on disk, and silently preferring one is how a 353 KB composed artefact
+/// shadowed a 166 KB module that imported a provider.
+pub(crate) fn installed_runtime_for_test(
+    package: &Path,
+) -> (Option<PathBuf>, Option<String>) {
+    installed_runtime(package)
+}
+
 fn installed_runtime(package: &Path) -> (Option<PathBuf>, Option<String>) {
     let runtime = package.join("runtime.wasm");
     if !runtime.is_file() {
@@ -621,7 +633,53 @@ fn installed_runtime(package: &Path) -> (Option<PathBuf>, Option<String>) {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
-    (Some(runtime), key)
+
+    match verify_runtime(package) {
+        Ok(()) => (Some(runtime), key),
+        Err(reason) => {
+            eprintln!(
+                "loam: refusing composed runtime in {}: {reason}; using module.wasm",
+                package.display()
+            );
+            (None, None)
+        }
+    }
+}
+
+fn verify_runtime(package: &Path) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+    let identity: serde_json::Value = std::fs::read(package.join("runtime.json"))
+        .map_err(|_| "no runtime.json to verify against".to_string())
+        .and_then(|bytes| {
+            serde_json::from_slice(&bytes).map_err(|error| format!("runtime.json: {error}"))
+        })?;
+    let digest = |path: &Path| -> Result<String, String> {
+        let bytes = std::fs::read(path).map_err(|error| format!("read {}: {error}", path.display()))?;
+        Ok(format!("{:x}", Sha256::digest(&bytes)))
+    };
+    let module = digest(&package.join("module.wasm"))?;
+    let recorded = identity
+        .get("source")
+        .and_then(|source| source.get("module"))
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| "runtime.json names no source module".to_string())?;
+    if module != recorded {
+        return Err("module.wasm changed since composition".into());
+    }
+    let lock = std::fs::read_to_string(package.join("spore.lock"))
+        .ok()
+        .and_then(|source| crate::spore::Lock::parse(&source).ok())
+        .map(|lock| lock.digest)
+        .unwrap_or_default();
+    let recorded_lock = identity
+        .get("source")
+        .and_then(|source| source.get("lock"))
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    if lock != recorded_lock {
+        return Err("spore.lock changed since composition".into());
+    }
+    Ok(())
 }
 
 /// Read every command declared by one package directory.
@@ -1623,6 +1681,8 @@ mod tests {
         assert!(registry.refused().is_empty());
     }
 
+    /// A composed runtime is selected only when its recorded identity still
+    /// matches the package it sits in.
     #[test]
     fn a_composed_runtime_module_is_selected() {
         let dir = tempfile::tempdir().unwrap();
@@ -1630,6 +1690,21 @@ mod tests {
         let package = dir.path().join("a");
         std::fs::write(package.join("runtime.wasm"), b"\0asm").unwrap();
         std::fs::write(package.join("runtime.key"), b"abc123\n").unwrap();
+        // A runtime without a matching identity is refused, so this fixture has
+        // to describe itself the way an install would.
+        {
+            use sha2::{Digest, Sha256};
+            let module = std::fs::read(package.join("module.wasm")).unwrap();
+            let identity = serde_json::json!({
+                "schema": 1,
+                "source": { "module": format!("{:x}", Sha256::digest(&module)), "lock": "" },
+            });
+            std::fs::write(
+                package.join("runtime.json"),
+                serde_json::to_vec(&identity).unwrap(),
+            )
+            .unwrap();
+        }
         let registry = CommandRegistry::scan(dir.path()).unwrap();
         let entry = registry.get("a").unwrap();
         assert_eq!(

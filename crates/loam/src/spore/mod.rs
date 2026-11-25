@@ -2030,7 +2030,7 @@ fn lease_label(value: &str) -> bool {
 /// its name. That is the same mistake as hardcoding one vendor, just spelled
 /// as an allow-list. A grant with no matching import is inert anyway -- the
 /// import check is what makes it meaningful.
-fn grants(value: &str) -> bool {
+pub(crate) fn grants(value: &str) -> bool {
     let Some((package, interface)) = value.split_once(':') else {
         return false;
     };

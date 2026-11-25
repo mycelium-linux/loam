@@ -496,8 +496,23 @@ fn compose(
     for index in 0..step {
         let _ = fs::remove_file(package.join(format!(".compose-{index}.wasm")));
     }
-    let key = composite_key(&keys);
+    let composite = composite_key(&keys);
+    let lock_digest = fs::read_to_string(package.join("spore.lock"))
+        .ok()
+        .and_then(|source| crate::spore::Lock::parse(&source).ok())
+        .map(|lock| lock.digest)
+        .unwrap_or_default();
+    let imports: Vec<String> = imports(&entry.module)?;
+    // The source module, not `runtime`: recording the runtime's own digest makes
+    // verification impossible to satisfy, which the regression test caught.
+    let source_module = package.join(&entry.module);
+    let (key, identity) =
+        runtime_identity(&composite, &source_module, &lock_digest, providers, &imports)?;
     fs::write(package.join("runtime.key"), format!("{key}\n"))?;
+    fs::write(
+        package.join("runtime.json"),
+        serde_json::to_vec_pretty(&identity)?,
+    )?;
     Ok(Some(key))
 }
 
@@ -560,6 +575,73 @@ fn provider_roots(providers: &PluginRegistry) -> String {
     }
 }
 
+/// What a composed runtime was built from, and how to check it later.
+///
+/// The per-step composition keys cover the source and provider *bytes*, but not
+/// which provider *package* supplied them or which lock the consumer resolved
+/// against. A runtime is only trustworthy if a later run can recompute this and
+/// agree: otherwise a stale `runtime.wasm` is selected because it happens to be
+/// on disk, which is exactly how one shadowed a fresh module.
+fn runtime_identity(
+    composite: &str,
+    module: &std::path::Path,
+    lock_digest: &str,
+    providers: &PluginRegistry,
+    imports: &[String],
+) -> Result<(String, serde_json::Value)> {
+    use sha2::{Digest, Sha256};
+    let module_digest = sha256_hex(&fs::read(module).with_context(|| format!("read {}", module.display()))?);
+    let mut hasher = Sha256::new();
+    hasher.update(b"loam-runtime-identity-v1\0");
+    hasher.update(env!("CARGO_PKG_VERSION").as_bytes());
+    hasher.update(b"\0");
+    hasher.update(composite.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(module_digest.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(lock_digest.as_bytes());
+
+    let mut entries = Vec::new();
+    for import in imports {
+        if let Some(provider) = providers.get(import) {
+            let provider_module = sha256_hex(&fs::read(&provider.module).with_context(|| {
+                format!("read {}", provider.module.display())
+            })?);
+            hasher.update(b"\0");
+            hasher.update(import.as_bytes());
+            hasher.update(b"\0");
+            hasher.update(provider.lock_digest.as_bytes());
+            hasher.update(b"\0");
+            hasher.update(provider_module.as_bytes());
+            entries.push(serde_json::json!({
+                "import": import,
+                "id": provider.id,
+                "version": provider.version,
+                "lock": provider.lock_digest,
+                "module": provider_module,
+            }));
+        } else {
+            hasher.update(b"\0");
+            hasher.update(import.as_bytes());
+            entries.push(serde_json::json!({ "import": import, "host": true }));
+        }
+    }
+    let key = format!("{:x}", hasher.finalize());
+    let identity = serde_json::json!({
+        "schema": 1,
+        "key": key,
+        "loam": env!("CARGO_PKG_VERSION"),
+        "source": { "module": module_digest, "lock": lock_digest },
+        "providers": entries,
+    });
+    Ok((key, identity))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(bytes))
+}
+
 fn composite_key(keys: &[String]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"loam-runtime-key-v1\0");
@@ -571,7 +653,7 @@ fn composite_key(keys: &[String]) -> String {
 }
 
 fn remove_runtime(package: &Path) -> Result<()> {
-    for name in ["runtime.wasm", "runtime.key"] {
+    for name in ["runtime.wasm", "runtime.key", "runtime.json"] {
         let path = package.join(name);
         if path.exists() {
             fs::remove_file(&path).with_context(|| format!("remove {}", path.display()))?;
@@ -915,6 +997,74 @@ mod tests {
             "soil:logging/logging@0.1.0",
         );
         command_package(source, name, &wat::parse_str(source_text).unwrap())
+    }
+
+    /// Defect 1: `loam:plugin` is host-provided, so a package importing it must
+    /// not need an install-time provider.
+    #[test]
+    fn plugin_ipc_is_a_host_import() {
+        assert!(host_import("loam:plugin/ipc@0.1.0"));
+        assert!(host_import("wasi:cli/run@0.2.3"));
+        assert!(!host_import("fpl:transmog/engineering@0.1.0"));
+    }
+
+    /// Defect 4: a provider's own namespace must be grantable. The old check was
+    /// a hardcoded list, which made every new provider uninstallable and already
+    /// carried an `ajmwagar` special case.
+    #[test]
+    fn a_provider_namespace_is_a_valid_grant() {
+        assert!(crate::spore::grants("fpl:transmog"));
+        assert!(crate::spore::grants("fpl:transmog/engineering"));
+        assert!(crate::spore::grants("soil:vfs-mut"));
+        assert!(!crate::spore::grants("FPL:Transmog"));
+        assert!(!crate::spore::grants("no-colon"));
+        assert!(!crate::spore::grants("fpl:"));
+        assert!(!crate::spore::grants(":thing"));
+    }
+
+    /// Defect 6: a composed runtime that no longer matches its inputs must not be
+    /// selectable. This is the one that made a 353 KB artefact shadow a 166 KB
+    /// module and fail as `engine-unavailable`.
+    #[test]
+    fn a_stale_runtime_is_refused() {
+        use sha2::{Digest, Sha256};
+        let package = tempfile::tempdir().unwrap();
+        let module = b"\0asm-module";
+        std::fs::write(package.path().join("module.wasm"), module).unwrap();
+        std::fs::write(
+            package.path().join("spore.lock"),
+            "spore-lock 1\nspore test.pkg\nversion 0.1.0\ndigest 00\n",
+        )
+        .unwrap();
+        std::fs::write(package.path().join("runtime.wasm"), b"\0asm-runtime").unwrap();
+        std::fs::write(package.path().join("runtime.key"), "deadbeef\n").unwrap();
+
+        let identity = serde_json::json!({
+            "schema": 1,
+            "source": {
+                "module": format!("{:x}", Sha256::digest(module)),
+                "lock": "not-the-lock",
+            },
+        });
+        std::fs::write(
+            package.path().join("runtime.json"),
+            serde_json::to_vec(&identity).unwrap(),
+        )
+        .unwrap();
+        let (runtime, _) = crate::command::installed_runtime_for_test(package.path());
+        assert!(runtime.is_none(), "a runtime whose lock changed must be refused");
+
+        let identity = serde_json::json!({
+            "schema": 1,
+            "source": { "module": format!("{:x}", Sha256::digest(module)), "lock": "" },
+        });
+        std::fs::write(
+            package.path().join("runtime.json"),
+            serde_json::to_vec(&identity).unwrap(),
+        )
+        .unwrap();
+        let (runtime, _) = crate::command::installed_runtime_for_test(package.path());
+        assert!(runtime.is_some(), "a matching runtime is still usable");
     }
 
     #[test]

@@ -522,3 +522,24 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod plugin_tests {
+    use super::SoilManifest;
+
+    /// Defect 5: a Soil manifest could not declare a sidecar at all, so the
+    /// package installed without one and every call answered `unavailable`.
+    #[test]
+    fn a_plugin_sidecar_is_read_from_soil() {
+        let source = r#"
+        (spore
+          (id "fpl.demo") (name "demo") (version "0.1.0")
+          (module (path "module.wasm"))
+          (plugin (sidecar "sidecar/demo"))
+          (launch (default "canvas") (surfaces "canvas")))
+        "#;
+        let manifest = SoilManifest::parse(source).expect("parses");
+        let plugin = manifest.plugin.expect("sidecar kept");
+        assert_eq!(plugin.sidecar.as_deref(), Some("sidecar/demo"));
+    }
+}
