@@ -24,6 +24,9 @@ path = "src/bin/loamd.rs"
 required-features = ["wasi"]
 
 [features]
+# The Soil interpreter as a host front end. Off by default: ProviderHost needs
+# no interpreter, and the two are useful apart.
+soil = ["dep:soil-lang"]
 # Everything a host can be, which is what the `soil` front door links.
 default = [
     "vfs",
@@ -118,6 +121,7 @@ unibus-sdk = { git = "https://github.com/mycelium-linux/unibus.git", rev = "8bf8
 url = { version = "2", optional = true }
 ureq = { version = "2", features = ["json"] }
 wasm-compose = "0.261"
+soil-lang = { path = "../../../fungOS/soil/crates/soil-lang", optional = true }
 wasmtime = { version = "50", default-features = false, features = [
     "anyhow",
     "cache",
@@ -138,4 +142,3 @@ wat = "1"
 
 [target.'cfg(unix)'.dependencies]
 signal-hook = "0.3"
-

@@ -145,6 +145,8 @@ pub struct Refusal {
 pub mod cli;
 pub mod plugin;
 pub mod provider_host;
+#[cfg(feature = "soil")]
+pub mod soil_providers;
 pub mod plugin_ipc;
 
 /// What the runner can link for a command. A package that requires anything

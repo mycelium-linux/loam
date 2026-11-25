@@ -98,8 +98,66 @@ impl ProviderHost {
         }
     }
 
+    /// Resolve what a caller names to what the registry keys by.
+    ///
+    /// `witgen` emits `(host-call "fpl:transmog" "analyze" …)` -- the package --
+    /// while the registry keys interfaces as `fpl:transmog/engineering@0.1.0`.
+    /// Both are correct spellings of the same capability, so this accepts
+    /// either rather than forcing generated bindings to guess a version.
+    pub fn resolve<'a>(&'a self, interface: &'a str) -> Option<(&'a str, &'a super::plugin::PluginEntry)> {
+        if let Some(entry) = self.registry.get(interface) {
+            return Some((interface, entry));
+        }
+        let prefix = format!("{interface}/");
+        self.registry
+            .interfaces()
+            .find(|(name, _)| name.starts_with(&prefix))
+    }
+
+    fn granted_for(&self, full: &str) -> bool {
+        if self.grants.contains(full) {
+            return true;
+        }
+        let short = full.split('/').next().unwrap_or(full);
+        self.grants.contains(short)
+    }
+
     pub fn accepts(&self, interface: &str, _function: &str) -> bool {
-        self.registry.get(interface).is_some() && self.grants.contains(interface)
+        self.resolve(interface)
+            .is_some_and(|(full, _)| self.granted_for(full))
+    }
+
+    /// The parameter types of `interface/function`, read from the component
+    /// type. No instantiation and no sidecar: this is metadata, which is what
+    /// lets an interpreter convert values before anything runs.
+    pub fn signature(&self, interface: &str, function: &str) -> Result<Vec<Type>, ProviderError> {
+        let Some((full, entry)) = self.resolve(interface) else {
+            return Err(ProviderError::MissingCapability);
+        };
+        let component = Component::from_file(&self.engine, &entry.module)
+            .map_err(|error| ProviderError::Infrastructure(format!("load provider: {error}")))?;
+        let ty = component.component_type();
+        let Some(item) = ty.get_export(&self.engine, full) else {
+            return Err(ProviderError::BadRequest(format!(
+                "provider does not export {interface}"
+            )));
+        };
+        let ComponentItem::ComponentInstance(instance) = item.ty else {
+            return Err(ProviderError::BadRequest(format!(
+                "{interface} is not an instance"
+            )));
+        };
+        let Some(function_item) = instance.get_export(&self.engine, function) else {
+            return Err(ProviderError::BadRequest(format!(
+                "{interface} does not export {function}"
+            )));
+        };
+        let ComponentItem::ComponentFunc(func) = function_item.ty else {
+            return Err(ProviderError::BadRequest(format!(
+                "{interface}/{function} is not a function"
+            )));
+        };
+        Ok(func.params().map(|(_, ty)| ty).collect())
     }
 
     /// Instantiate the provider for `interface` and call `function`.
@@ -112,16 +170,12 @@ impl ProviderHost {
         function: &str,
         params: &[Val],
     ) -> Result<Val, ProviderError> {
-        if self.registry.get(interface).is_none() {
+        let Some((full, entry)) = self.resolve(interface) else {
             return Err(ProviderError::MissingCapability);
-        }
-        if !self.grants.contains(interface) {
+        };
+        if !self.granted_for(full) {
             return Err(ProviderError::Denied { interface: interface.to_owned() });
         }
-        let entry = self
-            .registry
-            .get(interface)
-            .ok_or(ProviderError::MissingCapability)?;
 
         let component = Component::from_file(&self.engine, &entry.module)
             .map_err(|error| ProviderError::Infrastructure(format!("load provider: {error}")))?;
@@ -154,7 +208,7 @@ impl ProviderHost {
         let instance = linker
             .instantiate(&mut store, &component)
             .map_err(|error| ProviderError::Infrastructure(format!("instantiate: {error:#}")))?;
-        let func = lookup(&mut store, &instance, interface, function)?;
+        let func = lookup(&mut store, &instance, full, function)?;
 
         let signature = func.ty(&store);
         let wanted = signature.params().len();
