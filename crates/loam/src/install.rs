@@ -472,22 +472,32 @@ fn compose(
     let mut current = entry.module.clone();
     let mut keys = Vec::new();
     let mut step = 0;
-    for import in imports(&current)? {
-        if let Some(provider) = providers.get(&import) {
-            if provider.native.is_some() {
-                continue;
+    // A provider can introduce imports of its own. Compose until the current
+    // module has no wasm providers left; only then is the transitive closure
+    // complete. A fixed iteration of the original import list left a wrapper
+    // with unresolved adapter imports.
+    loop {
+        let mut chosen: Option<(String, std::path::PathBuf)> = None;
+        for import in imports(&current)? {
+            if let Some(provider) = providers.get(&import) {
+                if provider.native.is_none() {
+                    chosen = Some((import, provider.module.clone()));
+                    break;
+                }
+            } else if !host_import(&import) {
+                bail!("{}", missing_provider(providers, &import));
             }
-            let next = package.join(format!(".compose-{step}.wasm"));
-            keys.push(plugin::composition_key(
-                &current,
-                &provider.module,
-                &import,
-            )?);
-            plugin::compose_cached(&current, &provider.module, &import, cache, &next)?;
-            current = next;
-            step += 1;
-        } else if !host_import(&import) {
-            bail!("{}", missing_provider(providers, &import));
+        }
+        let Some((import, provider_module)) = chosen else {
+            break;
+        };
+        let next = package.join(format!(".compose-{step}.wasm"));
+        keys.push(plugin::composition_key(&current, &provider_module, &import)?);
+        plugin::compose_cached(&current, &provider_module, &import, cache, &next)?;
+        current = next;
+        step += 1;
+        if step > 64 {
+            bail!("composition did not converge after 64 providers");
         }
     }
     let runtime = package.join("runtime.wasm");
