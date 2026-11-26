@@ -2403,8 +2403,11 @@ fn body(id: &str, version: &str, files: &[FileEntry]) -> String {
     let mut out = String::new();
     out.push_str(LOCK_HEADER);
     out.push('\n');
-    out.push_str("kind spore\n");
-    out.push_str(&format!("id {id}\n"));
+    // Preserve the original `spore <id>` spelling: it is the digest every
+    // installed lock and signature was made over. `parse` still accepts the
+    // newer `kind spore` / `id` spelling, but writing it would silently
+    // invalidate existing packages.
+    out.push_str(&format!("spore {id}\n"));
     out.push_str(&format!("version {version}\n"));
     for file in files {
         out.push_str(&format!(
@@ -2582,10 +2585,11 @@ fn walk(root: &Path, dir: &Path, out: &mut BTreeMap<String, Vec<u8>>) -> Result<
 
 /// Compute the lock for a directory's current contents.
 pub fn compute_lock(root: &Path, manifest: &Manifest) -> Result<Lock> {
-    // Whole package: the lock is the reproducibility receipt for every file
-    // that ships, not just the paths a manifest happens to name. This is the
-    // same set `scripts/spore-pack.sh lock` writes.
-    let files = collect(root)?;
+    // The lock covers the files the package ships, not build inputs. This is
+    // the same scope `soil-spore lock` writes; using the whole tree made an
+    // installed package fail its own lock check as soon as `runtime.wasm` or
+    // Cargo scaffolding was present.
+    let files = collect_package(root, manifest)?;
     Ok(lock_of(&manifest.spore.id, &manifest.spore.version, &files))
 }
 
