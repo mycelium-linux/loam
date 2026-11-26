@@ -2047,7 +2047,10 @@ fn grants(value: &str) -> bool {
     let Some((package, interface)) = value.split_once(':') else {
         return false;
     };
-    matches!(package, "soil" | "wasi" | "fungos" | "loam" | "ajmwagar")
+    matches!(
+        package,
+        "soil" | "wasi" | "fungos" | "loam" | "ajmwagar" | "mycelium"
+    )
         && !interface.is_empty()
         && interface.chars().all(|c| {
             c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '.' | '_' | '/')
