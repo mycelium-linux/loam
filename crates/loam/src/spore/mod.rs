@@ -4290,3 +4290,20 @@ action = "marbles.ready"
         assert!(error.contains("declared twice"), "{error}");
     }
 }
+
+#[cfg(test)]
+mod installed_lock_compat_tests {
+    use super::*;
+
+    #[test]
+    fn an_installed_legacy_lock_parses_and_renders_its_own_spelling() {
+        // The exact lock installed for dev.mycelium.agents before the
+        // `kind spore` spelling existed. It must remain a migration, not a
+        // digest mismatch.
+        let text = "spore-lock 1\nspore dev.mycelium.agents\nversion 0.1.0\nfile 2cbdb6aec216aa4e7859d5474e7ca44a7f1f1f9bd87fff5ae02f95367ca93596 243477 module.wasm\nfile d59b2d6370a837ebf12b850183e2bb26a80d25da8a73c8e147251d200a9ca92f 1035 spore.toml\ndigest e7a64d8112476a9eeda7ef9fcded12a385c34745c6506f8750203d71ff37b78c\n";
+        let lock = Lock::parse(text).expect("legacy lock");
+        assert_eq!(lock.digest, "e7a64d8112476a9eeda7ef9fcded12a385c34745c6506f8750203d71ff37b78c");
+        assert_eq!(lock.files.len(), 2);
+        assert!(lock.render().starts_with("spore-lock 1\nspore dev.mycelium.agents\n"));
+    }
+}
