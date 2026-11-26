@@ -268,6 +268,12 @@ pub struct Manifest {
     /// place a capability is named, reviewed and routed.
     #[serde(default)]
     pub actions: Vec<Action>,
+    /// Declarative operations: one typed contract that projects to CLI and MCP.
+    ///
+    /// An operation is not a grant. Its `requires` must already appear in
+    /// `[grants]`, so a manifest cannot self-grant by declaring an operation.
+    #[serde(default)]
+    pub operations: Vec<Operation>,
     /// Agent skills this Spore ships. Each one is declared by path, so the lock
     /// and the tar cover it like any other asset: what teaches an agent to use
     /// the Spore is prose, and the prose has to travel with the package.
@@ -337,6 +343,61 @@ pub struct Action {
     pub expose: Vec<String>,
     #[serde(default)]
     pub idempotent: bool,
+}
+
+/// How an operation changes the world. The label is for discovery and policy;
+/// it is not an authority claim.
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum OperationEffect {
+    Read,
+    Write,
+    External,
+}
+
+/// How much care an operation needs. The label is for discovery and policy;
+/// the host still decides approval from the grant and the action.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum OperationRisk {
+    #[default]
+    Low,
+    Medium,
+    High,
+}
+
+/// One typed operation that may be projected to CLI and/or MCP.
+///
+/// `command` names a `[[commands]]` implementation; `action` names an
+/// `[[actions]]` implementation. The operation name is the stable public name.
+/// The same contract carries schema, help, effect, risk, required capabilities
+/// and an optional resource selector, so the two surfaces cannot drift.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Operation {
+    pub name: String,
+    pub summary: String,
+    /// Schema of the operation input, e.g. `marbles/ready@1`.
+    pub input: String,
+    #[serde(default)]
+    pub output: Option<String>,
+    pub effect: OperationEffect,
+    #[serde(default)]
+    pub risk: OperationRisk,
+    #[serde(default)]
+    pub requires: Vec<String>,
+    /// A bounded selector such as `records:marbles`; never a host path.
+    #[serde(default)]
+    pub resource: Option<String>,
+    /// A non-empty subset of `cli` and `mcp`.
+    #[serde(default)]
+    pub expose: Vec<String>,
+    #[serde(default)]
+    pub idempotent: bool,
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub action: Option<String>,
 }
 
 /// One program a Spore installs into a shell's virtual PATH.
@@ -1048,6 +1109,7 @@ impl Manifest {
             docs: None,
             catalog: None,
             actions: Vec::new(),
+            operations: Vec::new(),
             skills: Vec::new(),
             surfaces: soil.surfaces,
             web: soil.web,
@@ -1590,6 +1652,111 @@ impl Manifest {
                     "command {:?} module must end in .wasm",
                     command.name
                 )));
+            }
+        }
+
+        let mut operation_names = std::collections::BTreeSet::new();
+        for operation in &self.operations {
+            if !identifier(&operation.name) {
+                return Err(Error::Invalid(format!(
+                    "operation name {:?} is not an identifier",
+                    operation.name
+                )));
+            }
+            if !operation_names.insert(operation.name.clone()) {
+                return Err(Error::Invalid(format!(
+                    "operation {:?} is declared twice",
+                    operation.name
+                )));
+            }
+            if operation.summary.trim().is_empty() {
+                return Err(Error::Invalid(format!(
+                    "operation {:?} has no summary",
+                    operation.name
+                )));
+            }
+            if operation.input.trim().is_empty()
+                || operation.input.contains(char::is_whitespace)
+                || operation.input.contains("..")
+            {
+                return Err(Error::Invalid(format!(
+                    "operation {:?} input schema is not a bounded schema id",
+                    operation.name
+                )));
+            }
+            if let Some(output) = &operation.output {
+                if output.trim().is_empty()
+                    || output.contains(char::is_whitespace)
+                    || output.contains("..")
+                {
+                    return Err(Error::Invalid(format!(
+                        "operation {:?} output schema is not a bounded schema id",
+                        operation.name
+                    )));
+                }
+            }
+            if operation.expose.is_empty()
+                || operation
+                    .expose
+                    .iter()
+                    .any(|surface| surface != "cli" && surface != "mcp")
+            {
+                return Err(Error::Invalid(format!(
+                    "operation {:?} expose must be a non-empty subset of cli, mcp",
+                    operation.name
+                )));
+            }
+            if operation.requires.iter().any(|capability| !self.grants.contains_key(capability)) {
+                return Err(Error::Invalid(format!(
+                    "operation {:?} requires a capability not declared in grants",
+                    operation.name
+                )));
+            }
+            if operation.requires.iter().any(|capability| !grants(capability)) {
+                return Err(Error::Invalid(format!(
+                    "operation {:?} requires a malformed capability",
+                    operation.name
+                )));
+            }
+            if let Some(resource) = &operation.resource {
+                if resource.trim().is_empty()
+                    || resource.starts_with('/')
+                    || resource.contains("..")
+                    || resource.contains(char::is_whitespace)
+                {
+                    return Err(Error::Invalid(format!(
+                        "operation {:?} resource selector is not a bounded selector",
+                        operation.name
+                    )));
+                }
+            }
+            if operation.expose.iter().any(|surface| surface == "cli") {
+                let command = operation.command.as_deref().ok_or_else(|| {
+                    Error::Invalid(format!(
+                        "operation {:?} exposes cli without a command",
+                        operation.name
+                    ))
+                })?;
+                if !self.commands.iter().any(|declared| declared.name == command) {
+                    return Err(Error::Invalid(format!(
+                        "operation {:?} names unknown command {command:?}",
+                        operation.name
+                    )));
+                }
+            }
+            if operation.expose.iter().any(|surface| surface == "mcp") {
+                let action = operation.action.as_deref().ok_or_else(|| {
+                    Error::Invalid(format!(
+                        "operation {:?} exposes mcp without an action",
+                        operation.name
+                    ))
+                })?;
+                if !self.actions.iter().any(|declared| declared.id == action) {
+                    return Err(Error::Invalid(format!(
+                        "operation {:?} names unknown action {action:?}",
+                        operation.name
+                    )));
+                }
             }
         }
 
@@ -3998,5 +4165,121 @@ mod pack_tests {
         ));
         let message = empty.expect_err("no entrypoint").to_string();
         assert!(message.contains("declared surface"), "{message}");
+    }
+}
+
+#[cfg(test)]
+mod operation_manifest_tests {
+    use super::*;
+
+    const MANIFEST: &str = r#"
+schema = 1
+
+[spore]
+id = "dev.test.operations"
+name = "operations-test"
+version = "0.1.0"
+license = "MIT"
+summary = "operation contract fixture"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+
+[module]
+path = "module.wasm"
+
+[launch]
+default = "native"
+surfaces = ["native"]
+
+[grants]
+"soil:records" = "read the marbles book"
+
+[[commands]]
+name = "mb"
+summary = "Marbles issue tracker"
+module = "module.wasm"
+
+[[actions]]
+id = "marbles.ready"
+title = "List ready issues"
+input = "marbles/ready@1"
+requires = ["soil:records"]
+expose = ["mcp"]
+
+[[operations]]
+name = "marbles.ready"
+summary = "List ready issues"
+input = "marbles/ready@1"
+effect = "read"
+risk = "low"
+requires = ["soil:records"]
+resource = "records:marbles"
+expose = ["cli", "mcp"]
+command = "mb"
+action = "marbles.ready"
+"#;
+
+    #[test]
+    fn one_contract_projects_to_cli_and_mcp() {
+        let manifest = Manifest::parse(MANIFEST).expect("manifest");
+        assert_eq!(manifest.operations.len(), 1);
+        let operation = &manifest.operations[0];
+        assert_eq!(operation.effect, OperationEffect::Read);
+        assert_eq!(operation.risk, OperationRisk::Low);
+        assert_eq!(operation.command.as_deref(), Some("mb"));
+        assert_eq!(operation.action.as_deref(), Some("marbles.ready"));
+        assert_eq!(operation.expose, vec!["cli", "mcp"]);
+        assert_eq!(operation.resource.as_deref(), Some("records:marbles"));
+    }
+
+    #[test]
+    fn an_operation_cannot_self_grant() {
+        let bad = MANIFEST.replace(
+            "requires = [\"soil:records\"]\nresource = \"records:marbles\"",
+            "requires = [\"soil:secrets\"]\nresource = \"records:marbles\"",
+        );
+        let error = Manifest::parse(&bad).expect_err("must refuse").to_string();
+        assert!(error.contains("not declared in grants"), "{error}");
+    }
+
+    #[test]
+    fn a_resource_selector_is_not_a_host_path() {
+        let bad = MANIFEST.replace(
+            "resource = \"records:marbles\"",
+            "resource = \"/etc/passwd\"",
+        );
+        let error = Manifest::parse(&bad).expect_err("must refuse").to_string();
+        assert!(error.contains("resource selector"), "{error}");
+    }
+
+    #[test]
+    fn mcp_exposure_requires_an_action() {
+        let bad = MANIFEST.replace("action = \"marbles.ready\"\n", "");
+        let error = Manifest::parse(&bad).expect_err("must refuse").to_string();
+        assert!(error.contains("exposes mcp without an action"), "{error}");
+    }
+
+    #[test]
+    fn cli_exposure_requires_a_command() {
+        let bad = MANIFEST.replace("command = \"mb\"\n", "");
+        let error = Manifest::parse(&bad).expect_err("must refuse").to_string();
+        assert!(error.contains("exposes cli without a command"), "{error}");
+    }
+
+    #[test]
+    fn operation_names_are_unique() {
+        let bad = MANIFEST.to_owned() + r#"
+[[operations]]
+name = "marbles.ready"
+summary = "duplicate"
+input = "marbles/ready@1"
+effect = "read"
+expose = ["mcp"]
+action = "marbles.ready"
+"#;
+        let error = Manifest::parse(&bad).expect_err("must refuse").to_string();
+        assert!(error.contains("declared twice"), "{error}");
     }
 }
