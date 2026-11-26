@@ -349,7 +349,12 @@ impl VfsHost {
         self.index.lock().expect("index poisoned")
     }
 
-    fn read_path(&self, path: &str, offset: u64, length: u32) -> Result<Vec<u8>, vfs::Error> {
+    fn read_path(
+        &self,
+        path: &str,
+        offset: u64,
+        length: u32,
+    ) -> Result<(Vec<u8>, u64), vfs::Error> {
         if length == 0 || length > MAX_RANGE {
             return Err(vfs::Error::OverBudget);
         }
@@ -369,8 +374,9 @@ impl VfsHost {
         if start > bytes.len() {
             return Err(vfs::Error::Invalid);
         }
+        let total = bytes.len() as u64;
         let end = start.saturating_add(length as usize).min(bytes.len());
-        Ok(bytes.drain(start..end).collect())
+        Ok((bytes.drain(start..end).collect(), total))
     }
 }
 
@@ -505,26 +511,15 @@ impl vfs::Host for VfsHost {
 
     fn read(&mut self, path: String, offset: u64, length: u32) -> Result<vfs::Chunk, vfs::Error> {
         let path = normalize_parent(&path)?;
-        self.refresh_view().map_err(|_| vfs::Error::Io)?;
-        let kind = self
-            .index_read()
-            .entry(&path)
-            .map(|node| node.kind)
-            .ok_or(vfs::Error::NotFound)?;
-        if kind != NodeKind::File {
-            return Err(vfs::Error::IsDirectory);
-        }
+        // A read is the hot path for every capture bundle. The VFS is the
+        // authority for bytes; the derived index is not needed to serve them.
+        // Refreshing it here listed and rehashed the whole namespace per file.
+        let (data, size) = self.read_path(&path, offset, length)?;
         let content_id = self
             .index_read()
             .entry(&path)
             .map(|node| node.entry.content_id.to_string())
             .unwrap_or_default();
-        let data = self.read_path(&path, offset, length)?;
-        let size = self
-            .index_read()
-            .entry(&path)
-            .map(|node| node.entry.size)
-            .unwrap_or(0);
         Ok(vfs::Chunk {
             offset,
             eof: offset.saturating_add(data.len() as u64) >= size,
@@ -679,6 +674,14 @@ impl VfsHost {
         self.refresh_index().map_err(|_| vfs_mut_api::Error::Io)?;
         Ok(())
     }
+
+    fn refresh_file(&self, path: &str) -> Result<(), vfs_mut_api::Error> {
+        let mut vfs = self.vfs.lock().expect("vfs poisoned");
+        let mut index = self.index.lock().expect("index poisoned");
+        index
+            .upsert_file(&mut vfs, path)
+            .map_err(|_| vfs_mut_api::Error::Io)
+    }
 }
 
 impl vfs_mut_api::Host for VfsHost {
@@ -716,7 +719,7 @@ impl vfs_mut_api::Host for VfsHost {
             }
             .map_err(mutation_error)?
         };
-        self.refresh_after_mutation()?;
+        self.refresh_file(&path)?;
         Ok(write_result(entry))
     }
 
@@ -732,7 +735,7 @@ impl vfs_mut_api::Host for VfsHost {
                 .set_mode(&path, mode)
                 .map_err(mutation_error)?
         };
-        self.refresh_after_mutation()?;
+        self.refresh_file(&path)?;
         Ok(write_result(entry))
     }
 

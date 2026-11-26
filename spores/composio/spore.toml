@@ -1,0 +1,31 @@
+schema = 1
+
+[spore]
+id = "dev.fungos.composio"
+name = "composio"
+title = "Composio"
+version = "0.1.0"
+license = "MIT"
+summary = "Composio MCP over Streamable HTTP, authenticated through Geode"
+
+[engine]
+soil = ">=0.1"
+target = "wasm32-wasip2"
+
+[module]
+path = "module.wasm"
+
+[launch]
+default = "canvas"
+surfaces = ["canvas"]
+
+[plugin]
+sidecar = "bin/composio-mcp"
+
+[grants]
+"loam:plugin" = "0.1.0"
+"soil:mcp" = "0.1.0"
+
+[denied]
+"soil:http" = ["the sidecar owns the HTTP transport; the guest sees only soil:mcp"]
+"wasi:filesystem" = ["the sidecar owns no workspace files"]
