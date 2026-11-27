@@ -138,33 +138,39 @@ where
     let chosen = Arc::new(std::sync::Mutex::new(String::new()));
     let chosen_cb = Arc::clone(&chosen);
     let allowed: Vec<String> = protocols.to_vec();
-    let ws = tokio_tungstenite::accept_hdr_async(stream, move |request: &Request, mut response: Response| {
-        let requested = request
-            .headers()
-            .get("sec-websocket-protocol")
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| {
-                value
-                    .split(',')
-                    .map(str::trim)
-                    .find(|candidate| allowed.is_empty() || allowed.iter().any(|a| a == candidate))
-            })
-            .unwrap_or(DEFAULT_PROTOCOL)
-            .to_string();
-        if requested != DEFAULT_PROTOCOL {
-            let _ = response.headers_mut().insert(
-                "sec-websocket-protocol",
-                requested.parse().expect("ascii protocol"),
-            );
-        }
-        *chosen_cb.lock().expect("protocol lock") = requested;
-        Ok(response)
-    })
+    let ws = tokio_tungstenite::accept_hdr_async(
+        stream,
+        move |request: &Request, mut response: Response| {
+            let requested = request
+                .headers()
+                .get("sec-websocket-protocol")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| {
+                    value.split(',').map(str::trim).find(|candidate| {
+                        allowed.is_empty() || allowed.iter().any(|a| a == candidate)
+                    })
+                })
+                .unwrap_or(DEFAULT_PROTOCOL)
+                .to_string();
+            if requested != DEFAULT_PROTOCOL {
+                let _ = response.headers_mut().insert(
+                    "sec-websocket-protocol",
+                    requested.parse().expect("ascii protocol"),
+                );
+            }
+            *chosen_cb.lock().expect("protocol lock") = requested;
+            Ok(response)
+        },
+    )
     .await
     .context("websocket handshake")?;
 
     let protocol = chosen.lock().expect("protocol lock").clone();
-    let protocol = if protocol.is_empty() { DEFAULT_PROTOCOL.to_string() } else { protocol };
+    let protocol = if protocol.is_empty() {
+        DEFAULT_PROTOCOL.to_string()
+    } else {
+        protocol
+    };
 
     let (inbound_tx, inbound_rx) = mpsc::channel::<Vec<u8>>(16);
     let (outbound_tx, mut outbound_rx) = mpsc::channel::<Vec<u8>>(16);
@@ -221,7 +227,10 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("addr");
         let hub = StreamHub::new();
-        let served = { let hub = hub.clone(); tokio::spawn(async move { serve_on(listener, hub, None, Vec::new()).await }) };
+        let served = {
+            let hub = hub.clone();
+            tokio::spawn(async move { serve_on(listener, hub, None, Vec::new()).await })
+        };
 
         let request = tokio_tungstenite::tungstenite::handshake::client::Request::builder()
             .uri(format!("ws://{addr}/"))
@@ -233,17 +242,24 @@ mod tests {
             .header("Host", addr.to_string())
             .body(())
             .expect("request");
-        let (mut ws, _) = tokio_tungstenite::connect_async(request).await.expect("connect");
+        let (mut ws, _) = tokio_tungstenite::connect_async(request)
+            .await
+            .expect("connect");
 
         let mut session = None;
         for _ in 0..100 {
-            if let Some(found) = hub.accept("capture") { session = Some(found); break; }
+            if let Some(found) = hub.accept("capture") {
+                session = Some(found);
+                break;
+            }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         let session = session.expect("session queued under the subprotocol");
         assert_eq!(session.info.protocol, "capture");
 
-        ws.send(Message::Binary(b"hello".to_vec().into())).await.expect("send");
+        ws.send(Message::Binary(b"hello".to_vec().into()))
+            .await
+            .expect("send");
         // StreamSession is the blocking seam wasmtime calls; read it off the
         // async runtime rather than inside it.
         let (session, received) = tokio::time::timeout(
@@ -272,7 +288,10 @@ mod tests {
         .expect("join");
         let _ = session;
         let echoed = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next())
-            .await.expect("timeout").expect("frame").expect("ok");
+            .await
+            .expect("timeout")
+            .expect("frame")
+            .expect("ok");
         assert_eq!(echoed, Message::Binary(b"world".to_vec().into()));
 
         served.abort();

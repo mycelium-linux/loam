@@ -278,9 +278,34 @@ pub fn rollback(root: &Path, id: &str) -> Result<InstallReport> {
     }
     activate(root, &record.package, &previous)?;
 
+    // The active generation is the previous package, so the status record has
+    // to describe that package, not the one it replaced. Keeping the newer
+    // version/digest here made `status` claim v2 while `current` ran v1.
+    let previous_manifest = spore::Manifest::load(&previous_package).ok();
+    let previous_lock = std::fs::read_to_string(previous_package.join(spore::LOCK_NAME))
+        .ok()
+        .and_then(|text| spore::Lock::parse(&text).ok());
+    let previous_composition = std::fs::read_to_string(previous_package.join("runtime.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|json| {
+            json.get("key")
+                .and_then(|key| key.as_str())
+                .map(str::to_owned)
+        });
+
     let rolled_back = InstallRecord {
+        version: previous_manifest
+            .as_ref()
+            .map(|manifest| manifest.spore.version.clone())
+            .unwrap_or(record.version),
+        package_digest: previous_lock
+            .as_ref()
+            .map(|lock| lock.digest.clone())
+            .unwrap_or(record.package_digest),
         current: previous.clone(),
         previous: Some(record.current.clone()),
+        composition_key: previous_composition,
         warm: !entries.is_empty(),
         installed_at: now(),
         drift: None,
@@ -472,22 +497,36 @@ fn compose(
     let mut current = entry.module.clone();
     let mut keys = Vec::new();
     let mut step = 0;
-    for import in imports(&current)? {
-        if let Some(provider) = providers.get(&import) {
-            if provider.native.is_some() {
-                continue;
+    // A provider can introduce imports of its own. Compose until the current
+    // module has no wasm providers left; only then is the transitive closure
+    // complete. A fixed iteration of the original import list left a wrapper
+    // with unresolved adapter imports.
+    loop {
+        let mut chosen: Option<(String, std::path::PathBuf)> = None;
+        for import in imports(&current)? {
+            if let Some(provider) = providers.get(&import) {
+                if provider.native.is_none() {
+                    chosen = Some((import, provider.module.clone()));
+                    break;
+                }
+            } else if !host_import(&import) {
+                bail!("{}", missing_provider(providers, &import));
             }
-            let next = package.join(format!(".compose-{step}.wasm"));
-            keys.push(plugin::composition_key(
-                &current,
-                &provider.module,
-                &import,
-            )?);
-            plugin::compose_cached(&current, &provider.module, &import, cache, &next)?;
-            current = next;
-            step += 1;
-        } else if !host_import(&import) {
-            bail!("{}", missing_provider(providers, &import));
+        }
+        let Some((import, provider_module)) = chosen else {
+            break;
+        };
+        let next = package.join(format!(".compose-{step}.wasm"));
+        keys.push(plugin::composition_key(
+            &current,
+            &provider_module,
+            &import,
+        )?);
+        plugin::compose_cached(&current, &provider_module, &import, cache, &next)?;
+        current = next;
+        step += 1;
+        if step > 64 {
+            bail!("composition did not converge after 64 providers");
         }
     }
     let runtime = package.join("runtime.wasm");

@@ -196,21 +196,46 @@ fn install_cli(args: &[String]) -> Result<()> {
 }
 
 fn reload_daemon() -> Result<()> {
-    let socket = soil::config::Config::default_path()
+    // The live daemon predates the current default path on several machines.
+    // Try the configured/default socket first, then the two historical paths
+    // without changing the daemon's binding. A reload is not a restart, so a
+    // wrong candidate is skipped rather than allowed to fail the install.
+    let mut candidates = Vec::new();
+    if let Some(path) = std::env::var_os("LOAM_LOAMD_SOCKET").filter(|value| !value.is_empty()) {
+        candidates.push(std::path::PathBuf::from(path));
+    }
+    if let Some(socket) = soil::config::Config::default_path()
         .and_then(|path| soil::config::Config::load(&path).ok())
         .and_then(|config| config.socket)
-        .unwrap_or_else(soil::daemon::default_socket);
-    if !socket.exists() {
-        return Ok(());
+    {
+        candidates.push(socket);
     }
-    let response = soil::daemon::request(&socket, &soil::daemon::Request::Reload)?;
-    if response["ok"] == false {
-        bail!(
-            "{}",
-            response["error"].as_str().unwrap_or("reload was refused")
-        );
+    candidates.push(soil::daemon::default_socket());
+    if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) {
+        candidates.push(home.join(".local/run/hub.sock"));
+        candidates.push(home.join(".mycelium/loamd.sock"));
     }
-    Ok(())
+    let mut seen = std::collections::BTreeSet::new();
+    let mut last_error = None;
+    for socket in candidates {
+        if !seen.insert(socket.clone()) || !socket.exists() {
+            continue;
+        }
+        match soil::daemon::request(&socket, &soil::daemon::Request::Reload) {
+            Ok(response) if response["ok"] != false => return Ok(()),
+            Ok(response) => {
+                last_error = Some(anyhow::anyhow!(
+                    "{}",
+                    response["error"].as_str().unwrap_or("reload was refused")
+                ));
+            }
+            Err(error) => last_error = Some(error),
+        }
+    }
+    match last_error {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
 }
 
 fn image_cli(args: &[String]) -> Result<()> {

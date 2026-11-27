@@ -423,7 +423,10 @@ mod tests {
             "#,
         )
         .expect("a soil manifest");
-        assert!(manifest.module.is_none(), "a command-only Spore has no module");
+        assert!(
+            manifest.module.is_none(),
+            "a command-only Spore has no module"
+        );
         assert_eq!(manifest.commands.len(), 1, "{:?}", manifest.commands);
         assert_eq!(manifest.commands[0].name, "say");
         assert_eq!(manifest.commands[0].summary, "print one line");
