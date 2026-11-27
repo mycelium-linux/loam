@@ -284,7 +284,7 @@ fn start_stream_transports(
     config: Option<crate::config::StreamConfig>,
     hub: crate::stream::StreamHub,
 ) -> Result<()> {
-    let Some(config) = config else { return Ok(()) };
+    let Some(_config) = config else { return Ok(()) };
     #[cfg(not(any(feature = "stream-ws", feature = "stream-iroh")))]
     {
         let _ = &hub;
@@ -292,7 +292,7 @@ fn start_stream_transports(
             "loamd: stream listeners configured but this build has no transport feature \
              (stream-ws, stream-iroh); nothing accepted"
         );
-        return Ok(());
+        Ok(())
     }
     #[cfg(any(feature = "stream-ws", feature = "stream-iroh"))]
     {

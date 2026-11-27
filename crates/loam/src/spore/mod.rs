@@ -1684,16 +1684,15 @@ impl Manifest {
                     operation.name
                 )));
             }
-            if let Some(output) = &operation.output {
-                if output.trim().is_empty()
+            if let Some(output) = &operation.output
+                && (output.trim().is_empty()
                     || output.contains(char::is_whitespace)
-                    || output.contains("..")
-                {
-                    return Err(Error::Invalid(format!(
-                        "operation {:?} output schema is not a bounded schema id",
-                        operation.name
-                    )));
-                }
+                    || output.contains(".."))
+            {
+                return Err(Error::Invalid(format!(
+                    "operation {:?} output schema is not a bounded schema id",
+                    operation.name
+                )));
             }
             if operation.expose.is_empty()
                 || operation
@@ -1726,17 +1725,16 @@ impl Manifest {
                     operation.name
                 )));
             }
-            if let Some(resource) = &operation.resource {
-                if resource.trim().is_empty()
+            if let Some(resource) = &operation.resource
+                && (resource.trim().is_empty()
                     || resource.starts_with('/')
                     || resource.contains("..")
-                    || resource.contains(char::is_whitespace)
-                {
-                    return Err(Error::Invalid(format!(
-                        "operation {:?} resource selector is not a bounded selector",
-                        operation.name
-                    )));
-                }
+                    || resource.contains(char::is_whitespace))
+            {
+                return Err(Error::Invalid(format!(
+                    "operation {:?} resource selector is not a bounded selector",
+                    operation.name
+                )));
             }
             if operation.expose.iter().any(|surface| surface == "cli") {
                 let command = operation.command.as_deref().ok_or_else(|| {
