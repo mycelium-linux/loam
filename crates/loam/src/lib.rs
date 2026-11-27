@@ -88,10 +88,10 @@ mod service;
 pub mod spore;
 #[cfg(feature = "wasi")]
 pub mod stream;
-#[cfg(feature = "stream-ws")]
-pub mod stream_ws;
 #[cfg(feature = "stream-iroh")]
 pub mod stream_iroh;
+#[cfg(feature = "stream-ws")]
+pub mod stream_ws;
 #[cfg(feature = "wasi")]
 pub mod time;
 #[cfg(feature = "wasi")]

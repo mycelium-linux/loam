@@ -146,8 +146,13 @@ pub mod plugin_ipc;
 
 /// What the runner can link for a command. A package that requires anything
 /// else is refused by the registry instead of failing at instantiation.
-pub const RUNNER_CAPABILITIES: &[&str] =
-    &["soil:records", "soil:time", "soil:unibus", "soil:mcp", "soil:streams"];
+pub const RUNNER_CAPABILITIES: &[&str] = &[
+    "soil:records",
+    "soil:time",
+    "soil:unibus",
+    "soil:mcp",
+    "soil:streams",
+];
 
 #[derive(Debug, Clone)]
 pub struct CommandRegistry {
@@ -879,7 +884,11 @@ impl CommandRunner {
         if bus.is_some() {
             crate::unibus::add_to_linker::<Host>(&mut linker)?;
         }
-        let streams = if entry.requires.iter().any(|cap| cap.starts_with("soil:streams")) {
+        let streams = if entry
+            .requires
+            .iter()
+            .any(|cap| cap.starts_with("soil:streams"))
+        {
             crate::stream::add_to_linker::<Host>(&mut linker)?;
             self.streams.clone()
         } else {

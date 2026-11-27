@@ -2490,13 +2490,18 @@ kind = "web"
         let context = read_execution_context_from(&contexts, "alpha").unwrap();
         assert_eq!(context.id, "alpha");
         assert_eq!(context.vfs_root, Some(fs::canonicalize(&vfs).unwrap()));
-        assert_eq!(context.records_root, Some(fs::canonicalize(&records).unwrap()));
+        assert_eq!(
+            context.records_root,
+            Some(fs::canonicalize(&records).unwrap())
+        );
         assert_eq!(context.records_book.as_deref(), Some("team/alpha/records"));
-        assert_eq!(context.principal_actor.as_deref(), Some("person@example.test"));
+        assert_eq!(
+            context.principal_actor.as_deref(),
+            Some("person@example.test")
+        );
         assert_eq!(context.principal_kind.as_deref(), Some("human"));
         assert!(context.records_binding().is_some());
         assert!(read_execution_context_from(&contexts, "../alpha").is_err());
         assert!(read_execution_context_from(&contexts, "missing").is_err());
     }
-
 }
