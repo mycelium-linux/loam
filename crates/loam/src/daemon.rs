@@ -291,7 +291,7 @@ fn start_stream_transports(
     config: Option<crate::config::StreamConfig>,
     hub: crate::stream::StreamHub,
 ) -> Result<()> {
-    let Some(config) = config else { return Ok(()) };
+    let Some(_config) = config else { return Ok(()) };
     #[cfg(not(any(feature = "stream-ws", feature = "stream-iroh")))]
     {
         let _ = &hub;
@@ -299,7 +299,7 @@ fn start_stream_transports(
             "loamd: stream listeners configured but this build has no transport feature \
              (stream-ws, stream-iroh); nothing accepted"
         );
-        return Ok(());
+        Ok(())
     }
     #[cfg(any(feature = "stream-ws", feature = "stream-iroh"))]
     {
@@ -318,7 +318,7 @@ fn start_stream_transports(
                     // not disable the other, so every failure is logged and
                     // skipped rather than returning from the block.
                     #[cfg(feature = "stream-ws")]
-                    if let Some(ws) = config.ws.clone() {
+                    if let Some(ws) = _config.ws.clone() {
                         match ws.listen.parse::<std::net::SocketAddr>() {
                             Ok(listen) => {
                                 let options = crate::stream_ws::WsOptions {
@@ -345,11 +345,11 @@ fn start_stream_transports(
                         }
                     }
                     #[cfg(not(feature = "stream-ws"))]
-                    if config.ws.is_some() {
+                    if _config.ws.is_some() {
                         eprintln!("loamd: stream ws configured but built without stream-ws");
                     }
                     #[cfg(feature = "stream-iroh")]
-                    if let Some(iroh) = config.iroh.clone() {
+                    if let Some(iroh) = _config.iroh.clone() {
                         let allow = iroh
                             .allow
                             .iter()
@@ -379,7 +379,7 @@ fn start_stream_transports(
                         }
                     }
                     #[cfg(not(feature = "stream-iroh"))]
-                    if config.iroh.is_some() {
+                    if _config.iroh.is_some() {
                         eprintln!("loamd: stream iroh configured but built without stream-iroh");
                     }
                     std::future::pending::<()>().await;
