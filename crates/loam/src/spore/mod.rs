@@ -1706,13 +1706,21 @@ impl Manifest {
                     operation.name
                 )));
             }
-            if operation.requires.iter().any(|capability| !self.grants.contains_key(capability)) {
+            if operation
+                .requires
+                .iter()
+                .any(|capability| !self.grants.contains_key(capability))
+            {
                 return Err(Error::Invalid(format!(
                     "operation {:?} requires a capability not declared in grants",
                     operation.name
                 )));
             }
-            if operation.requires.iter().any(|capability| !grants(capability)) {
+            if operation
+                .requires
+                .iter()
+                .any(|capability| !grants(capability))
+            {
                 return Err(Error::Invalid(format!(
                     "operation {:?} requires a malformed capability",
                     operation.name
@@ -1737,7 +1745,11 @@ impl Manifest {
                         operation.name
                     ))
                 })?;
-                if !self.commands.iter().any(|declared| declared.name == command) {
+                if !self
+                    .commands
+                    .iter()
+                    .any(|declared| declared.name == command)
+                {
                     return Err(Error::Invalid(format!(
                         "operation {:?} names unknown command {command:?}",
                         operation.name
@@ -2217,8 +2229,7 @@ fn grants(value: &str) -> bool {
     matches!(
         package,
         "soil" | "wasi" | "fungos" | "loam" | "ajmwagar" | "mycelium"
-    )
-        && !interface.is_empty()
+    ) && !interface.is_empty()
         && interface.chars().all(|c| {
             c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '-' | '.' | '_' | '/')
         })
@@ -4277,7 +4288,8 @@ action = "marbles.ready"
 
     #[test]
     fn operation_names_are_unique() {
-        let bad = MANIFEST.to_owned() + r#"
+        let bad = MANIFEST.to_owned()
+            + r#"
 [[operations]]
 name = "marbles.ready"
 summary = "duplicate"
@@ -4302,8 +4314,14 @@ mod installed_lock_compat_tests {
         // digest mismatch.
         let text = "spore-lock 1\nspore dev.mycelium.agents\nversion 0.1.0\nfile 2cbdb6aec216aa4e7859d5474e7ca44a7f1f1f9bd87fff5ae02f95367ca93596 243477 module.wasm\nfile d59b2d6370a837ebf12b850183e2bb26a80d25da8a73c8e147251d200a9ca92f 1035 spore.toml\ndigest e7a64d8112476a9eeda7ef9fcded12a385c34745c6506f8750203d71ff37b78c\n";
         let lock = Lock::parse(text).expect("legacy lock");
-        assert_eq!(lock.digest, "e7a64d8112476a9eeda7ef9fcded12a385c34745c6506f8750203d71ff37b78c");
+        assert_eq!(
+            lock.digest,
+            "e7a64d8112476a9eeda7ef9fcded12a385c34745c6506f8750203d71ff37b78c"
+        );
         assert_eq!(lock.files.len(), 2);
-        assert!(lock.render().starts_with("spore-lock 1\nspore dev.mycelium.agents\n"));
+        assert!(
+            lock.render()
+                .starts_with("spore-lock 1\nspore dev.mycelium.agents\n")
+        );
     }
 }

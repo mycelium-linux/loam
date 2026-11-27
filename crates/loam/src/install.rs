@@ -288,7 +288,11 @@ pub fn rollback(root: &Path, id: &str) -> Result<InstallReport> {
     let previous_composition = std::fs::read_to_string(previous_package.join("runtime.json"))
         .ok()
         .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-        .and_then(|json| json.get("key").and_then(|key| key.as_str()).map(str::to_owned));
+        .and_then(|json| {
+            json.get("key")
+                .and_then(|key| key.as_str())
+                .map(str::to_owned)
+        });
 
     let rolled_back = InstallRecord {
         version: previous_manifest
@@ -513,7 +517,11 @@ fn compose(
             break;
         };
         let next = package.join(format!(".compose-{step}.wasm"));
-        keys.push(plugin::composition_key(&current, &provider_module, &import)?);
+        keys.push(plugin::composition_key(
+            &current,
+            &provider_module,
+            &import,
+        )?);
         plugin::compose_cached(&current, &provider_module, &import, cache, &next)?;
         current = next;
         step += 1;

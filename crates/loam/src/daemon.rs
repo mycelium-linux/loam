@@ -326,7 +326,8 @@ fn start_stream_transports(
                                 };
                                 let hub = hub.clone();
                                 tokio::spawn(async move {
-                                    if let Err(error) = crate::stream_ws::serve(hub, options).await {
+                                    if let Err(error) = crate::stream_ws::serve(hub, options).await
+                                    {
                                         eprintln!("loamd: stream ws: {error:#}");
                                     }
                                 });
@@ -357,7 +358,9 @@ fn start_stream_transports(
                                 };
                                 let hub = hub.clone();
                                 tokio::spawn(async move {
-                                    if let Err(error) = crate::stream_iroh::serve(hub, options).await {
+                                    if let Err(error) =
+                                        crate::stream_iroh::serve(hub, options).await
+                                    {
                                         eprintln!("loamd: stream iroh: {error:#}");
                                     }
                                 });
@@ -1268,7 +1271,9 @@ impl Daemon {
 
         let plugins = self.plugins.read().expect("plugin lock poisoned").clone();
         let runner = match CommandRunner::new(self.records.clone(), self.bus.clone()) {
-            Ok(runner) => runner.with_plugins(plugins).with_streams(self.streams.clone()),
+            Ok(runner) => runner
+                .with_plugins(plugins)
+                .with_streams(self.streams.clone()),
             Err(failure) => return error(format!("{failure:#}")),
         };
         let cancel = runner.engine().clone();
