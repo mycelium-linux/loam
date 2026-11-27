@@ -212,7 +212,9 @@ impl Config {
         let mut stream = self.stream.clone().unwrap_or_default();
         for field in items.iter().skip(1) {
             let Sexp::List(pair) = field else { continue };
-            let Some(Sexp::Atom(key)) = pair.first() else { continue };
+            let Some(Sexp::Atom(key)) = pair.first() else {
+                continue;
+            };
             match key.as_str() {
                 "ws" => {
                     let mut ws = WsStream {
@@ -223,9 +225,14 @@ impl Config {
                     };
                     for option in pair.iter().skip(1) {
                         let Sexp::List(option) = option else { continue };
-                        let Some(Sexp::Atom(name)) = option.first() else { continue };
+                        let Some(Sexp::Atom(name)) = option.first() else {
+                            continue;
+                        };
                         match name.as_str() {
-                            "listen" => ws.listen = string(option.get(1)).ok_or_else(|| anyhow::anyhow!("stream ws listen is missing"))?,
+                            "listen" => {
+                                ws.listen = string(option.get(1))
+                                    .ok_or_else(|| anyhow::anyhow!("stream ws listen is missing"))?
+                            }
                             "protocol" => ws.protocols.extend(strings(option.get(1))),
                             "cert" => ws.cert = Some(path(option.get(1), "stream ws cert")?),
                             "key" => ws.key = Some(path(option.get(1), "stream ws key")?),
@@ -246,9 +253,14 @@ impl Config {
                     };
                     for option in pair.iter().skip(1) {
                         let Sexp::List(option) = option else { continue };
-                        let Some(Sexp::Atom(name)) = option.first() else { continue };
+                        let Some(Sexp::Atom(name)) = option.first() else {
+                            continue;
+                        };
                         match name.as_str() {
-                            "bind" => iroh.bind = string(option.get(1)).ok_or_else(|| anyhow::anyhow!("stream iroh bind is missing"))?,
+                            "bind" => {
+                                iroh.bind = string(option.get(1))
+                                    .ok_or_else(|| anyhow::anyhow!("stream iroh bind is missing"))?
+                            }
                             "alpn" => iroh.alpns = strings(option.get(1)),
                             "key" => iroh.key = Some(path(option.get(1), "stream iroh key")?),
                             "allow" => iroh.allow = strings(option.get(1)),

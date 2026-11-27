@@ -62,6 +62,10 @@ pub enum Request {
     Start {
         id: String,
         command: String,
+        /// Host-owned generic execution context. The context resolves VFS,
+        /// Records and principal bindings; the caller supplies only its id.
+        #[serde(default)]
+        context: Option<String>,
         #[serde(default)]
         args: Vec<String>,
         #[serde(default)]
@@ -89,6 +93,9 @@ pub enum Request {
     ImageStart {
         id: String,
         spore: String,
+        /// Host-owned generic execution context id.
+        #[serde(default)]
+        context: Option<String>,
     },
     ImageEval {
         id: String,
@@ -284,7 +291,7 @@ fn start_stream_transports(
     config: Option<crate::config::StreamConfig>,
     hub: crate::stream::StreamHub,
 ) -> Result<()> {
-    let Some(config) = config else { return Ok(()) };
+    let Some(_config) = config else { return Ok(()) };
     #[cfg(not(any(feature = "stream-ws", feature = "stream-iroh")))]
     {
         let _ = &hub;
@@ -292,7 +299,7 @@ fn start_stream_transports(
             "loamd: stream listeners configured but this build has no transport feature \
              (stream-ws, stream-iroh); nothing accepted"
         );
-        return Ok(());
+        Ok(())
     }
     #[cfg(any(feature = "stream-ws", feature = "stream-iroh"))]
     {
@@ -311,7 +318,7 @@ fn start_stream_transports(
                     // not disable the other, so every failure is logged and
                     // skipped rather than returning from the block.
                     #[cfg(feature = "stream-ws")]
-                    if let Some(ws) = config.ws.clone() {
+                    if let Some(ws) = _config.ws.clone() {
                         match ws.listen.parse::<std::net::SocketAddr>() {
                             Ok(listen) => {
                                 let options = crate::stream_ws::WsOptions {
@@ -326,7 +333,8 @@ fn start_stream_transports(
                                 };
                                 let hub = hub.clone();
                                 tokio::spawn(async move {
-                                    if let Err(error) = crate::stream_ws::serve(hub, options).await {
+                                    if let Err(error) = crate::stream_ws::serve(hub, options).await
+                                    {
                                         eprintln!("loamd: stream ws: {error:#}");
                                     }
                                 });
@@ -337,11 +345,11 @@ fn start_stream_transports(
                         }
                     }
                     #[cfg(not(feature = "stream-ws"))]
-                    if config.ws.is_some() {
+                    if _config.ws.is_some() {
                         eprintln!("loamd: stream ws configured but built without stream-ws");
                     }
                     #[cfg(feature = "stream-iroh")]
-                    if let Some(iroh) = config.iroh.clone() {
+                    if let Some(iroh) = _config.iroh.clone() {
                         let allow = iroh
                             .allow
                             .iter()
@@ -357,7 +365,9 @@ fn start_stream_transports(
                                 };
                                 let hub = hub.clone();
                                 tokio::spawn(async move {
-                                    if let Err(error) = crate::stream_iroh::serve(hub, options).await {
+                                    if let Err(error) =
+                                        crate::stream_iroh::serve(hub, options).await
+                                    {
                                         eprintln!("loamd: stream iroh: {error:#}");
                                     }
                                 });
@@ -369,7 +379,7 @@ fn start_stream_transports(
                         }
                     }
                     #[cfg(not(feature = "stream-iroh"))]
-                    if config.iroh.is_some() {
+                    if _config.iroh.is_some() {
                         eprintln!("loamd: stream iroh configured but built without stream-iroh");
                     }
                     std::future::pending::<()>().await;
@@ -918,6 +928,7 @@ enum State {
 struct InstanceRecord {
     id: String,
     command: String,
+    context: Option<String>,
     args: Vec<String>,
     started_ms: u64,
     limits: RunLimits,
@@ -935,6 +946,129 @@ struct ImageRecord {
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
     started_ms: u64,
+    context: Option<String>,
+    vfs_root: Option<PathBuf>,
+    records_root: Option<PathBuf>,
+    records_book: Option<String>,
+    principal_actor: Option<String>,
+    principal_kind: Option<String>,
+}
+
+/// A host-owned, opaque execution context. Loam does not know higher-level
+/// organizational semantics: it knows that an instance may be bound to a VFS
+/// root, a Records book, and a Soil principal. The host that owns those
+/// resources writes this file; the caller names only the context id.
+#[derive(Debug, Clone, Deserialize)]
+struct ExecutionContextConfig {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    vfs_root: Option<String>,
+    #[serde(default)]
+    records_root: Option<String>,
+    #[serde(default)]
+    records_book: Option<String>,
+    #[serde(default)]
+    records_collection: Option<String>,
+    #[serde(default)]
+    principal_actor: Option<String>,
+    #[serde(default)]
+    principal_kind: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ExecutionContext {
+    id: String,
+    vfs_root: Option<PathBuf>,
+    records_root: Option<PathBuf>,
+    records_book: Option<String>,
+    records_collection: Option<String>,
+    principal_actor: Option<String>,
+    principal_kind: Option<String>,
+}
+
+impl ExecutionContext {
+    fn records_binding(&self) -> Option<RecordsBinding> {
+        Some(RecordsBinding {
+            root: self.records_root.clone()?,
+            book: self.records_book.clone()?,
+            collection: self
+                .records_collection
+                .clone()
+                .unwrap_or_else(|| "records".to_string()),
+        })
+    }
+}
+
+fn context_dir() -> PathBuf {
+    std::env::var_os("LOAM_CONTEXTS_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+                .join(".config")
+                .join("loam")
+                .join("contexts")
+        })
+}
+
+fn expand_home(value: &str) -> PathBuf {
+    if let Some(rest) = value.strip_prefix("~/") {
+        PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(rest)
+    } else {
+        PathBuf::from(value)
+    }
+}
+
+fn canonical_dir(value: &str, what: &str) -> Result<PathBuf> {
+    let path = expand_home(value);
+    let path =
+        fs::canonicalize(&path).with_context(|| format!("resolve {what} {}", path.display()))?;
+    if !path.is_dir() {
+        bail!("{what} is not a directory: {}", path.display());
+    }
+    Ok(path)
+}
+
+fn read_execution_context_from(dir: &Path, id: &str) -> Result<ExecutionContext> {
+    if id.is_empty()
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        bail!("context id must be a simple name");
+    }
+    let path = dir.join(format!("{id}.toml"));
+    let text = fs::read_to_string(&path)
+        .with_context(|| format!("read execution context {}", path.display()))?;
+    let config: ExecutionContextConfig = toml::from_str(&text)
+        .with_context(|| format!("parse execution context {}", path.display()))?;
+    Ok(ExecutionContext {
+        id: config.id.unwrap_or_else(|| id.to_string()),
+        vfs_root: config
+            .vfs_root
+            .as_deref()
+            .map(|value| canonical_dir(value, "context vfs_root"))
+            .transpose()?,
+        records_root: config
+            .records_root
+            .as_deref()
+            .map(|value| canonical_dir(value, "context records_root"))
+            .transpose()?,
+        records_book: config.records_book.filter(|value| !value.trim().is_empty()),
+        records_collection: config
+            .records_collection
+            .filter(|value| !value.trim().is_empty()),
+        principal_actor: config
+            .principal_actor
+            .filter(|value| !value.trim().is_empty()),
+        principal_kind: config
+            .principal_kind
+            .filter(|value| !value.trim().is_empty()),
+    })
+}
+
+fn read_execution_context(id: &str) -> Result<ExecutionContext> {
+    read_execution_context_from(&context_dir(), id)
 }
 
 struct WindowRecord {
@@ -1004,6 +1138,12 @@ struct ImageView {
     started_ms: u64,
     imports: Vec<String>,
     refused: Vec<String>,
+    context: Option<String>,
+    vfs_root: Option<String>,
+    records_root: Option<String>,
+    records_book: Option<String>,
+    principal_actor: Option<String>,
+    principal_kind: Option<String>,
 }
 
 impl ImageRecord {
@@ -1036,6 +1176,18 @@ impl ImageRecord {
                         .collect()
                 })
                 .unwrap_or_default(),
+            context: self.context.clone(),
+            vfs_root: self
+                .vfs_root
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            records_root: self
+                .records_root
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            records_book: self.records_book.clone(),
+            principal_actor: self.principal_actor.clone(),
+            principal_kind: self.principal_kind.clone(),
         }
     }
 
@@ -1056,6 +1208,7 @@ impl ImageRecord {
 struct InstanceView {
     id: String,
     command: String,
+    context: Option<String>,
     args: Vec<String>,
     state: State,
     started_ms: u64,
@@ -1072,6 +1225,7 @@ impl InstanceRecord {
         InstanceView {
             id: self.id.clone(),
             command: self.command.clone(),
+            context: self.context.clone(),
             args: self.args.clone(),
             state: self.state,
             started_ms: self.started_ms,
@@ -1162,6 +1316,7 @@ impl Daemon {
             Request::Start {
                 id,
                 command,
+                context,
                 args,
                 env,
                 cwd,
@@ -1173,6 +1328,7 @@ impl Daemon {
             } => self.start(
                 id,
                 command,
+                context,
                 args,
                 env,
                 cwd,
@@ -1185,7 +1341,7 @@ impl Daemon {
             Request::Stop { id } => self.stop(&id),
             Request::ImageList => self.image_list(),
             Request::ImagePlan { spore } => self.image_plan(&spore),
-            Request::ImageStart { id, spore } => self.image_start(id, spore),
+            Request::ImageStart { id, spore, context } => self.image_start(id, spore, context),
             Request::ImageEval { id, source } => self.image_eval(&id, &source),
             Request::ImageStatus { id } => self.image_status(&id),
             Request::ImageStop { id } => self.image_stop(&id),
@@ -1208,6 +1364,7 @@ impl Daemon {
         self: &Arc<Self>,
         id: String,
         command: String,
+        context: Option<String>,
         args: Vec<String>,
         env: BTreeMap<String, String>,
         cwd: Option<String>,
@@ -1266,12 +1423,32 @@ impl Daemon {
         }
         drop(instances);
 
+        let execution = match context.as_deref().map(read_execution_context).transpose() {
+            Ok(context) => context,
+            Err(failure) => return error(format!("{failure:#}")),
+        };
+        let records = execution
+            .as_ref()
+            .and_then(ExecutionContext::records_binding)
+            .or_else(|| self.records.clone());
         let plugins = self.plugins.read().expect("plugin lock poisoned").clone();
-        let runner = match CommandRunner::new(self.records.clone(), self.bus.clone()) {
-            Ok(runner) => runner.with_plugins(plugins).with_streams(self.streams.clone()),
+        let runner = match CommandRunner::new(records, self.bus.clone()) {
+            Ok(runner) => runner
+                .with_plugins(plugins)
+                .with_streams(self.streams.clone()),
             Err(failure) => return error(format!("{failure:#}")),
         };
         let cancel = runner.engine().clone();
+        let mut env = env;
+        if let Some(execution) = &execution {
+            env.insert("LOAM_CONTEXT".into(), execution.id.clone());
+            if let Some(actor) = &execution.principal_actor {
+                env.insert("LOAM_PRINCIPAL_ACTOR".into(), actor.clone());
+            }
+            if let Some(kind) = &execution.principal_kind {
+                env.insert("LOAM_PRINCIPAL_KIND".into(), kind.clone());
+            }
+        }
         let request = RunRequest {
             args: args.clone(),
             stdin: stdin.unwrap_or_default().into_bytes(),
@@ -1290,6 +1467,7 @@ impl Daemon {
                 InstanceRecord {
                     id: id.clone(),
                     command,
+                    context: execution.as_ref().map(|execution| execution.id.clone()),
                     args,
                     started_ms,
                     limits,
@@ -1355,10 +1533,26 @@ impl Daemon {
         }
     }
 
-    fn image_start(&self, id: String, spore: String) -> Value {
+    fn image_start(&self, id: String, spore: String, context: Option<String>) -> Value {
         if id.trim().is_empty() {
             return error("image id must not be empty");
         }
+        let execution = match context.as_deref().map(read_execution_context).transpose() {
+            Ok(context) => context,
+            Err(failure) => return error(format!("{failure:#}")),
+        };
+        let vfs_root = execution
+            .as_ref()
+            .and_then(|execution| execution.vfs_root.clone())
+            .or_else(|| std::env::var_os("LOAM_IMAGE_WORKSPACE").map(PathBuf::from));
+        let records_root = execution
+            .as_ref()
+            .and_then(|execution| execution.records_root.clone())
+            .or_else(|| std::env::var_os("LOAM_IMAGE_RECORDS").map(PathBuf::from));
+        let records_book = execution
+            .as_ref()
+            .and_then(|execution| execution.records_book.clone())
+            .or_else(|| std::env::var("LOAM_IMAGE_BOOK").ok());
         let plan = match self.plan_for(&spore) {
             Ok(plan) => plan,
             Err(failure) => return error(format!("{failure:#}")),
@@ -1392,14 +1586,32 @@ impl Daemon {
         let started_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |duration| duration.as_millis() as u64);
-        let mut child = match Command::new(&runtime)
+        let mut command = Command::new(&runtime);
+        command
             .env("LOAM_IMAGE_SPORE", &spore)
             .env("LOAM_IMAGE_PLAN", plan.to_string())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-        {
+            .stderr(Stdio::inherit());
+        if let Some(vfs_root) = &vfs_root {
+            command.env("LOAM_IMAGE_WORKSPACE", vfs_root);
+        }
+        if let Some(records_root) = &records_root {
+            command.env("LOAM_IMAGE_RECORDS", records_root);
+        }
+        if let Some(records_book) = &records_book {
+            command.env("LOAM_IMAGE_BOOK", records_book);
+        }
+        if let Some(execution) = &execution {
+            command.env("LOAM_IMAGE_CONTEXT", &execution.id);
+            if let Some(actor) = &execution.principal_actor {
+                command.env("LOAM_IMAGE_PRINCIPAL", actor);
+            }
+            if let Some(kind) = &execution.principal_kind {
+                command.env("LOAM_IMAGE_PRINCIPAL_KIND", kind);
+            }
+        }
+        let mut child = match command.spawn() {
             Ok(child) => child,
             Err(failure) => {
                 return error(format!(
@@ -1430,6 +1642,16 @@ impl Daemon {
             stdin,
             stdout: BufReader::new(stdout),
             started_ms,
+            context: execution.as_ref().map(|execution| execution.id.clone()),
+            vfs_root,
+            records_root,
+            records_book,
+            principal_actor: execution
+                .as_ref()
+                .and_then(|execution| execution.principal_actor.clone()),
+            principal_kind: execution
+                .as_ref()
+                .and_then(|execution| execution.principal_kind.clone()),
         };
         let response = record.request(json!({
             "op": "start",
@@ -2228,6 +2450,7 @@ kind = "web"
             &Request::Start {
                 id: "missing".into(),
                 command: "missing".into(),
+                context: None,
                 args: Vec::new(),
                 env: BTreeMap::new(),
                 cwd: None,
@@ -2245,5 +2468,40 @@ kind = "web"
         assert_eq!(shutdown["ok"], true);
         server.join().unwrap().unwrap();
         assert!(!socket.exists(), "daemon left a stale socket");
+    }
+    #[test]
+    fn execution_context_uses_the_host_catalog_and_rejects_traversal() {
+        let dir = tempfile::tempdir().unwrap();
+        let contexts = dir.path().join("contexts");
+        let vfs = dir.path().join("vfs");
+        let records = dir.path().join("records");
+        fs::create_dir_all(&contexts).unwrap();
+        fs::create_dir_all(&vfs).unwrap();
+        fs::create_dir_all(&records).unwrap();
+        fs::write(
+            contexts.join("alpha.toml"),
+            format!(
+                "id = \"alpha\"\nvfs_root = \"{}\"\nrecords_root = \"{}\"\nrecords_book = \"team/alpha/records\"\nprincipal_actor = \"person@example.test\"\nprincipal_kind = \"human\"\n",
+                vfs.display(),
+                records.display()
+            ),
+        )
+        .unwrap();
+        let context = read_execution_context_from(&contexts, "alpha").unwrap();
+        assert_eq!(context.id, "alpha");
+        assert_eq!(context.vfs_root, Some(fs::canonicalize(&vfs).unwrap()));
+        assert_eq!(
+            context.records_root,
+            Some(fs::canonicalize(&records).unwrap())
+        );
+        assert_eq!(context.records_book.as_deref(), Some("team/alpha/records"));
+        assert_eq!(
+            context.principal_actor.as_deref(),
+            Some("person@example.test")
+        );
+        assert_eq!(context.principal_kind.as_deref(), Some("human"));
+        assert!(context.records_binding().is_some());
+        assert!(read_execution_context_from(&contexts, "../alpha").is_err());
+        assert!(read_execution_context_from(&contexts, "missing").is_err());
     }
 }

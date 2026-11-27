@@ -16,9 +16,9 @@ fn usage() -> &'static str {
     r#"usage: loamd [serve] [--config FILE] [--socket PATH] [--root DIR]...
                      [--log-dir DIR] [--log-max-bytes N] [--log-keep N]
                      [--mycelium-home DIR] [--no-publish-leases]
-       loamd start COMMAND [ARGS...] [--id ID] [--socket PATH]
+       loamd start COMMAND [ARGS...] [--id ID] [--context ID] [--socket PATH]
        loamd image plan SPORE [--socket PATH]
-       loamd image start SPORE [--id ID] [--socket PATH]
+       loamd image start SPORE [--id ID] [--context ID] [--socket PATH]
        loamd image eval ID SOURCE [--socket PATH]
        loamd image status ID [--socket PATH]
        loamd image stop ID [--socket PATH]
@@ -283,6 +283,7 @@ fn config_path(args: &[String]) -> Result<Option<PathBuf>> {
 fn parse_image(args: &[String]) -> Result<(PathBuf, Request)> {
     let mut socket = daemon::default_socket();
     let mut id = None;
+    let mut context = None;
     let mut positional = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -293,6 +294,10 @@ fn parse_image(args: &[String]) -> Result<(PathBuf, Request)> {
             }
             "--id" => {
                 id = Some(args.get(i + 1).context("--id ID")?.clone());
+                i += 2;
+            }
+            "--context" => {
+                context = Some(args.get(i + 1).context("--context ID")?.clone());
                 i += 2;
             }
             other if other.starts_with('-') => bail!("unknown image option {other}"),
@@ -319,7 +324,7 @@ fn parse_image(args: &[String]) -> Result<(PathBuf, Request)> {
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "image".to_string())
             });
-            Request::ImageStart { id, spore }
+            Request::ImageStart { id, spore, context }
         }
         "eval" => {
             let id = positional.get(1).context("image eval needs ID")?.clone();
@@ -402,6 +407,7 @@ fn parse_window(args: &[String]) -> Result<(PathBuf, Request)> {
 fn parse_client(operation: &str, args: &[String]) -> Result<(PathBuf, Request)> {
     let mut socket = daemon::default_socket();
     let mut id = None;
+    let mut context = None;
     let mut command = None;
     let mut argv = Vec::new();
     let mut env = BTreeMap::new();
@@ -422,6 +428,10 @@ fn parse_client(operation: &str, args: &[String]) -> Result<(PathBuf, Request)> 
             }
             "--id" => {
                 id = Some(args.get(i + 1).context("--id ID")?.clone());
+                i += 2;
+            }
+            "--context" => {
+                context = Some(args.get(i + 1).context("--context ID")?.clone());
                 i += 2;
             }
             "--arg" => {
@@ -513,6 +523,7 @@ fn parse_client(operation: &str, args: &[String]) -> Result<(PathBuf, Request)> 
             Request::Start {
                 id: id.unwrap_or_else(|| command.clone()),
                 command,
+                context,
                 args: argv,
                 env,
                 cwd,

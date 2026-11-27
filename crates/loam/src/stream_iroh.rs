@@ -38,7 +38,13 @@ pub struct IrohOptions {
 
 pub async fn serve(hub: StreamHub, options: IrohOptions) -> Result<()> {
     let mut builder = Endpoint::builder(presets::Minimal)
-        .alpns(options.alpns.iter().map(|alpn| alpn.as_bytes().to_vec()).collect())
+        .alpns(
+            options
+                .alpns
+                .iter()
+                .map(|alpn| alpn.as_bytes().to_vec())
+                .collect(),
+        )
         .relay_mode(iroh::RelayMode::Disabled)
         .bind_addr(options.bind)
         .context("invalid iroh bind address")?;

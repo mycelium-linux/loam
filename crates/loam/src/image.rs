@@ -14,9 +14,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::{
-    command::plugin::{PluginEntry, PluginRegistry},
-};
+use crate::command::plugin::{PluginEntry, PluginRegistry};
 
 /// One provider selected for an image import.
 #[derive(Debug, Clone, Serialize)]
